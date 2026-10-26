@@ -1,8 +1,8 @@
 # sglang-rbln
 
 Out-of-tree RBLN NPU platform plugin for [SGLang Diffusion](https://github.com/sgl-project/sglang/tree/main/python/sglang/multimodal_gen),
-backed by torch-rbln. First target: LTX-2.5 (`LTX2Pipeline`, one-stage,
-distilled) through `sglang serve`; Cosmos3 follows.
+backed by torch-rbln. Targets: LTX-2.5 (`LTX2Pipeline`, one-stage, distilled)
+and Cosmos3 (`Cosmos3OmniPipeline`) through `sglang serve`.
 
 The platform is a `Platform` subclass selected through an entry point;
 everything the platform seams cannot express goes through tracked hooks.
@@ -76,6 +76,17 @@ The checkpoint is gated; accept the license on Hugging Face and log in first.
 Text-to-video with audio goes through `POST /v1/videos`; see the
 [cookbook](https://docs.sglang.io/cookbook/diffusion/LTX/LTX2.5).
 
+## Serve Cosmos3
+
+```bash
+SGLANG_DIFFUSION_PLATFORM_OVERRIDE=rbln sglang serve \
+  --model-path nvidia/Cosmos3-Edge --num-gpus 1
+```
+
+Text-to-image goes through `POST /v1/images/generations`; see the
+[cookbook](https://docs.sglang.io/cookbook/diffusion/Cosmos/Cosmos3). Guardrails
+need `cosmos-guardrail`; `SGLANG_DISABLE_COSMOS3_GUARDRAILS=1` turns them off.
+
 ## Layout
 
 ```
@@ -87,6 +98,7 @@ sglang_rbln/
   hooks/__init__.py    register() for the `rbln_hooks` plugin entry point
   hooks/triton_norm.py keeps the Triton norm kernels out of the import path
   hooks/vsa_import.py  makes `import vsa` fail cleanly without a CUDA device
+  hooks/cosmos3_compile.py compiles Cosmos3 GEN layers through the platform backend
 tests/                 host-runnable; device-mode and NPU cases are strict-xfail elsewhere
 tests/e2e/             `sglang serve` round trip on a public tiny model (`pytest -m e2e`)
 ```
