@@ -7,11 +7,14 @@ name = "sglang-rbln"
 dynamic = ["version"]
 description = "Out-of-tree RBLN NPU platform plugin for SGLang Diffusion, backed by torch-rbln."
 readme = "README.md"
-requires-python = ">=3.11,<3.14"
+requires-python = ">=3.11,<3.15"
 license = { text = "Apache-2.0" }
 authors = [{ name = "Rebellions Inc.", email = "support@rebellions.ai" }]
 classifiers = [
-    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "License :: OSI Approved :: Apache Software License",
     "Operating System :: POSIX :: Linux",
 ]
