@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import logging
 
-from sglang_rbln.hooks import triton_norm
+from sglang_rbln.hooks import triton_norm, vsa_import
 
 logger = logging.getLogger(__name__)
 
@@ -17,5 +17,10 @@ def register() -> None:
 
     if current_platform.device_name != "rbln":
         return
-    bound = triton_norm.seed()
-    logger.debug("sglang_rbln hooks registered (triton_norm: %s).", bound)
+    vsa_blocked = vsa_import.block_without_cuda()
+    bound_exports = triton_norm.bind_missing_exports()
+    logger.debug(
+        "sglang_rbln hooks registered (vsa blocked: %s, triton_norm: %s).",
+        vsa_blocked,
+        bound_exports,
+    )

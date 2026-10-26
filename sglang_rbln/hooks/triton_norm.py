@@ -15,21 +15,21 @@ from __future__ import annotations
 
 from types import ModuleType
 
-NAMES = ("norm_infer", "rms_norm_fn")
+TRITON_NORM_EXPORTS = ("norm_infer", "rms_norm_fn")
 
 
-def _unavailable(*args, **kwargs):
+def _triton_norm_unavailable(*args, **kwargs):
     raise NotImplementedError("Triton norm kernels are not available on rbln.")
 
 
-def seed(module: ModuleType | None = None) -> list[str]:
-    if module is None:
-        import sglang.kernels.ops.diffusion as module
+def bind_missing_exports(exports_module: ModuleType | None = None) -> list[str]:
+    if exports_module is None:
+        import sglang.kernels.ops.diffusion as exports_module
 
-    bound = []
-    for name in NAMES:
-        if name in vars(module):
+    bound_names = []
+    for export_name in TRITON_NORM_EXPORTS:
+        if export_name in vars(exports_module):
             continue
-        setattr(module, name, _unavailable)
-        bound.append(name)
-    return bound
+        setattr(exports_module, export_name, _triton_norm_unavailable)
+        bound_names.append(export_name)
+    return bound_names

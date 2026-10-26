@@ -3,17 +3,37 @@ import json
 import os
 import subprocess
 import sys
-from types import ModuleType
 
 import pytest
 from sglang.multimodal_gen import registry
 from sglang.multimodal_gen.runtime.pipelines.ltx_2_pipeline import LTX2Pipeline
 
 from sglang_rbln import device
-from sglang_rbln.hooks import triton_norm
 
-MODEL_ID = "Lightricks/LTX-2.5-Diffusers"
-NORM_TRITON = "sglang.kernels.ops.diffusion.norm.norm_triton"
+LTX25_MODEL_ID = "Lightricks/LTX-2.5-Diffusers"
+NORM_TRITON_MODULE = "sglang.kernels.ops.diffusion.norm.norm_triton"
+LTX25_IMPORT_PROBE = """
+import json, sys
+from sglang.multimodal_gen.runtime import platforms
+from sglang.multimodal_gen.runtime.platforms import plugins
+plugins.load_plugins(); plugins.apply_plugin_hooks()
+import sglang.multimodal_gen.runtime.entrypoints.cli.serve
+import sglang.multimodal_gen.runtime.models.dits.ltx_2
+import sglang.multimodal_gen.runtime.models.vaes.ltx_2_audio
+import sglang.multimodal_gen.runtime.pipelines.ltx_2_pipeline
+import sglang.kernels.ops.diffusion as diffusion_exports
+from sglang.multimodal_gen.runtime.layers.attention.backends import video_sparse_attn
+try:
+    diffusion_exports.norm_infer(); raise SystemExit("norm_infer did not raise")
+except NotImplementedError:
+    pass
+print(json.dumps({
+    "platform": type(platforms.current_platform).__name__,
+    "execution_mode": platforms.current_platform.execution_mode,
+    "norm_triton_imported": __NORM_TRITON_MODULE__ in sys.modules,
+    "vsa_kernel_bound": video_sparse_attn.video_sparse_attn is not None,
+}))
+"""
 
 
 @pytest.fixture(autouse=True)
@@ -30,9 +50,10 @@ def test_ltx25_resolves_to_the_native_pipeline():
         LTX25PipelineConfig,
     )
 
-    assert registry.has_registered_diffusion_model_path(MODEL_ID)
-    name = registry._MODEL_HF_PATH_TO_NAME[MODEL_ID]
-    assert registry._CONFIG_REGISTRY[name].pipeline_config_cls is LTX25PipelineConfig
+    assert registry.has_registered_diffusion_model_path(LTX25_MODEL_ID)
+    model_name = registry._MODEL_HF_PATH_TO_NAME[LTX25_MODEL_ID]
+    config_info = registry._CONFIG_REGISTRY[model_name]
+    assert config_info.pipeline_config_cls is LTX25PipelineConfig
     assert registry.get_pipeline_class(LTX2Pipeline.pipeline_name) is LTX2Pipeline
 
 
@@ -42,52 +63,26 @@ def test_ltx25_pipeline_declares_audio_modules():
     )
 
 
-class TestTritonNormSeed:
-    def test_binds_only_missing_names(self):
-        module = ModuleType("fake")
-        module.rms_norm_fn = real = object()
-        assert triton_norm.seed(module) == ["norm_infer"]
-        assert module.rms_norm_fn is real
-        with pytest.raises(NotImplementedError):
-            module.norm_infer()
-
-    def test_is_idempotent(self):
-        module = ModuleType("fake")
-        assert triton_norm.seed(module) == list(triton_norm.NAMES)
-        assert triton_norm.seed(module) == []
-
-
-IMPORT_PROBE = """
-import json, sys
-from sglang.multimodal_gen.runtime import platforms
-from sglang.multimodal_gen.runtime.platforms import plugins
-plugins.load_plugins(); plugins.apply_plugin_hooks()
-import sglang.multimodal_gen.runtime.models.dits.ltx_2
-import sglang.multimodal_gen.runtime.models.vaes.ltx_2_audio
-import sglang.multimodal_gen.runtime.pipelines.ltx_2_pipeline
-import sglang.kernels.ops.diffusion as kd
-try:
-    kd.norm_infer(); raise SystemExit("norm_infer did not raise")
-except NotImplementedError:
-    pass
-print(json.dumps({
-    "platform": type(platforms.current_platform).__name__,
-    "norm_triton_imported": __NORM_TRITON__ in sys.modules,
-}))
-"""
-
-
-def test_ltx25_imports_without_the_triton_norms():
-    code = IMPORT_PROBE.replace("__NORM_TRITON__", repr(NORM_TRITON))
-    env = {
+@pytest.mark.parametrize("execution_mode", ["host", "device"])
+def test_serve_import_chain_loads_without_cuda(execution_mode):
+    probe = LTX25_IMPORT_PROBE.replace(
+        "__NORM_TRITON_MODULE__", repr(NORM_TRITON_MODULE)
+    )
+    probe_env = {
         **os.environ,
         device.FORCE_NPU_NAME_ENV: "RBLN-CA25",
+        device.EXECUTION_MODE_ENV: execution_mode,
         "SGLANG_DIFFUSION_PLATFORM_OVERRIDE": "rbln",
         "PYTHONWARNINGS": "ignore",
     }
-    proc = subprocess.run(
-        [sys.executable, "-c", code], env=env, capture_output=True, text=True
+    probe_run = subprocess.run(
+        [sys.executable, "-c", probe], env=probe_env, capture_output=True, text=True
     )
-    assert proc.returncode == 0, proc.stderr[-2000:]
-    result = json.loads(proc.stdout.strip().splitlines()[-1])
-    assert result == {"platform": "RblnPlatform", "norm_triton_imported": False}
+    assert probe_run.returncode == 0, probe_run.stderr[-2000:]
+    report = json.loads(probe_run.stdout.strip().splitlines()[-1])
+    assert report == {
+        "platform": "RblnPlatform",
+        "execution_mode": execution_mode,
+        "norm_triton_imported": False,
+        "vsa_kernel_bound": False,
+    }

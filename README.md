@@ -2,7 +2,7 @@
 
 Out-of-tree RBLN NPU platform plugin for [SGLang Diffusion](https://github.com/sgl-project/sglang/tree/main/python/sglang/multimodal_gen),
 backed by torch-rbln. First target: LTX-2.5 (`LTX2Pipeline`, one-stage,
-distilled); Cosmos3 follows.
+distilled) through `sglang serve`; Cosmos3 follows.
 
 The platform is a `Platform` subclass selected through an entry point;
 everything the platform seams cannot express goes through tracked hooks.
@@ -14,16 +14,32 @@ sees the NPUs ([installation guide](https://docs.rbln.ai/latest/getting_started/
 `rebel-compiler` comes from the RBLN index, which needs an RBLN Portal account:
 
 ```bash
-pip install --extra-index-url https://pypi.rbln.ai/simple -e '.[test]'
+uv pip install --index-strategy unsafe-best-match \
+  --extra-index-url https://download.pytorch.org/whl/cpu \
+  --extra-index-url https://pypi.rbln.ai/simple \
+  -e '.[test]'
 ```
 
-Pins: `sglang[diffusion]==0.5.22`, `rebel-compiler==0.12.0`.
+Pins: `sglang[diffusion]==0.5.22`, `rebel-compiler==0.12.0`. sglang has no
+CUDA-free distribution; the PyTorch CPU index keeps `torch` itself CPU-only,
+and the CUDA kernel packages sglang depends on install but are never imported
+on this platform.
 
 The `rbln` torch device needs `torch-rbln` (`.[device]`, installed with
 `--extra-index-url https://download.pytorch.org/whl/cpu` per the guide). The
 published build (0.1.8) requires `torch==2.9.1+cpu` while sglang 0.5.22
-requires `torch==2.14.1`, so the two do not install together yet; the device
-tests are strict-xfail until a torch-rbln built against sglang's torch exists.
+requires `torch==2.14.1`, so the two do not install together yet.
+
+## Execution modes
+
+| `SGLANG_RBLN_EXECUTION_MODE` | Tensors | `is_cpu()` | Dispatch key | When |
+|---|---|---|---|---|
+| `device` | `rbln` | False | `PrivateUse1` | torch-rbln importable |
+| `host` | `cpu` | True | `CPU` | torch-rbln absent |
+
+`auto` (default) picks `device` when torch-rbln is importable, else `host`.
+Both modes run CustomOps through the `rbln` key: a forward registered with
+`CustomOp.register_oot_forward` wins, anything else takes `forward_native`.
 
 ## Select the platform
 
@@ -35,24 +51,30 @@ tests are strict-xfail until a torch-rbln built against sglang's torch exists.
 On a host without an NPU, `RBLN_FORCE_NPU_NAME=RBLN-CA25` makes the platform
 activate and names the compile target.
 
+## Serve LTX-2.5
+
 ```bash
-SGLANG_DIFFUSION_PLATFORM_OVERRIDE=rbln sglang generate \
+SGLANG_DIFFUSION_PLATFORM_OVERRIDE=rbln sglang serve \
   --model-path Lightricks/LTX-2.5-Diffusers \
-  --pipeline-class-name LTX2Pipeline \
-  --prompt "<your prompt>" \
-  --save-output
+  --pipeline-class-name LTX2Pipeline
 ```
+
+The checkpoint is gated; accept the license on Hugging Face and log in first.
+Text-to-video with audio goes through `POST /v1/videos`; see the
+[cookbook](https://docs.sglang.io/cookbook/diffusion/LTX/LTX2.5).
 
 ## Layout
 
 ```
 sglang_rbln/
   __init__.py          activate() for the `rbln` platform entry point
-  platform.py          RblnPlatform: identity, device/memory queries, subsystem choices
-  device.py            import-free NPU presence probe; lazy rebel queries
+  platform.py          RblnPlatform: identity, execution mode, device/memory queries
+  device.py            import-free NPU presence probe; execution mode; rebel and host queries
   hooks/__init__.py    register() for the `rbln_hooks` plugin entry point
   hooks/triton_norm.py keeps the Triton norm kernels out of the import path
-tests/                 host-runnable; NPU and torch-rbln cases are strict-xfail off-host
+  hooks/vsa_import.py  makes `import vsa` fail cleanly without a CUDA device
+tests/                 host-runnable; device-mode and NPU cases are strict-xfail elsewhere
+tests/e2e/             `sglang serve` round trip on a public tiny model (`pytest -m e2e`)
 ```
 
 ## Rules for new code
@@ -65,5 +87,6 @@ tests/                 host-runnable; NPU and torch-rbln cases are strict-xfail 
 ## Test
 
 ```bash
-pytest
+pytest            # unit
+pytest -m e2e     # sglang serve round trip
 ```
