@@ -41,6 +41,19 @@ requires `torch==2.14.1`, so the two do not install together yet.
 Both modes run CustomOps through the `rbln` key: a forward registered with
 `CustomOp.register_oot_forward` wins, anything else takes `forward_native`.
 
+## Compile and run
+
+`torch.compile` is on by default on this platform (`--enable-torch-compile`
+turns it off explicitly). SGLang hands the DiT blocks to the `rbln` backend,
+which compiles each FX graph with rebel-compiler and runs it on the NPU;
+inputs and outputs stay CPU tensors in `host` mode.
+
+| Variable | Effect |
+|---|---|
+| `SGLANG_RBLN_CACHE_DIR` | compiled-graph cache (default `~/.cache/sglang_rbln`) |
+| `SGLANG_RBLN_DISABLE_COMPILE_CACHE=1` | compile without the cache |
+| `SGLANG_RBLN_COMPILE_ONLY=1` | compile the graphs and stop before running them |
+
 ## Select the platform
 
 | Select with | Platform class | Notes |
@@ -68,7 +81,8 @@ Text-to-video with audio goes through `POST /v1/videos`; see the
 ```
 sglang_rbln/
   __init__.py          activate() for the `rbln` platform entry point
-  platform.py          RblnPlatform: identity, execution mode, device/memory queries
+  platform.py          RblnPlatform: identity, execution mode, compile seams, device/memory queries
+  compilation.py       the `rbln` torch.compile backend and its options
   device.py            import-free NPU presence probe; execution mode; rebel and host queries
   hooks/__init__.py    register() for the `rbln_hooks` plugin entry point
   hooks/triton_norm.py keeps the Triton norm kernels out of the import path

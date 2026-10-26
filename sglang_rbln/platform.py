@@ -7,7 +7,7 @@ import torch
 from sglang.multimodal_gen import envs
 from sglang.multimodal_gen.runtime.platforms import Platform, PlatformEnum
 
-from sglang_rbln import device
+from sglang_rbln import compilation, device
 
 TORCH_SDPA_BACKEND_PATH = (
     "sglang.multimodal_gen.runtime.layers.attention.backends.sdpa.SDPABackend"
@@ -18,6 +18,7 @@ CPU_COMMUNICATOR_PATH = (
 )
 EXECUTION_MODE = device.execution_mode()
 RUNS_ON_DEVICE = EXECUTION_MODE == "device"
+compilation.ensure_compile_backend()
 
 
 class RblnPlatform(Platform):
@@ -26,6 +27,7 @@ class RblnPlatform(Platform):
     device_type = "rbln" if RUNS_ON_DEVICE else "cpu"
     dispatch_key = "PrivateUse1" if RUNS_ON_DEVICE else "CPU"
     execution_mode = EXECUTION_MODE
+    simple_compile_backend = compilation.COMPILE_BACKEND_NAME
 
     def init_backend(self) -> None:
         if not RUNS_ON_DEVICE:
@@ -37,6 +39,17 @@ class RblnPlatform(Platform):
                 "torch-rbln is required for execution mode 'device' "
                 "(pip install 'sglang-rbln[device]')."
             ) from e
+
+    def apply_server_args_defaults(self, server_args) -> None:
+        explicit_args = getattr(server_args, "_explicit_arg_names", None) or ()
+        if "enable_torch_compile" not in explicit_args:
+            server_args.enable_torch_compile = True
+
+    def get_compile_backend(self, mode: str | None = None) -> str:
+        return compilation.COMPILE_BACKEND_NAME
+
+    def get_compile_options(self, module: torch.nn.Module) -> dict[str, object]:
+        return compilation.compile_options(module)
 
     def is_cpu(self) -> bool:
         return not RUNS_ON_DEVICE

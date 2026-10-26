@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import logging
 
+from sglang_rbln import compilation
 from sglang_rbln.hooks import triton_norm, vsa_import
 
 logger = logging.getLogger(__name__)
@@ -19,8 +20,11 @@ def register() -> None:
         return
     vsa_blocked = vsa_import.block_without_cuda()
     bound_exports = triton_norm.bind_missing_exports()
+    compile_backend = compilation.ensure_compile_backend()
     logger.debug(
-        "sglang_rbln hooks registered (vsa blocked: %s, triton_norm: %s).",
+        "sglang_rbln hooks registered (vsa blocked: %s, triton_norm: %s, "
+        "compile backend: %s).",
         vsa_blocked,
         bound_exports,
+        compile_backend,
     )
