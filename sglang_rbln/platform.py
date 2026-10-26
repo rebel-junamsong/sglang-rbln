@@ -1,9 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""The out-of-tree RBLN platform (``SGLANG_DIFFUSION_PLATFORM_OVERRIDE=rbln``).
-
-Device identity and memory come from ``rebel``; tensors live on the ``rbln``
-torch device that torch-rbln registers.
-"""
+"""The out-of-tree RBLN platform (``SGLANG_DIFFUSION_PLATFORM_OVERRIDE=rbln``)."""
 
 from __future__ import annotations
 
@@ -13,8 +9,6 @@ from sglang.multimodal_gen.runtime.platforms import Platform, PlatformEnum
 
 from sglang_rbln import device
 
-# In-tree torch-native attention; runs on any torch device. An RBLN-specific
-# backend replaces this once the compiled attention path lands.
 SDPA_BACKEND = (
     "sglang.multimodal_gen.runtime.layers.attention.backends.sdpa.SDPABackend"
 )
@@ -24,15 +18,9 @@ class RblnPlatform(Platform):
     _enum = PlatformEnum.OOT
     device_name = "rbln"
     device_type = "rbln"
-    # torch-rbln renames the PrivateUse1 backend to ``rbln``.
     dispatch_key = "PrivateUse1"
 
-    # ------------------------------------------------------------------
-    # Lifecycle
-    # ------------------------------------------------------------------
-
     def init_backend(self) -> None:
-        # Registers the ``rbln`` torch device; everything below assumes it.
         try:
             import torch_rbln  # noqa: F401
         except ImportError as e:
@@ -42,13 +30,7 @@ class RblnPlatform(Platform):
             ) from e
 
     def get_dispatch_key_name(self) -> str:
-        # CustomOp forwards registered with this key win; unregistered ops fall
-        # back to forward_native.
         return "rbln"
-
-    # ------------------------------------------------------------------
-    # Device identity
-    # ------------------------------------------------------------------
 
     @classmethod
     def get_local_torch_device(cls) -> torch.device:
@@ -76,10 +58,6 @@ class RblnPlatform(Platform):
     def is_float64_supported(cls) -> bool:
         return False
 
-    # ------------------------------------------------------------------
-    # Memory
-    # ------------------------------------------------------------------
-
     @classmethod
     def get_device_total_memory(cls, device_id: int = 0) -> int:
         total, _, _ = device.memory_info(device_id)
@@ -106,10 +84,6 @@ class RblnPlatform(Platform):
     @classmethod
     def inference_mode(cls):
         return torch.no_grad()
-
-    # ------------------------------------------------------------------
-    # Subsystems
-    # ------------------------------------------------------------------
 
     def get_attn_backend_cls_str(self, *args, **kwargs) -> str:
         return SDPA_BACKEND

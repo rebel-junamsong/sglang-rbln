@@ -3,17 +3,26 @@
 Out-of-tree RBLN NPU platform plugin for [SGLang Diffusion](https://github.com/sgl-project/sglang/tree/main/python/sglang/multimodal_gen),
 backed by torch-rbln. First target: NVIDIA Cosmos3 (`Cosmos3OmniPipeline`).
 
-Structured after [sglang-torchtpu](https://github.com/sgl-project/sglang-torchtpu):
-the platform is a `Platform` subclass selected through an entry point, and
+The platform is a `Platform` subclass selected through an entry point;
 everything the platform seams cannot express goes through tracked hooks.
 
 ## Install
 
+Install the RBLN driver first and confirm `rbln-smi` sees the NPUs
+([installation guide](https://docs.rbln.ai/latest/getting_started/installation_guide.html)).
+`rebel-compiler` comes from the RBLN index, which needs an RBLN Portal account:
+
 ```bash
-pip install -e '.[device,test]'
+pip install --extra-index-url https://pypi.rbln.ai/simple -e '.[test]'
 ```
 
 Pins: `sglang[diffusion]==0.5.22`, `rebel-compiler==0.12.0`.
+
+The `rbln` torch device needs `torch-rbln` (`.[device]`, installed with
+`--extra-index-url https://download.pytorch.org/whl/cpu` per the guide). The
+published build (0.1.8) requires `torch==2.9.1+cpu` while sglang 0.5.22
+requires `torch==2.14.1`, so the two do not install together yet; the device
+tests are strict-xfail until a torch-rbln built against sglang's torch exists.
 
 ## Select the platform
 

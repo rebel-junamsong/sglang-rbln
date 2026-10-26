@@ -1,10 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""SGLang Diffusion's RBLN backend (torch-rbln) as an out-of-tree platform plugin.
-
-``SGLANG_DIFFUSION_PLATFORM_OVERRIDE=rbln`` selects
-:class:`sglang_rbln.platform.RblnPlatform`; with the override unset the loader
-calls every installed ``activate()`` and takes the one that answers.
-"""
+"""RBLN NPU as an out-of-tree SGLang Diffusion platform."""
 
 from __future__ import annotations
 
@@ -21,13 +16,7 @@ PLATFORM_CLASS_PATH = "sglang_rbln.platform:RblnPlatform"
 
 
 def activate() -> str | None:
-    """Return the platform class path, or None on a host without an RBLN NPU.
-
-    Runs in every spawned process, so it must stay cheap: presence is read from
-    the device nodes and the installed distribution, never by importing
-    ``rebel`` (seconds) or ``torch_rbln``. Raising here aborts startup, so a
-    failed probe answers None.
-    """
+    """Platform class path when an RBLN NPU is present, else None."""
     if not device.rbln_available():
         return None
     logger.info("RBLN out-of-tree platform selected (%s).", PLATFORM_CLASS_PATH)

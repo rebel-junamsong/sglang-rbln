@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+import builtins
 from importlib.metadata import entry_points
 from pkgutil import resolve_name
 
@@ -56,9 +57,6 @@ class TestActivate:
         assert sglang_rbln.activate() == sglang_rbln.PLATFORM_CLASS_PATH
 
     def test_activate_does_not_import_rebel(self, monkeypatch):
-        # activate() runs in every spawned process; importing rebel costs seconds.
-        import builtins
-
         real_import = builtins.__import__
 
         def guarded(name, *args, **kwargs):
@@ -71,10 +69,6 @@ class TestActivate:
 
 
 class TestSglangResolvesThePlugin:
-    """Go through SGLang's own resolver, not our code, so the OOT contract
-    (entry-point name, PlatformEnum.OOT, device_name/device_type, dispatch_key)
-    is checked by the consumer."""
-
     def test_override_selects_rbln(self, fresh_platform, monkeypatch):
         monkeypatch.setenv(device.FORCE_NPU_NAME_ENV, "RBLN-CA25")
         monkeypatch.setenv("SGLANG_DIFFUSION_PLATFORM_OVERRIDE", "rbln")

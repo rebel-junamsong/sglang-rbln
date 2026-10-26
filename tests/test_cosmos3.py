@@ -1,11 +1,4 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Cosmos3 is routed to its native pipeline while the rbln platform is active.
-
-Routing only: no weights are downloaded. SGLang matches the HF id against the
-registry it builds at import time, so this proves the pipeline class and its
-config are reachable from this plugin's environment.
-"""
-
 import pytest
 from sglang.multimodal_gen import registry
 from sglang.multimodal_gen.runtime.pipelines.cosmos3_pipeline import Cosmos3Pipeline
@@ -39,7 +32,6 @@ def test_cosmos3_resolves_to_the_native_pipeline():
 
 
 def test_cosmos3_pipeline_declares_its_modules():
-    # The transformer tokenizes text itself; there is no separate text encoder.
     assert "text_encoder" not in Cosmos3Pipeline._required_config_modules
     assert {"transformer", "vae", "scheduler"} <= set(
         Cosmos3Pipeline._required_config_modules

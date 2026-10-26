@@ -1,5 +1,3 @@
-# SPDX-License-Identifier: Apache-2.0
-# Out-of-tree RBLN platform plugin for SGLang Diffusion (python/sglang/multimodal_gen).
 [build-system]
 requires = ["setuptools>=64", "setuptools-scm>=8"]
 build-backend = "setuptools.build_meta"
@@ -23,18 +21,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# torch-rbln registers the `rbln` torch device (PrivateUse1). The nexus index and
-# the host SDK use different version schemes, so it stays unpinned until that is settled.
 device = ["torch-rbln"]
 test = ["pytest>=8"]
 
-# Platform: SGLang Diffusion calls activate() in every process and selects the
-# plugin with SGLANG_DIFFUSION_PLATFORM_OVERRIDE=rbln when several are installed.
 [project.entry-points."sglang.multimodal_gen.platforms"]
 rbln = "sglang_rbln:activate"
 
-# General plugin: runs before the worker builds the scheduler; registers hooks
-# and out-of-tree CustomOp forwards.
 [project.entry-points."sglang.multimodal_gen.plugins"]
 rbln_hooks = "sglang_rbln.hooks:register"
 
@@ -42,7 +34,6 @@ rbln_hooks = "sglang_rbln.hooks:register"
 include = ["sglang_rbln*"]
 
 [tool.setuptools_scm]
-# Builds without .git metadata fall back to this.
 fallback_version = "0.0.0.dev0"
 
 [tool.pytest.ini_options]
