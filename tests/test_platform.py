@@ -144,7 +144,7 @@ class TestCustomOpDispatch:
 class TestDeviceQueries:
     def test_attention_backend_is_importable(self):
         backend_cls = resolve_name(RblnPlatform().get_attn_backend_cls_str())
-        assert backend_cls.__name__ == "SDPABackend"
+        assert backend_cls.__name__ == "RblnSdpaBackend"
 
     def test_memory_queries_are_positive(self):
         total_bytes = RblnPlatform.get_device_total_memory(0)

@@ -94,6 +94,7 @@ sglang_rbln/
   __init__.py          activate() for the `rbln` platform entry point
   platform.py          RblnPlatform: identity, execution mode, compile seams, device/memory queries
   compilation.py       the `rbln` torch.compile backend and its options
+  attention.py         torch SDPA with key/value heads expanded for rebel-compiler
   device.py            import-free NPU presence probe; execution mode; rebel and host queries
   hooks/__init__.py    register() for the `rbln_hooks` plugin entry point
   hooks/triton_norm.py keeps the Triton norm kernels out of the import path

@@ -9,9 +9,7 @@ from sglang.multimodal_gen.runtime.platforms import Platform, PlatformEnum
 
 from sglang_rbln import compilation, device
 
-TORCH_SDPA_BACKEND_PATH = (
-    "sglang.multimodal_gen.runtime.layers.attention.backends.sdpa.SDPABackend"
-)
+ATTENTION_BACKEND_PATH = "sglang_rbln.attention.RblnSdpaBackend"
 CPU_COMMUNICATOR_PATH = (
     "sglang.multimodal_gen.runtime.distributed.device_communicators"
     ".cpu_communicator.CpuCommunicator"
@@ -124,7 +122,7 @@ class RblnPlatform(Platform):
         return torch.no_grad()
 
     def get_attn_backend_cls_str(self, *args, **kwargs) -> str:
-        return TORCH_SDPA_BACKEND_PATH
+        return ATTENTION_BACKEND_PATH
 
     def get_torch_distributed_backend_str(self) -> str:
         return "gloo"
