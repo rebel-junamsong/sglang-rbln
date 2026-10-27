@@ -47,7 +47,9 @@ Both modes run CustomOps through the `rbln` key: a forward registered with
 (pass either flag explicitly to turn it off). SGLang hands each DiT block to
 the `rbln` backend, which compiles its FX graph with rebel-compiler and runs it
 on the NPU; shapes are static per block and inputs and outputs stay CPU
-tensors in `host` mode.
+tensors in `host` mode. In `host` mode the audio vocoder is loaded in fp32
+(`--component-precisions.vocoder` overrides it), since SGLang runs it without
+autocast on CPU tensors.
 
 | Variable | Effect |
 |---|---|

@@ -44,6 +44,8 @@ class RblnPlatform(Platform):
             server_args.enable_torch_compile = True
         if "regional_compile" not in explicit_args:
             server_args.regional_compile = True
+        if self.is_cpu():
+            server_args.component_precisions.setdefault("vocoder", "fp32")
 
     def get_compile_backend(self, mode: str | None = None) -> str:
         return compilation.COMPILE_BACKEND_NAME

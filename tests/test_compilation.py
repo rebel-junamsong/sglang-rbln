@@ -65,6 +65,7 @@ class TestServerArgDefaults:
         return SimpleNamespace(
             enable_torch_compile=False,
             regional_compile=False,
+            component_precisions={},
             _explicit_arg_names=set(),
         )
 
@@ -72,6 +73,24 @@ class TestServerArgDefaults:
         RblnPlatform().apply_server_args_defaults(server_args)
         assert server_args.enable_torch_compile is True
         assert server_args.regional_compile is True
+
+    @pytest.mark.parametrize(
+        ("on_host", "expected"),
+        [(True, {"vocoder": "fp32"}), (False, {})],
+        ids=["host", "device"],
+    )
+    def test_host_mode_runs_the_vocoder_in_fp32(
+        self, server_args, monkeypatch, on_host, expected
+    ):
+        monkeypatch.setattr(RblnPlatform, "is_cpu", lambda self: on_host)
+        RblnPlatform().apply_server_args_defaults(server_args)
+        assert server_args.component_precisions == expected
+
+    def test_keeps_an_explicit_vocoder_precision(self, server_args, monkeypatch):
+        monkeypatch.setattr(RblnPlatform, "is_cpu", lambda self: True)
+        server_args.component_precisions = {"vocoder": "bf16"}
+        RblnPlatform().apply_server_args_defaults(server_args)
+        assert server_args.component_precisions == {"vocoder": "bf16"}
 
     @pytest.mark.parametrize("flag", ["enable_torch_compile", "regional_compile"])
     def test_keeps_an_explicit_choice(self, server_args, flag):
