@@ -14,3 +14,4 @@ inputs/
 !assets/*.png
 *.mp4
 *.log
+runtime_dump/
