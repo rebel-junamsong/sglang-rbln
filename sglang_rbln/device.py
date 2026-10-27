@@ -67,7 +67,7 @@ def npu_name(device_id: int = 0) -> str:
     if not name:
         raise RuntimeError(
             f"Could not determine the RBLN NPU name for device {device_id}; "
-            f"set {FORCE_NPU_NAME_ENV} (e.g. RBLN-CA25) on a host without an NPU."
+            f"set {FORCE_NPU_NAME_ENV} to the target NPU on a host without one."
         )
     return str(name)
 

@@ -39,6 +39,15 @@ HOOK_DEBTS = [
         upstream_fix="also catch the CUDA RuntimeError vsa raises at import",
     ),
     HookDebt(
+        hook="ltx2_rope",
+        module="sglang.multimodal_gen.runtime.models.dits.ltx_2",
+        upstream_pattern=(
+            "cos_freqs = torch.swapaxes(cos_freq, 1, 2)\n"
+            "            sin_freqs = torch.swapaxes(sin_freq, 1, 2)"
+        ),
+        upstream_fix="return the rotary cos/sin tables contiguous",
+    ),
+    HookDebt(
         hook="cosmos3_compile",
         module=f"{STAGES}.cosmos3",
         upstream_pattern='compile_kwargs = {\n                "mode": "default",',

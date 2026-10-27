@@ -14,6 +14,7 @@ import requests
 from PIL import Image
 
 from sglang_rbln import device
+from tests.conftest import npu_name_for_tests
 
 pytestmark = pytest.mark.e2e
 
@@ -32,7 +33,7 @@ def _free_port() -> int:
 def serve_url():
     port = _free_port()
     serve_env = {**os.environ, "SGLANG_DIFFUSION_PLATFORM_OVERRIDE": "rbln"}
-    serve_env.setdefault(device.FORCE_NPU_NAME_ENV, "RBLN-CA25")
+    serve_env.setdefault(device.FORCE_NPU_NAME_ENV, npu_name_for_tests())
     serve_cmd = [
         str(Path(sys.executable).with_name("sglang")),
         "serve",

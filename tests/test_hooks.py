@@ -4,8 +4,9 @@ from types import ModuleType
 
 import pytest
 import torch
+from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry, HookType
 
-from sglang_rbln.hooks import triton_norm, vsa_import
+from sglang_rbln.hooks import ltx2_rope, triton_norm, vsa_import
 
 
 class TestTritonNormExports:
@@ -53,3 +54,20 @@ class TestVsaImportBlock:
         monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
         monkeypatch.setitem(sys.modules, "vsa", ModuleType("vsa"))
         assert not vsa_import.block_without_cuda()
+
+
+class TestLtx2RopeHook:
+    def test_returns_contiguous_tables(self):
+        table = torch.arange(2 * 4 * 3 * 8, dtype=torch.bfloat16).view(2, 4, 3, 8)
+        cos, sin = ltx2_rope.contiguous_rotary_tables(
+            (table.swapaxes(1, 2), table.swapaxes(1, 2))
+        )
+        assert cos.is_contiguous() and sin.is_contiguous()
+        assert torch.equal(cos, table.swapaxes(1, 2))
+
+    def test_registers_an_after_hook(self):
+        assert ltx2_rope.register() == ltx2_rope.HOOK_TARGET
+        assert any(
+            hook is ltx2_rope.contiguous_rotary_tables and kind is HookType.AFTER
+            for kind, hook, _ in HookRegistry._hooks[ltx2_rope.HOOK_TARGET]
+        )

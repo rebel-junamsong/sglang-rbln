@@ -12,6 +12,7 @@ from sglang.multimodal_gen.runtime.platforms import PlatformEnum
 import sglang_rbln
 from sglang_rbln import device
 from sglang_rbln.platform import RUNS_ON_DEVICE, RBLNPlatform
+from tests.conftest import NPU_FAMILIES
 
 ON_NPU_HOST = bool(device.device_nodes())
 
@@ -40,9 +41,10 @@ class TestActivate:
         monkeypatch.setattr(device, "_distribution_installed", lambda name: False)
         assert sglang_rbln.activate() is None
 
-    def test_forced_npu_name_activates_off_host(self, monkeypatch):
+    @pytest.mark.parametrize("npu", NPU_FAMILIES)
+    def test_forced_npu_name_activates_off_host(self, monkeypatch, npu):
         monkeypatch.setattr(device, "device_nodes", list)
-        monkeypatch.setenv(device.FORCE_NPU_NAME_ENV, "RBLN-CA25")
+        monkeypatch.setenv(device.FORCE_NPU_NAME_ENV, npu)
         assert sglang_rbln.activate() == sglang_rbln.PLATFORM_CLASS_PATH
 
     @pytest.mark.xfail(not ON_NPU_HOST, reason="no RBLN device nodes on host")
@@ -56,7 +58,7 @@ class TestActivate:
             assert name != "rebel", "activate() imported rebel"
             return real_import(name, *args, **kwargs)
 
-        monkeypatch.setenv(device.FORCE_NPU_NAME_ENV, "RBLN-CA25")
+        monkeypatch.setenv(device.FORCE_NPU_NAME_ENV, NPU_FAMILIES[0])
         monkeypatch.setattr(builtins, "__import__", guarded_import)
         assert sglang_rbln.activate() == sglang_rbln.PLATFORM_CLASS_PATH
 

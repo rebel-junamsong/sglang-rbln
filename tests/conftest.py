@@ -12,7 +12,18 @@ from sglang.multimodal_gen.runtime import platforms
 
 from sglang_rbln import device
 
-FORCED_NPU_NAME = "RBLN-CA25"
+NPU_FAMILIES = ("RBLN-CA22", "RBLN-CA25", "RBLN-CR13")
+
+
+def npu_name_for_tests() -> str:
+    if forced := device.forced_npu_name():
+        return forced
+    if device.device_nodes():
+        return device.npu_name()
+    raise pytest.UsageError(
+        f"no RBLN NPU on this host; set {device.FORCE_NPU_NAME_ENV} to the NPU "
+        "the compiler should target (as printed by rbln-smi)"
+    )
 
 
 @pytest.fixture
@@ -25,7 +36,7 @@ def fresh_platform(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture
 def rbln_override(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
     env = {
-        device.FORCE_NPU_NAME_ENV: FORCED_NPU_NAME,
+        device.FORCE_NPU_NAME_ENV: npu_name_for_tests(),
         "SGLANG_DIFFUSION_PLATFORM_OVERRIDE": "rbln",
     }
     for name, value in env.items():
