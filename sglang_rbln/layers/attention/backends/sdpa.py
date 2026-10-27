@@ -8,7 +8,7 @@ from sglang.multimodal_gen.runtime.layers.attention.backends.sdpa import (
     SDPAImpl,
 )
 
-BACKEND_CLASS_PATH = "sglang_rbln.attention.RBLNSdpaBackend"
+BACKEND_CLASS_PATH = "sglang_rbln.layers.attention.backends.sdpa.RBLNSdpaBackend"
 
 
 def expand_kv_heads(

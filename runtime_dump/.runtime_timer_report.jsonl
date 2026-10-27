@@ -1,0 +1,9 @@
+{"type":"run_start","pid":3196504,"time":"2026-10-27 19:49:23.988"}
+{"type":"timer","seq":0,"host_default_fused_nn_pad":84,"rbln_rebel_descriptor_main_0":299,"total":383,"total_host":84,"total_device":299,"total_ccl":0}
+{"type":"prep","seq":0,"graph":"default","prepare_input_us":138,"prepare_output_us":1,"prep_io":""}
+{"type":"timer","seq":1,"host_default_fused_nn_pad":70,"rbln_rebel_descriptor_main_0":292,"total":362,"total_host":70,"total_device":292,"total_ccl":0}
+{"type":"prep","seq":1,"graph":"default","prepare_input_us":134,"prepare_output_us":0,"prep_io":""}
+{"type":"timer","seq":2,"host_default_fused_nn_pad":13,"rbln_rebel_descriptor_main_0":133,"total":146,"total_host":13,"total_device":133,"total_ccl":0}
+{"type":"prep","seq":2,"graph":"default","prepare_input_us":73,"prepare_output_us":0,"prep_io":""}
+{"type":"timer","seq":3,"host_default_fused_nn_pad":16,"rbln_rebel_descriptor_main_0":132,"total":148,"total_host":16,"total_device":132,"total_ccl":0}
+{"type":"prep","seq":3,"graph":"default","prepare_input_us":65,"prepare_output_us":0,"prep_io":""}

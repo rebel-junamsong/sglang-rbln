@@ -12,7 +12,7 @@ from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry
 from torch import nn
 
 from sglang_rbln.device import ExecutionMode
-from sglang_rbln.hooks import cosmos3_compile
+from sglang_rbln.patches.stages import cosmos3
 
 pytestmark = pytest.mark.usefixtures("rbln_platform")
 
@@ -85,16 +85,14 @@ def recorded_compiles(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
 
 class TestGenLayerCompileHook:
     def test_registers_a_replace_hook(self):
-        assert cosmos3_compile.register() == cosmos3_compile.HOOK_TARGET
-        registered = HookRegistry._hooks[cosmos3_compile.HOOK_TARGET]
-        assert any(
-            hook is cosmos3_compile.compile_gen_layers for _, hook, _ in registered
-        )
+        assert cosmos3.register() == cosmos3.HOOK_TARGET
+        registered = HookRegistry._hooks[cosmos3.HOOK_TARGET]
+        assert any(hook is cosmos3.compile_gen_layers for _, hook, _ in registered)
 
     def test_compiles_through_the_platform_backend(
         self, transformer, recorded_compiles
     ):
-        cosmos3_compile.compile_gen_layers(
+        cosmos3.compile_gen_layers(
             None, transformer, SimpleNamespace(enable_torch_compile=True)
         )
         assert transformer._gen_layers_torch_compiled is True
@@ -106,7 +104,7 @@ class TestGenLayerCompileHook:
         assert len(contexts) == 1
 
     def test_respects_disabled_compile(self, transformer, recorded_compiles):
-        cosmos3_compile.compile_gen_layers(
+        cosmos3.compile_gen_layers(
             None, transformer, SimpleNamespace(enable_torch_compile=False)
         )
         assert recorded_compiles == []

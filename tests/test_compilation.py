@@ -6,7 +6,8 @@ import torch
 from torch import nn
 from torch._dynamo import list_backends
 
-from sglang_rbln import compilation, device
+from sglang_rbln import device
+from sglang_rbln.compilation import backend as compilation
 from sglang_rbln.platform import RBLNPlatform
 
 ON_NPU_HOST = bool(device.device_nodes())
@@ -35,6 +36,41 @@ def test_describe_graph_lists_ops_and_inputs():
         graph, [torch.zeros(2, 0, 8, dtype=torch.bfloat16)]
     )
     assert described == "3 ops, inputs [2x0x8:bfloat16]"
+
+
+def test_runtime_report_totals_split_device_and_host():
+    totals = compilation.RuntimeReportTotals()
+    totals.add(
+        [
+            {
+                "type": "timer",
+                "seq": 1,
+                "host_pad": 70,
+                "main_0": 292,
+                "total_device": 292,
+                "total_host": 70,
+                "total_ccl": 0,
+            },
+            {"type": "prep", "seq": 1, "prepare_input_us": 134, "prepare_output_us": 6},
+            {
+                "type": "timer",
+                "seq": 2,
+                "host_pad": 13,
+                "main_0": 133,
+                "total_device": 133,
+                "total_host": 13,
+                "total_ccl": 0,
+            },
+        ]
+    )
+    assert (totals.calls, totals.device_us, totals.host_us, totals.prepare_us) == (
+        2,
+        425,
+        83,
+        140,
+    )
+    assert totals.host_ops == {"host_pad"}
+    assert "device share 65.6%" in totals.summary()
 
 
 def test_log_graphs_wraps_the_registered_backend(monkeypatch, caplog):

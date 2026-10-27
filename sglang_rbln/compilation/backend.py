@@ -17,6 +17,8 @@ COMPILE_BACKEND_NAME = "rbln"
 COMPILE_ONLY_ENV = "SGLANG_RBLN_COMPILE_ONLY"
 STRICT_ENV = "SGLANG_RBLN_COMPILE_STRICT"
 LOG_GRAPHS_ENV = "SGLANG_RBLN_LOG_GRAPHS"
+RUNTIME_REPORTS_ENV = "SGLANG_RBLN_RUNTIME_REPORTS"
+RUNTIME_REPORT_EVERY = 100
 CACHE_DIR_ENV = "SGLANG_RBLN_CACHE_DIR"
 DISABLE_CACHE_ENV = "SGLANG_RBLN_DISABLE_COMPILE_CACHE"
 DEFAULT_CACHE_DIR = "~/.cache/sglang_rbln"
@@ -69,11 +71,65 @@ def describe_graph(graph: torch.fx.GraphModule, example_inputs) -> str:
     return f"{node_count} ops, inputs [{', '.join(inputs)}]"
 
 
+class RuntimeReportTotals:
+    def __init__(self) -> None:
+        self.calls = 0
+        self.device_us = 0
+        self.host_us = 0
+        self.ccl_us = 0
+        self.prepare_us = 0
+        self.host_ops: set[str] = set()
+
+    def add(self, reports: list[dict]) -> None:
+        for report in reports:
+            if report.get("type") == "timer":
+                self.calls += 1
+                self.device_us += report.get("total_device", 0)
+                self.host_us += report.get("total_host", 0)
+                self.ccl_us += report.get("total_ccl", 0)
+                self.host_ops.update(key for key in report if key.startswith("host_"))
+            elif report.get("type") == "prep":
+                self.prepare_us += report.get("prepare_input_us", 0)
+                self.prepare_us += report.get("prepare_output_us", 0)
+
+    def summary(self) -> str:
+        total = self.device_us + self.host_us + self.ccl_us + self.prepare_us
+        share = (self.device_us / total * 100) if total else 0.0
+        return (
+            f"{self.calls} runs: device {self.device_us / 1e3:.1f} ms, "
+            f"host ops {self.host_us / 1e3:.1f} ms, ccl {self.ccl_us / 1e3:.1f} ms, "
+            f"buffer prep {self.prepare_us / 1e3:.1f} ms, device share {share:.1f}%, "
+            f"host ops {sorted(self.host_ops) or 'none'}"
+        )
+
+
+runtime_report_totals = RuntimeReportTotals()
+
+
+def _reporting_callable(compiled):
+    import rebel
+
+    @functools.wraps(compiled)
+    def run(*args, **kwargs):
+        with rebel.capture_reports() as reports:
+            outputs = compiled(*args, **kwargs)
+        runtime_report_totals.add(reports)
+        if runtime_report_totals.calls % RUNTIME_REPORT_EVERY == 0:
+            logger.info("rbln runtime: %s", runtime_report_totals.summary())
+        return outputs
+
+    return run
+
+
 def _logging_backend(backend):
     @functools.wraps(backend)
     def wrapped(graph, example_inputs, *args, **kwargs):
-        logger.info("rbln graph: %s", describe_graph(graph, example_inputs))
-        return backend(graph, example_inputs, *args, **kwargs)
+        if _env_flag(LOG_GRAPHS_ENV):
+            logger.info("rbln graph: %s", describe_graph(graph, example_inputs))
+        compiled = backend(graph, example_inputs, *args, **kwargs)
+        if _env_flag(RUNTIME_REPORTS_ENV):
+            compiled = _reporting_callable(compiled)
+        return compiled
 
     wrapped.__wrapped_backend__ = backend
     return wrapped
@@ -93,6 +149,10 @@ def ensure_compile_backend() -> str:
             f"rebel-compiler did not register the {COMPILE_BACKEND_NAME!r} "
             "torch.compile backend"
         )
-    if _env_flag(LOG_GRAPHS_ENV) and not hasattr(backend, "__wrapped_backend__"):
+    if _env_flag(RUNTIME_REPORTS_ENV):
+        os.environ.setdefault("RBLN_RUNTIME_TIMER", "1")
+    if (_env_flag(LOG_GRAPHS_ENV) or _env_flag(RUNTIME_REPORTS_ENV)) and not hasattr(
+        backend, "__wrapped_backend__"
+    ):
         registry._COMPILER_FNS[COMPILE_BACKEND_NAME] = _logging_backend(backend)
     return COMPILE_BACKEND_NAME

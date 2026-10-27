@@ -28,7 +28,7 @@ pytest -m e2e
   explanations.
 - Prefer a `Platform` seam or `CustomOp.register_oot_forward` over a hook.
   A hook works around exactly one upstream line and comes with a row in
-  `tests/test_hook_inventory.py`, so a bump that removes the line fails the
+  `tests/test_patch_inventory.py`, so a bump that removes the line fails the
   test and the hook gets deleted.
 - A workaround for a compiler gap comes with a row in
   `tests/test_compiler_inventory.py` and a link to the compiler fix.

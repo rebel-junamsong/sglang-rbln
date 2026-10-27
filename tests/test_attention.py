@@ -6,7 +6,9 @@ import torch
 from sglang.multimodal_gen.runtime.layers.attention.backends.sdpa import SDPAImpl
 from torch import nn
 
-from sglang_rbln import attention, compilation, device
+from sglang_rbln import device
+from sglang_rbln.compilation import backend as compilation
+from sglang_rbln.layers.attention.backends import sdpa as attention
 
 ON_NPU_HOST = bool(device.device_nodes())
 QUERY_HEADS, KV_HEADS, HEAD_DIM = 16, 8, 128

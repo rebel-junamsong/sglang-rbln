@@ -37,7 +37,7 @@ test = ["pytest>=8", "requests"]
 rbln = "sglang_rbln:activate"
 
 [project.entry-points."sglang.multimodal_gen.plugins"]
-rbln_hooks = "sglang_rbln.hooks:register"
+rbln_patches = "sglang_rbln.patches:register"
 
 [tool.setuptools.packages.find]
 include = ["sglang_rbln*"]

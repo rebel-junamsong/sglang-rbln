@@ -6,9 +6,10 @@ import torch
 from sglang.multimodal_gen import envs
 from sglang.multimodal_gen.runtime.platforms import Platform, PlatformEnum
 
-from sglang_rbln import compilation, device
+from sglang_rbln import device
+from sglang_rbln.compilation import backend as compilation
 
-ATTENTION_BACKEND_PATH = "sglang_rbln.attention.RBLNSdpaBackend"
+ATTENTION_BACKEND_PATH = "sglang_rbln.layers.attention.backends.sdpa.RBLNSdpaBackend"
 CPU_COMMUNICATOR_PATH = (
     "sglang.multimodal_gen.runtime.distributed.device_communicators"
     ".cpu_communicator.CpuCommunicator"
