@@ -8,7 +8,7 @@ from sglang.multimodal_gen.runtime.layers.attention.backends.sdpa import (
     SDPAImpl,
 )
 
-BACKEND_CLASS_PATH = "sglang_rbln.attention.RblnSdpaBackend"
+BACKEND_CLASS_PATH = "sglang_rbln.attention.RBLNSdpaBackend"
 
 
 def expand_kv_heads(
@@ -27,13 +27,13 @@ def expand_kv_heads(
     )
 
 
-class RblnSdpaImpl(SDPAImpl):
+class RBLNSdpaImpl(SDPAImpl):
     def forward(self, query, key, value, attn_metadata):
         key, value = expand_kv_heads(query, key, value)
         return super().forward(query, key, value, attn_metadata)
 
 
-class RblnSdpaBackend(SDPABackend):
+class RBLNSdpaBackend(SDPABackend):
     @staticmethod
     def get_impl_cls():
-        return RblnSdpaImpl
+        return RBLNSdpaImpl

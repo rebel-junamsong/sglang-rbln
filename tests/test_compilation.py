@@ -7,7 +7,7 @@ from torch import nn
 from torch._dynamo import list_backends
 
 from sglang_rbln import compilation, device
-from sglang_rbln.platform import RblnPlatform
+from sglang_rbln.platform import RBLNPlatform
 
 ON_NPU_HOST = bool(device.device_nodes())
 
@@ -30,7 +30,7 @@ def test_rebel_backend_is_available():
 
 
 def test_platform_compiles_through_rbln():
-    platform = RblnPlatform()
+    platform = RBLNPlatform()
     assert platform.get_compile_backend("max-autotune") == "rbln"
     assert platform.simple_compile_backend == "rbln"
 
@@ -38,8 +38,12 @@ def test_platform_compiles_through_rbln():
 class TestCompileOptions:
     def test_context_is_per_module(self, monkeypatch, tmp_path):
         monkeypatch.setenv(compilation.CACHE_DIR_ENV, str(tmp_path))
-        monkeypatch.delenv(compilation.COMPILE_ONLY_ENV, raising=False)
-        monkeypatch.delenv(compilation.DISABLE_CACHE_ENV, raising=False)
+        for flag in (
+            compilation.COMPILE_ONLY_ENV,
+            compilation.STRICT_ENV,
+            compilation.DISABLE_CACHE_ENV,
+        ):
+            monkeypatch.delenv(flag, raising=False)
         module = _TinyMlp()
         first = compilation.compile_options(module)
         second = compilation.compile_options(module)
@@ -52,11 +56,23 @@ class TestCompileOptions:
         assert first["mega_cache_only"] is True
         assert "mode" not in first
 
-    def test_compile_only_and_cache_switches(self, monkeypatch):
-        monkeypatch.setenv(compilation.COMPILE_ONLY_ENV, "1")
+    @pytest.mark.parametrize(
+        ("flags", "modes"),
+        [
+            ((compilation.COMPILE_ONLY_ENV,), ["compile_only"]),
+            ((compilation.STRICT_ENV,), ["strict"]),
+            (
+                (compilation.COMPILE_ONLY_ENV, compilation.STRICT_ENV),
+                ["compile_only", "strict"],
+            ),
+        ],
+        ids=["compile-only", "strict", "both"],
+    )
+    def test_mode_and_cache_switches(self, monkeypatch, flags, modes):
+        for flag in flags:
+            monkeypatch.setenv(flag, "1")
         monkeypatch.setenv(compilation.DISABLE_CACHE_ENV, "1")
-        options = compilation.compile_options()
-        assert options == {"mode": ["compile_only"]}
+        assert compilation.compile_options() == {"mode": modes}
 
 
 class TestServerArgDefaults:
@@ -70,7 +86,7 @@ class TestServerArgDefaults:
         )
 
     def test_compiles_per_block_through_the_platform(self, server_args):
-        RblnPlatform().apply_server_args_defaults(server_args)
+        RBLNPlatform().apply_server_args_defaults(server_args)
         assert server_args.enable_torch_compile is True
         assert server_args.regional_compile is True
 
@@ -82,20 +98,20 @@ class TestServerArgDefaults:
     def test_host_mode_runs_the_vocoder_in_fp32(
         self, server_args, monkeypatch, on_host, expected
     ):
-        monkeypatch.setattr(RblnPlatform, "is_cpu", lambda self: on_host)
-        RblnPlatform().apply_server_args_defaults(server_args)
+        monkeypatch.setattr(RBLNPlatform, "is_cpu", lambda self: on_host)
+        RBLNPlatform().apply_server_args_defaults(server_args)
         assert server_args.component_precisions == expected
 
     def test_keeps_an_explicit_vocoder_precision(self, server_args, monkeypatch):
-        monkeypatch.setattr(RblnPlatform, "is_cpu", lambda self: True)
+        monkeypatch.setattr(RBLNPlatform, "is_cpu", lambda self: True)
         server_args.component_precisions = {"vocoder": "bf16"}
-        RblnPlatform().apply_server_args_defaults(server_args)
+        RBLNPlatform().apply_server_args_defaults(server_args)
         assert server_args.component_precisions == {"vocoder": "bf16"}
 
     @pytest.mark.parametrize("flag", ["enable_torch_compile", "regional_compile"])
     def test_keeps_an_explicit_choice(self, server_args, flag):
         server_args._explicit_arg_names = {flag}
-        RblnPlatform().apply_server_args_defaults(server_args)
+        RBLNPlatform().apply_server_args_defaults(server_args)
         assert getattr(server_args, flag) is False
 
 

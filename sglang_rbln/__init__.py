@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 __all__ = ["activate", "ENTRY_POINT_NAME", "PLATFORM_CLASS_PATH"]
 
 ENTRY_POINT_NAME = "rbln"
-PLATFORM_CLASS_PATH = "sglang_rbln.platform:RblnPlatform"
+PLATFORM_CLASS_PATH = "sglang_rbln.platform:RBLNPlatform"
 
 
 def activate() -> str | None:

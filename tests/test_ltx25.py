@@ -53,7 +53,7 @@ def test_ltx25_pipeline_declares_audio_modules():
 @pytest.mark.parametrize("execution_mode", [ExecutionMode.HOST, ExecutionMode.DEVICE])
 def test_serve_import_chain_loads_without_cuda(run_probe, execution_mode):
     assert run_probe(LTX25_IMPORT_PROBE, execution_mode) == {
-        "platform": "RblnPlatform",
+        "platform": "RBLNPlatform",
         "execution_mode": execution_mode,
         "norm_triton_imported": False,
         "vsa_kernel_bound": False,

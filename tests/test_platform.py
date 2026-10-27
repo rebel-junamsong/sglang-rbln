@@ -11,7 +11,7 @@ from sglang.multimodal_gen.runtime.platforms import PlatformEnum
 
 import sglang_rbln
 from sglang_rbln import device
-from sglang_rbln.platform import RUNS_ON_DEVICE, RblnPlatform
+from sglang_rbln.platform import RUNS_ON_DEVICE, RBLNPlatform
 
 ON_NPU_HOST = bool(device.device_nodes())
 
@@ -85,7 +85,7 @@ class TestExecutionMode:
             device.execution_mode()
 
     def test_platform_identity_matches_mode(self):
-        platform = RblnPlatform()
+        platform = RBLNPlatform()
         assert platform.device_name == "rbln"
         assert platform.is_out_of_tree()
         assert platform.get_dispatch_key_name() == "rbln"
@@ -111,7 +111,7 @@ class TestSglangResolvesThePlugin:
             == sglang_rbln.PLATFORM_CLASS_PATH
         )
         platform = platforms.current_platform
-        assert isinstance(platform, RblnPlatform)
+        assert isinstance(platform, RBLNPlatform)
         assert platforms.get_selected_platform_dist() == "sglang-rbln"
 
     def test_platform_passes_oot_validation(self, fresh_platform):
@@ -130,11 +130,11 @@ class _NativeOnlyOp(CustomOp):
 
 class TestCustomOpDispatch:
     def test_unregistered_op_falls_back_to_native(self, monkeypatch):
-        monkeypatch.setattr(platforms, "_current_platform", RblnPlatform())
+        monkeypatch.setattr(platforms, "_current_platform", RBLNPlatform())
         assert _NativeOnlyOp()(3) == ("native", 3)
 
     def test_registered_rbln_forward_wins(self, monkeypatch):
-        monkeypatch.setattr(platforms, "_current_platform", RblnPlatform())
+        monkeypatch.setattr(platforms, "_current_platform", RBLNPlatform())
         CustomOp.register_oot_forward(
             _NativeOnlyOp, fn=lambda self, x: ("rbln", x), platform_key="rbln"
         )
@@ -146,22 +146,22 @@ class TestCustomOpDispatch:
 
 class TestDeviceQueries:
     def test_attention_backend_is_importable(self):
-        backend_cls = resolve_name(RblnPlatform().get_attn_backend_cls_str())
-        assert backend_cls.__name__ == "RblnSdpaBackend"
+        backend_cls = resolve_name(RBLNPlatform().get_attn_backend_cls_str())
+        assert backend_cls.__name__ == "RBLNSdpaBackend"
 
     def test_memory_queries_are_positive(self):
-        total_bytes = RblnPlatform.get_device_total_memory(0)
-        free_gib = RblnPlatform.get_available_gpu_memory(0)
+        total_bytes = RBLNPlatform.get_device_total_memory(0)
+        free_gib = RBLNPlatform.get_available_gpu_memory(0)
         assert total_bytes > 0
         assert 0 < free_gib <= total_bytes / (1 << 30)
 
     @pytest.mark.xfail(not ON_NPU_HOST, reason="no RBLN device nodes on host")
     def test_device_name_comes_from_rebel(self, monkeypatch):
         monkeypatch.delenv(device.FORCE_NPU_NAME_ENV, raising=False)
-        assert RblnPlatform.get_device_name(0).startswith("RBLN")
+        assert RBLNPlatform.get_device_name(0).startswith("RBLN")
 
     @pytest.mark.xfail(not RUNS_ON_DEVICE, reason="execution mode is host")
     def test_local_torch_device_is_rbln(self, monkeypatch):
         monkeypatch.setenv("LOCAL_RANK", "1")
-        local_device = RblnPlatform.get_local_torch_device()
+        local_device = RBLNPlatform.get_local_torch_device()
         assert (local_device.type, local_device.index) == ("rbln", 1)

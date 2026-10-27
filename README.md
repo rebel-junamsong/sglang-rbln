@@ -56,12 +56,13 @@ autocast on CPU tensors.
 | `SGLANG_RBLN_CACHE_DIR` | compiled-graph cache (default `~/.cache/sglang_rbln`) |
 | `SGLANG_RBLN_DISABLE_COMPILE_CACHE=1` | compile without the cache |
 | `SGLANG_RBLN_COMPILE_ONLY=1` | compile the graphs and stop before running them |
+| `SGLANG_RBLN_COMPILE_STRICT=1` | fail the request on a graph rebel-compiler cannot compile instead of running it eagerly on the host |
 
 ## Select the platform
 
 | Select with | Platform class | Notes |
 |---|---|---|
-| unset | `sglang_rbln.platform:RblnPlatform` | Auto-detected when `/dev/rbln*` exists and `rebel` is installed, and no other plugin answers |
+| unset | `sglang_rbln.platform:RBLNPlatform` | Auto-detected when `/dev/rbln*` exists and `rebel` is installed, and no other plugin answers |
 | `SGLANG_DIFFUSION_PLATFORM_OVERRIDE=rbln` | same | Required when several platform plugins are installed |
 
 On a host without an NPU, `RBLN_FORCE_NPU_NAME=RBLN-CA25` makes the platform
@@ -125,7 +126,7 @@ turns them off (then pass `"guardrails":false`). Text-to-image goes through
 ```
 sglang_rbln/
   __init__.py          activate() for the `rbln` platform entry point
-  platform.py          RblnPlatform: identity, execution mode, compile seams, device/memory queries
+  platform.py          RBLNPlatform: identity, execution mode, compile seams, device/memory queries
   compilation.py       the `rbln` torch.compile backend and its options
   attention.py         torch SDPA with key/value heads expanded for rebel-compiler
   device.py            import-free NPU presence probe; execution mode; rebel and host queries

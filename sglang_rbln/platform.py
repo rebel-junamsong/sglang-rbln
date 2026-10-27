@@ -8,7 +8,7 @@ from sglang.multimodal_gen.runtime.platforms import Platform, PlatformEnum
 
 from sglang_rbln import compilation, device
 
-ATTENTION_BACKEND_PATH = "sglang_rbln.attention.RblnSdpaBackend"
+ATTENTION_BACKEND_PATH = "sglang_rbln.attention.RBLNSdpaBackend"
 CPU_COMMUNICATOR_PATH = (
     "sglang.multimodal_gen.runtime.distributed.device_communicators"
     ".cpu_communicator.CpuCommunicator"
@@ -18,7 +18,7 @@ RUNS_ON_DEVICE = EXECUTION_MODE is device.ExecutionMode.DEVICE
 compilation.ensure_compile_backend()
 
 
-class RblnPlatform(Platform):
+class RBLNPlatform(Platform):
     _enum = PlatformEnum.OOT
     device_name = "rbln"
     device_type = "rbln" if RUNS_ON_DEVICE else "cpu"

@@ -33,7 +33,7 @@ def _impl(impl_cls):
 def test_expanded_heads_match_grouped_query_attention():
     query, key, value = _qkv()
     reference = _impl(SDPAImpl).forward(query, key, value, None)
-    expanded = _impl(attention.RblnSdpaImpl).forward(query, key, value, None)
+    expanded = _impl(attention.RBLNSdpaImpl).forward(query, key, value, None)
     assert torch.equal(expanded, reference)
 
 
@@ -51,7 +51,7 @@ def test_rejects_non_multiple_heads():
 
 
 def test_backend_exposes_the_expanding_impl():
-    assert attention.RblnSdpaBackend.get_impl_cls() is attention.RblnSdpaImpl
+    assert attention.RBLNSdpaBackend.get_impl_cls() is attention.RBLNSdpaImpl
 
 
 class _Attention(nn.Module):
@@ -69,7 +69,7 @@ def test_grouped_query_attention_compiles_on_the_npu(caplog, monkeypatch, tmp_pa
     compilation.ensure_compile_backend()
     query, key, value = _qkv()
     reference = _impl(SDPAImpl).forward(query, key, value, None)
-    module = _Attention(_impl(attention.RblnSdpaImpl))
+    module = _Attention(_impl(attention.RBLNSdpaImpl))
     compiled = torch.compile(
         module,
         backend=compilation.COMPILE_BACKEND_NAME,

@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 COMPILE_BACKEND_NAME = "rbln"
 COMPILE_ONLY_ENV = "SGLANG_RBLN_COMPILE_ONLY"
+STRICT_ENV = "SGLANG_RBLN_COMPILE_STRICT"
 CACHE_DIR_ENV = "SGLANG_RBLN_CACHE_DIR"
 DISABLE_CACHE_ENV = "SGLANG_RBLN_DISABLE_COMPILE_CACHE"
 DEFAULT_CACHE_DIR = "~/.cache/sglang_rbln"
@@ -41,8 +42,13 @@ def compile_options(module: torch.nn.Module | None = None) -> dict[str, Any]:
         if context is None:
             context = _compile_contexts[module] = CompileContext()
         options["compile_context"] = context
-    if _env_flag(COMPILE_ONLY_ENV):
-        options["mode"] = ["compile_only"]
+    modes = [
+        mode
+        for mode, env in (("compile_only", COMPILE_ONLY_ENV), ("strict", STRICT_ENV))
+        if _env_flag(env)
+    ]
+    if modes:
+        options["mode"] = modes
     compile_cache_dir = cache_dir()
     if compile_cache_dir:
         options["cache_dir"] = compile_cache_dir
