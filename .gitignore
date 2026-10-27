@@ -11,3 +11,4 @@ outputs/
 rank_*/
 runtime.log
 inputs/
+!assets/*.png
