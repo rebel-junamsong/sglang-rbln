@@ -2,7 +2,11 @@
 
 <div align="center">
 
-<img src="assets/rbln_logo.png" width="60%"/>
+<picture>
+  <source srcset="assets/rebellions_logo_dark.png" media="(prefers-color-scheme: dark)">
+  <source srcset="assets/rebellions_logo_light.png" media="(prefers-color-scheme: light)">
+  <img src="assets/rebellions_logo_light.png" alt="Rebellions" width="60%">
+</picture>
 
 [![License](https://img.shields.io/github/license/rebel-junamsong/sglang-rbln)](LICENSE)
 [![Documentation](https://img.shields.io/badge/docs-available-brightgreen)](https://docs.rbln.ai/)
