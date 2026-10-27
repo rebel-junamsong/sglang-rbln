@@ -29,6 +29,27 @@ def test_rebel_backend_is_available():
     assert torch._dynamo.config.automatic_dynamic_shapes is False
 
 
+def test_describe_graph_lists_ops_and_inputs():
+    graph = torch.fx.symbolic_trace(_TinyMlp())
+    described = compilation.describe_graph(
+        graph, [torch.zeros(2, 0, 8, dtype=torch.bfloat16)]
+    )
+    assert described == "3 ops, inputs [2x0x8:bfloat16]"
+
+
+def test_log_graphs_wraps_the_registered_backend(monkeypatch, caplog):
+    from torch._dynamo.backends import registry
+
+    monkeypatch.setenv(compilation.LOG_GRAPHS_ENV, "1")
+    original = registry._COMPILER_FNS["rbln"]
+    monkeypatch.setitem(registry._COMPILER_FNS, "rbln", original)
+    compilation.ensure_compile_backend()
+    wrapped = registry._COMPILER_FNS["rbln"]
+    assert wrapped.__wrapped_backend__ is original
+    compilation.ensure_compile_backend()
+    assert registry._COMPILER_FNS["rbln"] is wrapped
+
+
 def test_platform_compiles_through_rbln():
     platform = RBLNPlatform()
     assert platform.get_compile_backend("max-autotune") == "rbln"

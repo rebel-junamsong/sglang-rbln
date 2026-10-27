@@ -57,6 +57,7 @@ autocast on CPU tensors.
 | `SGLANG_RBLN_DISABLE_COMPILE_CACHE=1` | compile without the cache |
 | `SGLANG_RBLN_COMPILE_ONLY=1` | compile the graphs and stop before running them |
 | `SGLANG_RBLN_COMPILE_STRICT=1` | fail the request on a graph rebel-compiler cannot compile instead of running it eagerly on the host |
+| `SGLANG_RBLN_LOG_GRAPHS=1` | log every graph handed to rebel-compiler (op count, input shapes) |
 
 ## Select the platform
 
