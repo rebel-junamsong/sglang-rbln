@@ -138,11 +138,6 @@ def dump_graph(graph: torch.fx.GraphModule, example_inputs, directory: Path) -> 
         for value in example_inputs
     ]
     torch.save(tensors, stem.with_suffix(".inputs.pt"))
-    try:
-        exported = torch.export.export(graph, tuple(example_inputs), strict=False)
-        torch.export.save(exported, stem.with_suffix(".pt2"))
-    except Exception as error:
-        stem.with_suffix(".export_error.txt").write_text(repr(error))
     return stem
 
 

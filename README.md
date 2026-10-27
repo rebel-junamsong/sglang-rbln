@@ -82,7 +82,7 @@ covers the full request options for both models.
 | `SGLANG_RBLN_COMPILE_ONLY=1` | compile the graphs and stop before running them |
 | `SGLANG_RBLN_COMPILE_STRICT=1` | fail a request whose graph cannot be compiled instead of running it on the host |
 | `SGLANG_RBLN_LOG_GRAPHS=1` | log every graph handed to the compiler |
-| `SGLANG_RBLN_DUMP_GRAPHS=<dir>` | write each graph (readable FX, example inputs, `torch.export` archive) to `<dir>` |
+| `SGLANG_RBLN_DUMP_GRAPHS=<dir>` | write each graph (readable FX and example inputs) to `<dir>` |
 | `SGLANG_RBLN_RUNTIME_REPORTS=1` | log the runtime's device / host-op / buffer-prep time split every 100 graph runs |
 
 `--enable-torch-compile` and `--regional-compile` are on by default; pass either
