@@ -83,7 +83,7 @@ class RuntimeReportTotals:
         self.host_us = 0
         self.ccl_us = 0
         self.prepare_us = 0
-        self.host_ops: set[str] = set()
+        self.node_us: dict[str, int] = {}
 
     def add(self, reports: list[dict]) -> None:
         for report in reports:
@@ -92,10 +92,19 @@ class RuntimeReportTotals:
                 self.device_us += report.get("total_device", 0)
                 self.host_us += report.get("total_host", 0)
                 self.ccl_us += report.get("total_ccl", 0)
-                self.host_ops.update(key for key in report if key.startswith("host_"))
+                for key, value in report.items():
+                    if key not in _TIMER_TOTALS and isinstance(value, int):
+                        self.node_us[key] = self.node_us.get(key, 0) + value
             elif report.get("type") == "prep":
                 self.prepare_us += report.get("prepare_input_us", 0)
                 self.prepare_us += report.get("prepare_output_us", 0)
+
+    @property
+    def host_ops(self) -> set[str]:
+        return {name for name in self.node_us if name.startswith("host_")}
+
+    def top_nodes(self, count: int = 5) -> list[tuple[str, int]]:
+        return sorted(self.node_us.items(), key=lambda item: -item[1])[:count]
 
     def summary(self) -> str:
         total = self.device_us + self.host_us + self.ccl_us + self.prepare_us
@@ -104,10 +113,11 @@ class RuntimeReportTotals:
             f"{self.calls} runs: device {self.device_us / 1e3:.1f} ms, "
             f"host ops {self.host_us / 1e3:.1f} ms, ccl {self.ccl_us / 1e3:.1f} ms, "
             f"buffer prep {self.prepare_us / 1e3:.1f} ms, device share {share:.1f}%, "
-            f"host ops {sorted(self.host_ops) or 'none'}"
+            f"top nodes {[(name, round(us / 1e3, 1)) for name, us in self.top_nodes()]}"
         )
 
 
+_TIMER_TOTALS = frozenset({"seq", "total", "total_host", "total_device", "total_ccl"})
 runtime_report_totals = RuntimeReportTotals()
 
 

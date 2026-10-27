@@ -70,6 +70,7 @@ def test_runtime_report_totals_split_device_and_host():
         140,
     )
     assert totals.host_ops == {"host_pad"}
+    assert totals.top_nodes(1) == [("main_0", 425)]
     assert "device share 65.6%" in totals.summary()
 
 
