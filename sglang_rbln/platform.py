@@ -15,7 +15,7 @@ CPU_COMMUNICATOR_PATH = (
     ".cpu_communicator.CpuCommunicator"
 )
 EXECUTION_MODE = device.execution_mode()
-RUNS_ON_DEVICE = EXECUTION_MODE == "device"
+RUNS_ON_DEVICE = EXECUTION_MODE is device.ExecutionMode.DEVICE
 compilation.ensure_compile_backend()
 
 

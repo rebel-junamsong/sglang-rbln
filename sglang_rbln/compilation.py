@@ -7,6 +7,7 @@ import logging
 import os
 import weakref
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any
 
 import torch
@@ -31,7 +32,7 @@ def _env_flag(name: str) -> bool:
 def cache_dir() -> str | None:
     if _env_flag(DISABLE_CACHE_ENV):
         return None
-    return os.path.expanduser(os.environ.get(CACHE_DIR_ENV) or DEFAULT_CACHE_DIR)
+    return str(Path(os.environ.get(CACHE_DIR_ENV) or DEFAULT_CACHE_DIR).expanduser())
 
 
 def compile_options(module: torch.nn.Module | None = None) -> dict[str, Any]:

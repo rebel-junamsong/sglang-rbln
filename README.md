@@ -104,6 +104,22 @@ tests/                 host-runnable; device-mode and NPU cases are strict-xfail
 tests/e2e/             `sglang serve` round trip on a public tiny model (`pytest -m e2e`)
 ```
 
+## Hooks are tracked debt
+
+sglang is pinned exactly and every hook works around one upstream line;
+`tests/test_hook_inventory.py` fails when a bump removes that line, which is
+the signal to delete the hook.
+
+| Hook | Upstream line | Upstream fix |
+|---|---|---|
+| `triton_norm` | `layernorm.py` imports the Triton norms on every non-CPU platform | gate the import on `has_triton()` |
+| `vsa_import` | `video_sparse_attn.py` catches only `ImportError` around `import vsa` | also catch the CUDA `RuntimeError` |
+| `cosmos3_compile` | `cosmos3.py` compiles GEN layers with hard-coded inductor kwargs | build them through `resolve_torch_compile_kwargs` |
+
+Everything else goes through `Platform` seams (`get_compile_backend`,
+`get_compile_options`, `get_attn_backend_cls_str`, `apply_server_args_defaults`)
+and survives upstream changes.
+
 ## Rules for new code
 
 - Prefer a `Platform` seam or `CustomOp.register_oot_forward` over a hook.

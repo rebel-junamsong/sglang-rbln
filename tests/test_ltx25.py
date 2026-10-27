@@ -1,18 +1,18 @@
 # SPDX-License-Identifier: Apache-2.0
-import json
-import os
-import subprocess
-import sys
+from __future__ import annotations
 
 import pytest
 from sglang.multimodal_gen import registry
+from sglang.multimodal_gen.configs.pipeline_configs.ltx_2_5 import LTX25PipelineConfig
 from sglang.multimodal_gen.runtime.pipelines.ltx_2_pipeline import LTX2Pipeline
 
-from sglang_rbln import device
+from sglang_rbln.device import ExecutionMode
+
+pytestmark = pytest.mark.usefixtures("rbln_platform")
 
 LTX25_MODEL_ID = "Lightricks/LTX-2.5-Diffusers"
 NORM_TRITON_MODULE = "sglang.kernels.ops.diffusion.norm.norm_triton"
-LTX25_IMPORT_PROBE = """
+LTX25_IMPORT_PROBE = f"""
 import json, sys
 from sglang.multimodal_gen.runtime import platforms
 from sglang.multimodal_gen.runtime.platforms import plugins
@@ -27,29 +27,16 @@ try:
     diffusion_exports.norm_infer(); raise SystemExit("norm_infer did not raise")
 except NotImplementedError:
     pass
-print(json.dumps({
+print(json.dumps({{
     "platform": type(platforms.current_platform).__name__,
     "execution_mode": platforms.current_platform.execution_mode,
-    "norm_triton_imported": __NORM_TRITON_MODULE__ in sys.modules,
+    "norm_triton_imported": {NORM_TRITON_MODULE!r} in sys.modules,
     "vsa_kernel_bound": video_sparse_attn.video_sparse_attn is not None,
-}))
+}}))
 """
 
 
-@pytest.fixture(autouse=True)
-def rbln_platform(fresh_platform, monkeypatch):
-    monkeypatch.setenv(device.FORCE_NPU_NAME_ENV, "RBLN-CA25")
-    monkeypatch.setenv("SGLANG_DIFFUSION_PLATFORM_OVERRIDE", "rbln")
-    from sglang.multimodal_gen.runtime import platforms
-
-    assert platforms.current_platform.device_name == "rbln"
-
-
 def test_ltx25_resolves_to_the_native_pipeline():
-    from sglang.multimodal_gen.configs.pipeline_configs.ltx_2_5 import (
-        LTX25PipelineConfig,
-    )
-
     assert registry.has_registered_diffusion_model_path(LTX25_MODEL_ID)
     model_name = registry._MODEL_HF_PATH_TO_NAME[LTX25_MODEL_ID]
     config_info = registry._CONFIG_REGISTRY[model_name]
@@ -63,24 +50,9 @@ def test_ltx25_pipeline_declares_audio_modules():
     )
 
 
-@pytest.mark.parametrize("execution_mode", ["host", "device"])
-def test_serve_import_chain_loads_without_cuda(execution_mode):
-    probe = LTX25_IMPORT_PROBE.replace(
-        "__NORM_TRITON_MODULE__", repr(NORM_TRITON_MODULE)
-    )
-    probe_env = {
-        **os.environ,
-        device.FORCE_NPU_NAME_ENV: "RBLN-CA25",
-        device.EXECUTION_MODE_ENV: execution_mode,
-        "SGLANG_DIFFUSION_PLATFORM_OVERRIDE": "rbln",
-        "PYTHONWARNINGS": "ignore",
-    }
-    probe_run = subprocess.run(
-        [sys.executable, "-c", probe], env=probe_env, capture_output=True, text=True
-    )
-    assert probe_run.returncode == 0, probe_run.stderr[-2000:]
-    report = json.loads(probe_run.stdout.strip().splitlines()[-1])
-    assert report == {
+@pytest.mark.parametrize("execution_mode", [ExecutionMode.HOST, ExecutionMode.DEVICE])
+def test_serve_import_chain_loads_without_cuda(run_probe, execution_mode):
+    assert run_probe(LTX25_IMPORT_PROBE, execution_mode) == {
         "platform": "RblnPlatform",
         "execution_mode": execution_mode,
         "norm_triton_imported": False,

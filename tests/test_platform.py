@@ -67,12 +67,17 @@ class TestExecutionMode:
         monkeypatch.setenv(device.EXECUTION_MODE_ENV, requested)
         assert device.execution_mode() == requested
 
-    def test_auto_follows_torch_rbln(self, monkeypatch):
+    @pytest.mark.parametrize(
+        ("torch_rbln_installed", "expected"),
+        [(False, device.ExecutionMode.HOST), (True, device.ExecutionMode.DEVICE)],
+        ids=["without-torch-rbln", "with-torch-rbln"],
+    )
+    def test_auto_follows_torch_rbln(self, monkeypatch, torch_rbln_installed, expected):
         monkeypatch.delenv(device.EXECUTION_MODE_ENV, raising=False)
-        monkeypatch.setattr(device, "torch_rbln_available", lambda: False)
-        assert device.execution_mode() == "host"
-        monkeypatch.setattr(device, "torch_rbln_available", lambda: True)
-        assert device.execution_mode() == "device"
+        monkeypatch.setattr(
+            device, "torch_rbln_available", lambda: torch_rbln_installed
+        )
+        assert device.execution_mode() is expected
 
     def test_unknown_mode_is_rejected(self, monkeypatch):
         monkeypatch.setenv(device.EXECUTION_MODE_ENV, "npu")
@@ -100,9 +105,7 @@ class TestExecutionMode:
 
 
 class TestSglangResolvesThePlugin:
-    def test_override_selects_rbln(self, fresh_platform, monkeypatch):
-        monkeypatch.setenv(device.FORCE_NPU_NAME_ENV, "RBLN-CA25")
-        monkeypatch.setenv("SGLANG_DIFFUSION_PLATFORM_OVERRIDE", "rbln")
+    def test_override_selects_rbln(self, fresh_platform, rbln_override):
         assert (
             platforms.resolve_current_platform_cls_qualname()
             == sglang_rbln.PLATFORM_CLASS_PATH

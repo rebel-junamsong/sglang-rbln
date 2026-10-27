@@ -42,7 +42,7 @@ fallback_version = "0.0.0.dev0"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 xfail_strict = true
-addopts = "-m 'not e2e'"
+addopts = "-m 'not e2e' --strict-markers --strict-config"
 markers = ["e2e: launches sglang serve and generates through the HTTP API"]
 
 [tool.ruff]
