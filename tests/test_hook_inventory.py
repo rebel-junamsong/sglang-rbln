@@ -1,6 +1,4 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Each hook works around one upstream line. When sglang stops needing the
-workaround, the matching case fails and the hook should be deleted."""
 
 from __future__ import annotations
 

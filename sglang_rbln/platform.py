@@ -1,5 +1,4 @@
 # SPDX-License-Identifier: Apache-2.0
-"""The out-of-tree RBLN platform (``SGLANG_DIFFUSION_PLATFORM_OVERRIDE=rbln``)."""
 
 from __future__ import annotations
 

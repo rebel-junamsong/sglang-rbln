@@ -81,14 +81,44 @@ Text-to-video with audio goes through `POST /v1/videos`; see the
 
 ## Serve Cosmos3
 
+The model card's SGLang example
+([nvidia/Cosmos3-Super](https://huggingface.co/nvidia/Cosmos3-Super)) runs
+unchanged apart from the device count:
+
 ```bash
-SGLANG_DIFFUSION_PLATFORM_OVERRIDE=rbln sglang serve \
-  --model-path nvidia/Cosmos3-Edge --num-gpus 1
+sglang serve \
+  --model-path nvidia/Cosmos3-Super \
+  --num-gpus 1
 ```
 
-Text-to-image goes through `POST /v1/images/generations`; see the
-[cookbook](https://docs.sglang.io/cookbook/diffusion/Cosmos/Cosmos3). Guardrails
-need `cosmos-guardrail`; `SGLANG_DISABLE_COSMOS3_GUARDRAILS=1` turns them off.
+```bash
+job_id=$(curl -sS -X POST http://localhost:30000/v1/videos \
+  --form-string "prompt=A small warehouse robot moves a blue box across a clean floor." \
+  --form-string "negative_prompt=blurry, distorted, low quality" \
+  --form-string "size=1280x720" \
+  --form-string "num_frames=81" \
+  --form-string "fps=24" \
+  --form-string "num_inference_steps=35" \
+  --form-string "guidance_scale=4.0" \
+  --form-string "flow_shift=10.0" \
+  --form-string "seed=42" \
+  --form-string 'extra_params={"guardrails":true,"use_resolution_template":false,"use_duration_template":false}' \
+  | python -c 'import json, sys; print(json.load(sys.stdin)["id"])')
+while true; do
+  status=$(curl -sS "http://localhost:30000/v1/videos/${job_id}" \
+  | python -c 'import json, sys; print(json.load(sys.stdin)["status"])')
+  [ "$status" = "completed" ] && break
+  [ "$status" = "failed" ] && exit 1
+  sleep 1
+done
+curl -sS -L "http://localhost:30000/v1/videos/${job_id}/content" \
+  -o cosmos3_super_t2v_output.mp4
+```
+
+`nvidia/Cosmos3-Edge` (4B) serves the same way and is the quick check.
+Guardrails need `cosmos-guardrail`; `SGLANG_DISABLE_COSMOS3_GUARDRAILS=1`
+turns them off (then pass `"guardrails":false`). Text-to-image goes through
+`POST /v1/images/generations`.
 
 ## Layout
 

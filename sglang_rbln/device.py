@@ -1,5 +1,4 @@
 # SPDX-License-Identifier: Apache-2.0
-"""NPU presence, execution mode, and ``rebel`` device queries."""
 
 from __future__ import annotations
 
@@ -38,7 +37,6 @@ def _distribution_installed(module_name: str) -> bool:
 
 
 def rbln_available() -> bool:
-    """Import-free: ``activate()`` runs in every spawned process."""
     if forced_npu_name():
         return True
     return _distribution_installed("rebel") and bool(device_nodes())
@@ -49,7 +47,6 @@ def torch_rbln_available() -> bool:
 
 
 def execution_mode() -> ExecutionMode:
-    """``device``: tensors live on the ``rbln`` torch device; ``host``: on CPU."""
     requested = os.environ.get(EXECUTION_MODE_ENV, "").strip().lower() or "auto"
     try:
         mode = ExecutionMode(requested)
@@ -76,7 +73,6 @@ def npu_name(device_id: int = 0) -> str:
 
 
 def npu_memory_info(device_id: int = 0) -> tuple[int, int, int]:
-    """``(total, used, free)`` NPU memory in bytes."""
     import rebel
 
     info = rebel.get_device_memory_info(device_id)
@@ -84,6 +80,5 @@ def npu_memory_info(device_id: int = 0) -> tuple[int, int, int]:
 
 
 def host_memory_info() -> tuple[int, int, int]:
-    """``(total, used, free)`` host memory in bytes."""
     memory = psutil.virtual_memory()
     return int(memory.total), int(memory.used), int(memory.available)

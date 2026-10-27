@@ -1,5 +1,4 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Hook and CustomOp registrations for the ``rbln_hooks`` plugin entry point."""
 
 from __future__ import annotations
 

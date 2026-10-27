@@ -1,11 +1,4 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Torch SDPA attention with key/value heads expanded to the query head count.
-
-rebel-compiler lowers ``scaled_dot_product_attention`` to a batched matmul
-whose batch dimensions must agree, so grouped-query attention
-(``enable_gqa=True``) fails to compile and falls back to eager. Repeating
-the key/value heads up front keeps the graph compilable.
-"""
 
 from __future__ import annotations
 

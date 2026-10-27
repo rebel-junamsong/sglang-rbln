@@ -1,5 +1,4 @@
 # SPDX-License-Identifier: Apache-2.0
-"""RBLN NPU as an out-of-tree SGLang Diffusion platform."""
 
 from __future__ import annotations
 
@@ -16,7 +15,6 @@ PLATFORM_CLASS_PATH = "sglang_rbln.platform:RblnPlatform"
 
 
 def activate() -> str | None:
-    """Platform class path when an RBLN NPU is present, else None."""
     if not device.rbln_available():
         return None
     logger.info("RBLN out-of-tree platform selected (%s).", PLATFORM_CLASS_PATH)

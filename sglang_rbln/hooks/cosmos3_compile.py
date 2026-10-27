@@ -1,17 +1,4 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Compile Cosmos3 GEN layers through the platform's torch.compile backend.
-
-Why: ``Cosmos3DenoisingStage._maybe_enable_torch_compile`` compiles the GEN
-decoder layers with hard-coded inductor kwargs on every platform that is not
-Ascend NPU, bypassing ``Platform.get_compile_backend`` and
-``get_compile_options``.
-How: REPLACE the method with one that builds the kwargs through
-``build_torch_compile_kwargs``, which asks the platform for the backend and
-options, and otherwise keeps the stage's behaviour.
-Upstream: route the stage through ``resolve_torch_compile_kwargs`` like
-``stages/denoising.py``.
-Remove when: the stage compiles through the platform seams.
-"""
 
 from __future__ import annotations
 

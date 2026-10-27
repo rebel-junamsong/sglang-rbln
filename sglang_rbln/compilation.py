@@ -1,5 +1,4 @@
 # SPDX-License-Identifier: Apache-2.0
-"""``torch.compile`` backend that compiles FX graphs with rebel-compiler."""
 
 from __future__ import annotations
 
@@ -52,7 +51,6 @@ def compile_options(module: torch.nn.Module | None = None) -> dict[str, Any]:
 
 
 def ensure_compile_backend() -> str:
-    """Import rebel's dynamo backend, which registers itself as ``rbln``."""
     import rebel.core.torch_compile  # noqa: F401
     from torch._dynamo import list_backends
 
