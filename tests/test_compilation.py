@@ -73,6 +73,14 @@ def test_runtime_report_totals_split_device_and_host():
     assert "device share 65.6%" in totals.summary()
 
 
+def test_dump_graph_writes_readable_inputs_and_export(tmp_path):
+    graph = torch.fx.symbolic_trace(_TinyMlp())
+    stem = compilation.dump_graph(graph, [torch.zeros(2, 64)], tmp_path)
+    assert "gelu" in stem.with_suffix(".txt").read_text()
+    assert torch.load(stem.with_suffix(".inputs.pt"))[0].shape == (2, 64)
+    assert stem.with_suffix(".pt2").exists()
+
+
 def test_log_graphs_wraps_the_registered_backend(monkeypatch, caplog):
     from torch._dynamo.backends import registry
 

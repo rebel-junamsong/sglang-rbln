@@ -20,7 +20,10 @@ ON_NPU_HOST = bool(device.device_nodes())
 def test_entry_points_are_registered():
     expected = {
         "sglang.multimodal_gen.platforms": ("rbln", "sglang_rbln:activate"),
-        "sglang.multimodal_gen.plugins": ("rbln_patches", "sglang_rbln.patches:register"),
+        "sglang.multimodal_gen.plugins": (
+            "rbln_patches",
+            "sglang_rbln.patches:register",
+        ),
     }
     for group, (entry_name, entry_value) in expected.items():
         (entry,) = [ep for ep in entry_points(group=group) if ep.name == entry_name]

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import functools
+import itertools
 import logging
 import os
 import weakref
@@ -18,6 +19,7 @@ COMPILE_ONLY_ENV = "SGLANG_RBLN_COMPILE_ONLY"
 STRICT_ENV = "SGLANG_RBLN_COMPILE_STRICT"
 LOG_GRAPHS_ENV = "SGLANG_RBLN_LOG_GRAPHS"
 RUNTIME_REPORTS_ENV = "SGLANG_RBLN_RUNTIME_REPORTS"
+DUMP_GRAPHS_ENV = "SGLANG_RBLN_DUMP_GRAPHS"
 RUNTIME_REPORT_EVERY = 100
 CACHE_DIR_ENV = "SGLANG_RBLN_CACHE_DIR"
 DISABLE_CACHE_ENV = "SGLANG_RBLN_DISABLE_COMPILE_CACHE"
@@ -121,11 +123,32 @@ def _reporting_callable(compiled):
     return run
 
 
+_dump_counter = itertools.count()
+
+
+def dump_graph(graph: torch.fx.GraphModule, example_inputs, directory: Path) -> Path:
+    directory.mkdir(parents=True, exist_ok=True)
+    stem = directory / f"graph_{os.getpid()}_{next(_dump_counter)}"
+    stem.with_suffix(".txt").write_text(graph.print_readable(print_output=False))
+    torch.save(list(example_inputs), stem.with_suffix(".inputs.pt"))
+    try:
+        exported = torch.export.export(graph, tuple(example_inputs), strict=False)
+        torch.export.save(exported, stem.with_suffix(".pt2"))
+    except Exception as error:
+        stem.with_suffix(".export_error.txt").write_text(repr(error))
+    return stem
+
+
 def _logging_backend(backend):
     @functools.wraps(backend)
     def wrapped(graph, example_inputs, *args, **kwargs):
         if _env_flag(LOG_GRAPHS_ENV):
             logger.info("rbln graph: %s", describe_graph(graph, example_inputs))
+        if dump_dir := os.environ.get(DUMP_GRAPHS_ENV):
+            logger.info(
+                "rbln graph dumped to %s",
+                dump_graph(graph, example_inputs, Path(dump_dir)),
+            )
         compiled = backend(graph, example_inputs, *args, **kwargs)
         if _env_flag(RUNTIME_REPORTS_ENV):
             compiled = _reporting_callable(compiled)
@@ -151,8 +174,11 @@ def ensure_compile_backend() -> str:
         )
     if _env_flag(RUNTIME_REPORTS_ENV):
         os.environ.setdefault("RBLN_RUNTIME_TIMER", "1")
-    if (_env_flag(LOG_GRAPHS_ENV) or _env_flag(RUNTIME_REPORTS_ENV)) and not hasattr(
-        backend, "__wrapped_backend__"
-    ):
+    diagnostics = (
+        _env_flag(LOG_GRAPHS_ENV)
+        or _env_flag(RUNTIME_REPORTS_ENV)
+        or bool(os.environ.get(DUMP_GRAPHS_ENV))
+    )
+    if diagnostics and not hasattr(backend, "__wrapped_backend__"):
         registry._COMPILER_FNS[COMPILE_BACKEND_NAME] = _logging_backend(backend)
     return COMPILE_BACKEND_NAME
