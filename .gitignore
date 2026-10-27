@@ -12,3 +12,4 @@ rank_*/
 runtime.log
 inputs/
 !assets/*.png
+*.mp4
