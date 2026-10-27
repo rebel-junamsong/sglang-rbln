@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11,<3.15"
 license = { text = "Apache-2.0" }
 authors = [{ name = "Rebellions Inc.", email = "support@rebellions.ai" }]
+keywords = ["sglang", "diffusion", "rbln", "npu", "torch.compile"]
 classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -22,6 +23,11 @@ dependencies = [
     "sglang[diffusion]==0.5.22",
     "rebel-compiler==0.12.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/rebel-junamsong/sglang-rbln"
+Repository = "https://github.com/rebel-junamsong/sglang-rbln"
+Issues = "https://github.com/rebel-junamsong/sglang-rbln/issues"
 
 [project.optional-dependencies]
 device = ["torch-rbln"]

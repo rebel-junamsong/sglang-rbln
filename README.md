@@ -164,12 +164,9 @@ compiler no longer needs the workaround.
 |---|---|---|
 | `attention.py` expands key/value heads before SDPA | the SDPA converter ignores `enable_gqa`, so grouped-query attention fails to trace (`BatchDot: batch dimensions don't match`) and the graph runs eagerly on the host | [rebel_compiler#14989](https://github.com/rebellions-sw/rebel_compiler/pull/14989) |
 
-## Rules for new code
+## Contributing
 
-- Prefer a `Platform` seam or `CustomOp.register_oot_forward` over a hook.
-- Every hook carries Why / How (type, target) / Upstream PR or issue / Remove when.
-- `activate()` runs in every spawned process: never import `rebel` or
-  `torch_rbln` from it.
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Test
 

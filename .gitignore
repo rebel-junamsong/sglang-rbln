@@ -8,3 +8,6 @@ dist/
 outputs/
 *.png
 *.jpg
+rank_*/
+runtime.log
+inputs/
