@@ -13,3 +13,4 @@ runtime.log
 inputs/
 !assets/*.png
 *.mp4
+*.log

@@ -20,6 +20,7 @@ STRICT_ENV = "SGLANG_RBLN_COMPILE_STRICT"
 LOG_GRAPHS_ENV = "SGLANG_RBLN_LOG_GRAPHS"
 RUNTIME_REPORTS_ENV = "SGLANG_RBLN_RUNTIME_REPORTS"
 DUMP_GRAPHS_ENV = "SGLANG_RBLN_DUMP_GRAPHS"
+STATIC_OUTPUT_ENV = "SGLANG_RBLN_STATIC_OUTPUT"
 RUNTIME_REPORT_EVERY = 100
 CACHE_DIR_ENV = "SGLANG_RBLN_CACHE_DIR"
 DISABLE_CACHE_ENV = "SGLANG_RBLN_DISABLE_COMPILE_CACHE"
@@ -59,6 +60,8 @@ def compile_options(module: torch.nn.Module | None = None) -> dict[str, Any]:
     if compile_cache_dir:
         options["cache_dir"] = compile_cache_dir
         options["mega_cache_only"] = True
+    if _env_flag(STATIC_OUTPUT_ENV):
+        options["use_static_output"] = True
     return options
 
 
@@ -130,7 +133,11 @@ def dump_graph(graph: torch.fx.GraphModule, example_inputs, directory: Path) -> 
     directory.mkdir(parents=True, exist_ok=True)
     stem = directory / f"graph_{os.getpid()}_{next(_dump_counter)}"
     stem.with_suffix(".txt").write_text(graph.print_readable(print_output=False))
-    torch.save(list(example_inputs), stem.with_suffix(".inputs.pt"))
+    tensors = [
+        value if isinstance(value, torch.Tensor) else repr(value)
+        for value in example_inputs
+    ]
+    torch.save(tensors, stem.with_suffix(".inputs.pt"))
     try:
         exported = torch.export.export(graph, tuple(example_inputs), strict=False)
         torch.export.save(exported, stem.with_suffix(".pt2"))

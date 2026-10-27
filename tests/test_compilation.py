@@ -121,6 +121,11 @@ class TestCompileOptions:
         assert first["mega_cache_only"] is True
         assert "mode" not in first
 
+    def test_static_output_switch(self, monkeypatch):
+        monkeypatch.setenv(compilation.STATIC_OUTPUT_ENV, "1")
+        monkeypatch.setenv(compilation.DISABLE_CACHE_ENV, "1")
+        assert compilation.compile_options() == {"use_static_output": True}
+
     @pytest.mark.parametrize(
         ("flags", "modes"),
         [
