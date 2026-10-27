@@ -153,6 +153,15 @@ Everything else goes through `Platform` seams (`get_compile_backend`,
 `get_compile_options`, `get_attn_backend_cls_str`, `apply_server_args_defaults`)
 and survives upstream changes.
 
+Compiler gaps follow the same rule: the model side carries a workaround so the
+model runs on the NPU today, the gap is pinned down by a test, and the fix lands
+in rebel-compiler. `tests/test_compiler_inventory.py` fails once the installed
+compiler no longer needs the workaround.
+
+| Workaround | Compiler gap | Fix |
+|---|---|---|
+| `attention.py` expands key/value heads before SDPA | the SDPA converter ignores `enable_gqa`, so grouped-query attention fails to trace (`BatchDot: batch dimensions don't match`) and the graph runs eagerly on the host | [rebel_compiler#14989](https://github.com/rebellions-sw/rebel_compiler/pull/14989) |
+
 ## Rules for new code
 
 - Prefer a `Platform` seam or `CustomOp.register_oot_forward` over a hook.
