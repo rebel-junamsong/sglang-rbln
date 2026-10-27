@@ -6,12 +6,10 @@ from __future__ import annotations
 import logging
 import os
 import weakref
-from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
 import torch
-import torch.fx as fx
 
 logger = logging.getLogger(__name__)
 
@@ -53,29 +51,6 @@ def compile_options(module: torch.nn.Module | None = None) -> dict[str, Any]:
     return options
 
 
-def _describe_inputs(graph: fx.GraphModule, example_inputs: Sequence[Any]) -> str:
-    placeholder_names = [n.name for n in graph.graph.nodes if n.op == "placeholder"]
-    described = []
-    for index, example in enumerate(example_inputs):
-        name = (
-            placeholder_names[index]
-            if index < len(placeholder_names)
-            else f"arg{index}"
-        )
-        if isinstance(example, torch.Tensor):
-            shape = "x".join(str(d) for d in example.shape)
-            described.append(
-                f"{name}:{str(example.dtype).removeprefix('torch.')}[{shape}]"
-            )
-        else:
-            described.append(f"{name}:{type(example).__name__}")
-    return ", ".join(described)
-
-
-def describe_graph_inputs(graph: fx.GraphModule, example_inputs: Sequence[Any]) -> str:
-    return _describe_inputs(graph, example_inputs)
-
-
 def ensure_compile_backend() -> str:
     """Import rebel's dynamo backend, which registers itself as ``rbln``."""
     import rebel.core.torch_compile  # noqa: F401
@@ -84,6 +59,7 @@ def ensure_compile_backend() -> str:
     torch._dynamo.config.cache_size_limit = max(
         torch._dynamo.config.cache_size_limit, DYNAMO_CACHE_SIZE_LIMIT
     )
+    torch._dynamo.config.automatic_dynamic_shapes = False
     if COMPILE_BACKEND_NAME not in list_backends():
         raise RuntimeError(
             f"rebel-compiler did not register the {COMPILE_BACKEND_NAME!r} "

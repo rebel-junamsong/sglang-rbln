@@ -42,6 +42,8 @@ class RblnPlatform(Platform):
         explicit_args = getattr(server_args, "_explicit_arg_names", None) or ()
         if "enable_torch_compile" not in explicit_args:
             server_args.enable_torch_compile = True
+        if "regional_compile" not in explicit_args:
+            server_args.regional_compile = True
 
     def get_compile_backend(self, mode: str | None = None) -> str:
         return compilation.COMPILE_BACKEND_NAME

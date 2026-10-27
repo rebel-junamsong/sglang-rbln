@@ -43,10 +43,11 @@ Both modes run CustomOps through the `rbln` key: a forward registered with
 
 ## Compile and run
 
-`torch.compile` is on by default on this platform (`--enable-torch-compile`
-turns it off explicitly). SGLang hands the DiT blocks to the `rbln` backend,
-which compiles each FX graph with rebel-compiler and runs it on the NPU;
-inputs and outputs stay CPU tensors in `host` mode.
+`torch.compile` and `--regional-compile` are on by default on this platform
+(pass either flag explicitly to turn it off). SGLang hands each DiT block to
+the `rbln` backend, which compiles its FX graph with rebel-compiler and runs it
+on the NPU; shapes are static per block and inputs and outputs stay CPU
+tensors in `host` mode.
 
 | Variable | Effect |
 |---|---|

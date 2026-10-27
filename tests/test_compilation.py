@@ -26,6 +26,7 @@ def test_rebel_backend_is_available():
     assert compilation.ensure_compile_backend() == "rbln"
     assert "rbln" in list_backends()
     assert torch._dynamo.config.cache_size_limit >= compilation.DYNAMO_CACHE_SIZE_LIMIT
+    assert torch._dynamo.config.automatic_dynamic_shapes is False
 
 
 def test_platform_compiles_through_rbln():
@@ -59,19 +60,24 @@ class TestCompileOptions:
 
 
 class TestServerArgDefaults:
-    def test_enables_torch_compile(self):
-        server_args = SimpleNamespace(
-            enable_torch_compile=False, _explicit_arg_names=set()
+    @pytest.fixture
+    def server_args(self):
+        return SimpleNamespace(
+            enable_torch_compile=False,
+            regional_compile=False,
+            _explicit_arg_names=set(),
         )
+
+    def test_compiles_per_block_through_the_platform(self, server_args):
         RblnPlatform().apply_server_args_defaults(server_args)
         assert server_args.enable_torch_compile is True
+        assert server_args.regional_compile is True
 
-    def test_keeps_an_explicit_choice(self):
-        server_args = SimpleNamespace(
-            enable_torch_compile=False, _explicit_arg_names={"enable_torch_compile"}
-        )
+    @pytest.mark.parametrize("flag", ["enable_torch_compile", "regional_compile"])
+    def test_keeps_an_explicit_choice(self, server_args, flag):
+        server_args._explicit_arg_names = {flag}
         RblnPlatform().apply_server_args_defaults(server_args)
-        assert server_args.enable_torch_compile is False
+        assert getattr(server_args, flag) is False
 
 
 @pytest.mark.xfail(not ON_NPU_HOST, reason="no RBLN device nodes on host")
