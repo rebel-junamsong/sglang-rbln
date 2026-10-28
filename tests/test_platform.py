@@ -16,9 +16,8 @@ import sglang_rbln
 from sglang_rbln import device
 from sglang_rbln import platform as platform_module
 from sglang_rbln.platform import OFFLOAD_FLAGS, RUNS_ON_DEVICE, RBLNPlatform
-from tests.conftest import NPU_FAMILIES
 
-ON_NPU_HOST = bool(device.device_nodes())
+NPU_FAMILIES = ("RBLN-CA22", "RBLN-CA25", "RBLN-CR13")
 
 
 def test_entry_points_are_registered():
@@ -53,7 +52,7 @@ class TestActivate:
         monkeypatch.setenv("RBLN_FORCE_NPU_NAME", npu)
         assert sglang_rbln.activate() == sglang_rbln.PLATFORM_CLASS_PATH
 
-    @pytest.mark.xfail(not ON_NPU_HOST, reason="no RBLN device nodes on host")
+    @pytest.mark.npu
     def test_activates_on_an_npu_host(self):
         assert sglang_rbln.activate() == sglang_rbln.PLATFORM_CLASS_PATH
 
@@ -175,12 +174,12 @@ class TestDeviceQueries:
         assert total_bytes > 0
         assert 0 < free_gib <= total_bytes / (1 << 30)
 
-    @pytest.mark.xfail(not ON_NPU_HOST, reason="no RBLN device nodes on host")
+    @pytest.mark.npu
     def test_device_name_comes_from_rebel(self, monkeypatch):
         monkeypatch.delenv("RBLN_FORCE_NPU_NAME", raising=False)
         assert RBLNPlatform.get_device_name(0).startswith("RBLN")
 
-    @pytest.mark.xfail(not RUNS_ON_DEVICE, reason="execution mode is host")
+    @pytest.mark.device_mode
     def test_local_torch_device_is_rbln(self, monkeypatch):
         monkeypatch.setenv("LOCAL_RANK", "1")
         local_device = RBLNPlatform.get_local_torch_device()

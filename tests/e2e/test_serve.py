@@ -13,8 +13,6 @@ import pytest
 import requests
 from PIL import Image
 
-from tests.conftest import npu_name_for_tests
-
 pytestmark = pytest.mark.e2e
 
 SMOKE_MODEL_ID = "hf-internal-testing/tiny-sdxl-pipe"
@@ -29,10 +27,10 @@ def _free_port() -> int:
 
 
 @pytest.fixture(scope="module")
-def serve_url():
+def serve_url(npu_name):
     port = _free_port()
     serve_env = {**os.environ, "SGLANG_DIFFUSION_PLATFORM_OVERRIDE": "rbln"}
-    serve_env.setdefault("RBLN_FORCE_NPU_NAME", npu_name_for_tests())
+    serve_env.setdefault("RBLN_FORCE_NPU_NAME", npu_name)
     serve_cmd = [
         str(Path(sys.executable).with_name("sglang")),
         "serve",

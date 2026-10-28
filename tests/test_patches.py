@@ -15,7 +15,6 @@ from sglang_rbln.patches.layers.attention import video_sparse_attn
 from sglang_rbln.patches.models import cosmos3video, ltx_2
 from sglang_rbln.patches.srt.layers.quantization import fp4_utils
 from sglang_rbln.patches.torch_rbln import ops_utils
-from sglang_rbln.platform import RUNS_ON_DEVICE
 
 
 class TestTritonNormExports:
@@ -164,7 +163,7 @@ class TestCosmos3TimestepEmbedderHook:
         assert torch.equal(out, embedder(t))
         assert not hasattr(embedder, cosmos3video.HOST_STATE)
 
-    @pytest.mark.xfail(not RUNS_ON_DEVICE, reason="execution mode is host")
+    @pytest.mark.device_mode
     def test_device_weights_embed_in_float32_on_the_host(self):
         embedder, t = _TimestepEmbedder(), torch.tensor([0.5, 0.25])
         expected = embedder(t)

@@ -14,7 +14,6 @@ from torch import nn
 from sglang_rbln import device
 from sglang_rbln.device import ExecutionMode
 from sglang_rbln.patches.stages import cosmos3
-from sglang_rbln.platform import RUNS_ON_DEVICE
 
 pytestmark = pytest.mark.usefixtures("rbln_platform")
 
@@ -156,7 +155,7 @@ class TestHostDecodeHook:
         out = cosmos3.decode_latents_on_host(self.decode_latents, stage, latents)
         assert torch.equal(out, stage.vae(latents))
 
-    @pytest.mark.xfail(not RUNS_ON_DEVICE, reason="execution mode is host")
+    @pytest.mark.device_mode
     def test_device_latents_decode_on_the_cpu_and_return_to_the_device(self, stage):
         stage.vae.to("rbln:0")
         stage._latents_mean = torch.zeros(1)

@@ -49,7 +49,11 @@ fallback_version = "0.0.0.dev0"
 testpaths = ["tests"]
 xfail_strict = true
 addopts = "-m 'not e2e' --strict-markers --strict-config"
-markers = ["e2e: launches sglang serve and generates through the HTTP API"]
+markers = [
+    "e2e: launches sglang serve and generates through the HTTP API",
+    "npu: needs an RBLN NPU on the host; xfails strictly without one",
+    "device_mode: needs execution mode 'device' (torch-rbln); xfails strictly in host mode",
+]
 
 [tool.ruff]
 line-length = 88

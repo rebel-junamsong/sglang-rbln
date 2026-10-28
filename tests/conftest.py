@@ -12,10 +12,23 @@ from sglang.multimodal_gen.runtime import platforms
 
 from sglang_rbln import device, envs
 
-NPU_FAMILIES = ("RBLN-CA22", "RBLN-CA25", "RBLN-CR13")
+
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    unmet = {
+        "npu": (not device.device_nodes(), "no RBLN device nodes on host"),
+        "device_mode": (
+            device.execution_mode() is not device.ExecutionMode.DEVICE,
+            "execution mode is host",
+        ),
+    }
+    for item in items:
+        for marker, (missing, reason) in unmet.items():
+            if missing and item.get_closest_marker(marker):
+                item.add_marker(pytest.mark.xfail(reason=reason, strict=True))
 
 
-def npu_name_for_tests() -> str:
+@pytest.fixture(scope="session")
+def npu_name() -> str:
     if forced := envs.RBLN_FORCE_NPU_NAME:
         return forced
     if device.device_nodes():
@@ -34,9 +47,9 @@ def fresh_platform(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture
-def rbln_override(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
+def rbln_override(monkeypatch: pytest.MonkeyPatch, npu_name: str) -> dict[str, str]:
     env = {
-        "RBLN_FORCE_NPU_NAME": npu_name_for_tests(),
+        "RBLN_FORCE_NPU_NAME": npu_name,
         "SGLANG_DIFFUSION_PLATFORM_OVERRIDE": "rbln",
     }
     for name, value in env.items():

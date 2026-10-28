@@ -6,10 +6,8 @@ import torch
 from torch import nn
 from torch._dynamo import list_backends
 
-from sglang_rbln import device, envs
+from sglang_rbln import envs
 from sglang_rbln.compilation import backend as compilation
-
-ON_NPU_HOST = bool(device.device_nodes())
 
 
 class _TinyMlp(nn.Module):
@@ -205,7 +203,7 @@ class TestCompileOptions:
         assert self.switches() == expected
 
 
-@pytest.mark.xfail(not ON_NPU_HOST, reason="no RBLN device nodes on host")
+@pytest.mark.npu
 def test_compiled_module_runs_on_the_npu(monkeypatch, tmp_path):
     monkeypatch.setenv("SGLANG_RBLN_CACHE_DIR", str(tmp_path))
     monkeypatch.delenv("SGLANG_RBLN_COMPILE_ONLY", raising=False)

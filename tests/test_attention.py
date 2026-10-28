@@ -6,11 +6,9 @@ import torch
 from sglang.multimodal_gen.runtime.layers.attention.backends.sdpa import SDPAImpl
 from torch import nn
 
-from sglang_rbln import device
 from sglang_rbln.compilation import backend as compilation
 from sglang_rbln.layers.attention.backends import sdpa as attention
 
-ON_NPU_HOST = bool(device.device_nodes())
 QUERY_HEADS, KV_HEADS, HEAD_DIM = 16, 8, 128
 
 
@@ -65,7 +63,7 @@ class _Attention(nn.Module):
         return self.impl.forward(query, key, value, None)
 
 
-@pytest.mark.xfail(not ON_NPU_HOST, reason="no RBLN device nodes on host")
+@pytest.mark.npu
 def test_grouped_query_attention_compiles_on_the_npu(caplog, monkeypatch, tmp_path):
     monkeypatch.setenv("SGLANG_RBLN_CACHE_DIR", str(tmp_path))
     compilation.ensure_compile_backend()
