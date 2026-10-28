@@ -140,6 +140,11 @@ class TestCompileOptions:
         monkeypatch.setenv(compilation.DISABLE_CACHE_ENV, "1")
         assert compilation.compile_options() == {"use_static_output": True}
 
+    def test_num_devices_switch(self, monkeypatch):
+        monkeypatch.setenv(compilation.NUM_DEVICES_ENV, "4")
+        monkeypatch.setenv(compilation.DISABLE_CACHE_ENV, "1")
+        assert compilation.compile_options() == {"num_devices": 4}
+
     @pytest.mark.parametrize(
         ("flags", "modes"),
         [

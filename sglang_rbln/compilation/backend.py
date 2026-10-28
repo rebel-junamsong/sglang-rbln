@@ -21,6 +21,7 @@ LOG_GRAPHS_ENV = "SGLANG_RBLN_LOG_GRAPHS"
 RUNTIME_REPORTS_ENV = "SGLANG_RBLN_RUNTIME_REPORTS"
 DUMP_GRAPHS_ENV = "SGLANG_RBLN_DUMP_GRAPHS"
 STATIC_OUTPUT_ENV = "SGLANG_RBLN_STATIC_OUTPUT"
+NUM_DEVICES_ENV = "SGLANG_RBLN_NUM_DEVICES"
 RUNTIME_REPORT_EVERY = 100
 CACHE_DIR_ENV = "SGLANG_RBLN_CACHE_DIR"
 DISABLE_CACHE_ENV = "SGLANG_RBLN_DISABLE_COMPILE_CACHE"
@@ -62,6 +63,8 @@ def compile_options(module: torch.nn.Module | None = None) -> dict[str, Any]:
         options["mega_cache_only"] = True
     if _env_flag(STATIC_OUTPUT_ENV):
         options["use_static_output"] = True
+    if num_devices := os.environ.get(NUM_DEVICES_ENV):
+        options["num_devices"] = int(num_devices)
     return options
 
 
