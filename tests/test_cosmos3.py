@@ -11,6 +11,7 @@ from sglang.multimodal_gen.runtime.pipelines.cosmos3_pipeline import Cosmos3Pipe
 from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry
 from torch import nn
 
+from sglang_rbln import device
 from sglang_rbln.device import ExecutionMode
 from sglang_rbln.patches.stages import cosmos3
 from sglang_rbln.platform import RUNS_ON_DEVICE
@@ -69,6 +70,9 @@ class _GenLayer(nn.Module):
 def transformer() -> nn.Module:
     module = nn.Module()
     module.gen_layers = nn.ModuleList([_GenLayer(), _GenLayer()])
+    module.language_model = nn.Module()
+    module.language_model.layers = nn.ModuleList([_GenLayer()])
+    module.layer_names = ["gen_layers", "language_model.layers"]
     return module
 
 
@@ -88,12 +92,12 @@ class TestGenLayerCompileHook:
     def test_registers_a_replace_hook(self):
         assert cosmos3.register() == (cosmos3.HOOK_TARGET, cosmos3.DECODE_HOOK_TARGET)
         registered = HookRegistry._hooks[cosmos3.HOOK_TARGET]
-        assert any(hook is cosmos3.compile_gen_layers for _, hook, _ in registered)
+        assert any(hook is cosmos3.compile_layers for _, hook, _ in registered)
 
     def test_compiles_through_the_platform_backend(
         self, transformer, recorded_compiles
     ):
-        cosmos3.compile_gen_layers(
+        cosmos3.compile_layers(
             None, transformer, SimpleNamespace(enable_torch_compile=True)
         )
         assert transformer._gen_layers_torch_compiled is True
@@ -104,8 +108,26 @@ class TestGenLayerCompileHook:
         }
         assert len(contexts) == 1
 
+    @pytest.mark.parametrize(
+        ("execution_mode", "expected"),
+        [
+            (ExecutionMode.HOST, ["gen_layers"]),
+            (ExecutionMode.DEVICE, ["gen_layers", "language_model.layers"]),
+        ],
+        ids=["host", "device"],
+    )
+    def test_language_model_compiles_only_on_device(
+        self, monkeypatch, transformer, recorded_compiles, execution_mode, expected
+    ):
+        monkeypatch.setattr(device, "execution_mode", lambda: execution_mode)
+        assert cosmos3.compiled_layer_names(transformer) == expected
+        cosmos3.compile_layers(
+            None, transformer, SimpleNamespace(enable_torch_compile=True)
+        )
+        assert len(recorded_compiles) == 2 + (execution_mode is ExecutionMode.DEVICE)
+
     def test_respects_disabled_compile(self, transformer, recorded_compiles):
-        cosmos3.compile_gen_layers(
+        cosmos3.compile_layers(
             None, transformer, SimpleNamespace(enable_torch_compile=False)
         )
         assert recorded_compiles == []

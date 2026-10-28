@@ -8,6 +8,8 @@ import torch
 from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry, HookType
 from torch import nn
 
+from sglang_rbln import device
+
 logger = logging.getLogger(__name__)
 
 STAGES = "sglang.multimodal_gen.runtime.pipelines_core.stages.model_specific_stages"
@@ -16,28 +18,31 @@ DECODE_HOOK_TARGET = f"{STAGES}.cosmos3.Cosmos3DecodingStage._decode_latents"
 GEN_LAYER_CACHE_SIZE_LIMIT = 128
 
 
-def compile_gen_layers(stage, transformer: nn.Module, server_args) -> None:
+def compiled_layer_names(transformer: nn.Module) -> list[str]:
+    names = list(getattr(transformer, "layer_names", ["gen_layers"]))
+    if device.execution_mode() is device.ExecutionMode.HOST:
+        return [name for name in names if name == "gen_layers"]
+    return names
+
+
+def compile_layers(stage, transformer: nn.Module, server_args) -> None:
     from sglang.multimodal_gen.runtime.utils.torch_compile import (
         build_torch_compile_kwargs,
     )
 
     if not server_args.enable_torch_compile or not isinstance(transformer, nn.Module):
         return
-    gen_layers = getattr(transformer, "gen_layers", None)
-    if not isinstance(gen_layers, nn.ModuleList):
-        logger.warning("Cosmos3 gen_layers not found, skipping torch.compile")
-        return
     torch._dynamo.config.cache_size_limit = max(
         torch._dynamo.config.cache_size_limit, GEN_LAYER_CACHE_SIZE_LIMIT
     )
     compile_kwargs = build_torch_compile_kwargs(mode=None, module=transformer)
     compile_kwargs["dynamic"] = False
-    logger.info(
-        "Compiling %d Cosmos3 gen_layers with %s", len(gen_layers), compile_kwargs
-    )
+    for name in compiled_layer_names(transformer):
+        layers = transformer.get_submodule(name)
+        logger.info("Compiling %d Cosmos3 %s: %s", len(layers), name, compile_kwargs)
+        for layer in layers:
+            layer.compile(**compile_kwargs)
     transformer._gen_layers_torch_compiled = True
-    for layer in gen_layers:
-        layer.compile(**compile_kwargs)
 
 
 def decode_latents_on_host(decode_latents, stage, latents: torch.Tensor, *args):
@@ -50,6 +55,6 @@ def decode_latents_on_host(decode_latents, stage, latents: torch.Tensor, *args):
 
 
 def register() -> tuple[str, str]:
-    HookRegistry.register(HOOK_TARGET, compile_gen_layers, HookType.REPLACE)
+    HookRegistry.register(HOOK_TARGET, compile_layers, HookType.REPLACE)
     HookRegistry.register(DECODE_HOOK_TARGET, decode_latents_on_host, HookType.AROUND)
     return HOOK_TARGET, DECODE_HOOK_TARGET
