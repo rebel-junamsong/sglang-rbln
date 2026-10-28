@@ -76,6 +76,12 @@ PATCH_DEBTS = [
         upstream_fix="return the connector rotary cos/sin tables contiguous",
     ),
     PatchDebt(
+        patch="stages/ltx_2/vocoder",
+        module=f"{STAGES}.ltx_2.decoding_av",
+        upstream_pattern="                    waveform = self.vocoder(spectrogram)",
+        upstream_fix="compile the vocoder through the platform backend",
+    ),
+    PatchDebt(
         patch="stages/cosmos3",
         module=f"{STAGES}.cosmos3",
         upstream_pattern='compile_kwargs = {\n                "mode": "default",',
