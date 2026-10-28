@@ -28,6 +28,8 @@ def compile_video_decoder(decode_video, stage, batch, server_args, *args, **kwar
     ):
         compile_kwargs = build_torch_compile_kwargs(mode=None, module=vae.decoder)
         compile_kwargs["dynamic"] = False
+        if num_devices := compile_kwargs["options"].get("num_devices"):
+            compile_kwargs["options"] |= {"num_devices": 1, "device": num_devices - 1}
         vae.decoder.compile(**compile_kwargs)
         vae.use_framewise_decoding = True
         setattr(vae, COMPILED, True)

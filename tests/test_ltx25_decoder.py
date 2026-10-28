@@ -57,6 +57,17 @@ def test_compiles_the_decoder_once(stage, compiled):
     assert stage.vae.use_framewise_decoding
 
 
+def test_moves_the_decoder_off_the_first_tensor_parallel_device(
+    stage, compiled, monkeypatch
+):
+    monkeypatch.setenv("SGLANG_RBLN_NUM_DEVICES", "4")
+    batch = SimpleNamespace(use_diffusion_decoder=False)
+    server_args = SimpleNamespace(enable_torch_compile=True)
+    decoding_av.compile_video_decoder(decode_video, stage, batch, server_args)
+    options = compiled[0][1]["options"]
+    assert (options["num_devices"], options["device"]) == (1, 3)
+
+
 @pytest.mark.parametrize(
     ("enable_torch_compile", "use_diffusion_decoder"),
     [(False, False), (True, True)],
