@@ -36,10 +36,15 @@ def forward(stage, batch, server_args):
     return "denoised"
 
 
-def test_registers_an_around_hook():
-    flux3_action.register()
-    hooks = [hook for _, hook, _ in HookRegistry._hooks[flux3_action.HOOK_TARGET]]
-    assert flux3_action.compile_blocks in hooks
+def test_compiles_before_the_observation_stage():
+    targets = flux3_action.register()
+    assert targets == (
+        flux3_action.HOOK_TARGET,
+        flux3_action.OBSERVATION_HOOK_TARGET,
+    )
+    for target in targets:
+        hooks = [hook for _, hook, _ in HookRegistry._hooks[target]]
+        assert flux3_action.compile_blocks in hooks
 
 
 def test_compiles_each_block_once(stage, compiled):

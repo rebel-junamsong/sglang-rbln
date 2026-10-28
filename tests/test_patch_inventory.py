@@ -102,6 +102,12 @@ PATCH_DEBTS = [
         upstream_pattern="class Flux3ActionDenoisingStage(PipelineStage):",
         upstream_fix="compile the DiT blocks like DenoisingStage does",
     ),
+    PatchDebt(
+        patch="stages/flux3_action (observation)",
+        module=f"{STAGES}.flux3_action",
+        upstream_pattern="class Flux3ActionObservationEncodingStage(PipelineStage):",
+        upstream_fix="compile the DiT blocks before the first stage that runs them",
+    ),
     pytest.param(
         PatchDebt(
             patch="torch_rbln/ops_utils",

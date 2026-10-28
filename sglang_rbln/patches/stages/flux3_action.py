@@ -8,10 +8,12 @@ from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry, HookTy
 
 logger = logging.getLogger(__name__)
 
-HOOK_TARGET = (
+STAGES = (
     "sglang.multimodal_gen.runtime.pipelines_core.stages.model_specific_stages"
-    ".flux3_action.Flux3ActionDenoisingStage.forward"
+    ".flux3_action"
 )
+HOOK_TARGET = f"{STAGES}.Flux3ActionDenoisingStage.forward"
+OBSERVATION_HOOK_TARGET = f"{STAGES}.Flux3ActionObservationEncodingStage.forward"
 COMPILED = "_rbln_blocks_compiled"
 
 
@@ -31,6 +33,7 @@ def compile_blocks(forward, stage, batch, server_args):
     return forward(stage, batch, server_args)
 
 
-def register() -> str:
-    HookRegistry.register(HOOK_TARGET, compile_blocks, HookType.AROUND)
-    return HOOK_TARGET
+def register() -> tuple[str, str]:
+    for target in (HOOK_TARGET, OBSERVATION_HOOK_TARGET):
+        HookRegistry.register(target, compile_blocks, HookType.AROUND)
+    return HOOK_TARGET, OBSERVATION_HOOK_TARGET
