@@ -13,6 +13,7 @@ from torch import nn
 
 from sglang_rbln.device import ExecutionMode
 from sglang_rbln.patches.stages import cosmos3
+from sglang_rbln.platform import RUNS_ON_DEVICE
 
 pytestmark = pytest.mark.usefixtures("rbln_platform")
 
@@ -85,7 +86,7 @@ def recorded_compiles(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
 
 class TestGenLayerCompileHook:
     def test_registers_a_replace_hook(self):
-        assert cosmos3.register() == cosmos3.HOOK_TARGET
+        assert cosmos3.register() == (cosmos3.HOOK_TARGET, cosmos3.DECODE_HOOK_TARGET)
         registered = HookRegistry._hooks[cosmos3.HOOK_TARGET]
         assert any(hook is cosmos3.compile_gen_layers for _, hook, _ in registered)
 
@@ -109,6 +110,40 @@ class TestGenLayerCompileHook:
         )
         assert recorded_compiles == []
         assert not hasattr(transformer, "_gen_layers_torch_compiled")
+
+
+class TestHostDecodeHook:
+    @pytest.fixture
+    def stage(self):
+        vae = nn.Conv3d(4, 3, 1).to(torch.bfloat16)
+        return SimpleNamespace(vae=vae, _latents_mean=None, _latents_std=None)
+
+    @staticmethod
+    def decode_latents(stage, latents):
+        return stage.vae(latents)
+
+    def test_registers_an_around_hook(self):
+        cosmos3.register()
+        assert any(
+            hook is cosmos3.decode_latents_on_host
+            for _, hook, _ in HookRegistry._hooks[cosmos3.DECODE_HOOK_TARGET]
+        )
+
+    def test_host_latents_pass_straight_through(self, stage):
+        latents = torch.randn(1, 4, 1, 2, 2, dtype=torch.bfloat16)
+        out = cosmos3.decode_latents_on_host(self.decode_latents, stage, latents)
+        assert torch.equal(out, stage.vae(latents))
+
+    @pytest.mark.xfail(not RUNS_ON_DEVICE, reason="execution mode is host")
+    def test_device_latents_decode_on_the_cpu_and_return_to_the_device(self, stage):
+        stage.vae.to("rbln:0")
+        stage._latents_mean = torch.zeros(1)
+        latents = torch.randn(1, 4, 1, 2, 2, dtype=torch.bfloat16).to("rbln:0")
+        out = cosmos3.decode_latents_on_host(self.decode_latents, stage, latents)
+        assert out.device == latents.device
+        assert next(stage.vae.parameters()).device.type == "cpu"
+        assert stage._latents_mean is None
+        assert torch.equal(out.cpu(), stage.vae(latents.cpu()))
 
 
 @pytest.mark.parametrize("execution_mode", [ExecutionMode.HOST, ExecutionMode.DEVICE])

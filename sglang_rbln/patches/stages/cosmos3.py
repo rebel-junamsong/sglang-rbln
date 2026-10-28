@@ -10,10 +10,9 @@ from torch import nn
 
 logger = logging.getLogger(__name__)
 
-HOOK_TARGET = (
-    "sglang.multimodal_gen.runtime.pipelines_core.stages.model_specific_stages"
-    ".cosmos3.Cosmos3DenoisingStage._maybe_enable_torch_compile"
-)
+STAGES = "sglang.multimodal_gen.runtime.pipelines_core.stages.model_specific_stages"
+HOOK_TARGET = f"{STAGES}.cosmos3.Cosmos3DenoisingStage._maybe_enable_torch_compile"
+DECODE_HOOK_TARGET = f"{STAGES}.cosmos3.Cosmos3DecodingStage._decode_latents"
 GEN_LAYER_CACHE_SIZE_LIMIT = 128
 
 
@@ -41,6 +40,16 @@ def compile_gen_layers(stage, transformer: nn.Module, server_args) -> None:
         layer.compile(**compile_kwargs)
 
 
-def register() -> str:
+def decode_latents_on_host(decode_latents, stage, latents: torch.Tensor, *args):
+    if latents.device.type != "rbln":
+        return decode_latents(stage, latents, *args)
+    if next(stage.vae.parameters()).device.type == "rbln":
+        stage.vae.to("cpu")
+        stage._latents_mean = stage._latents_std = None
+    return decode_latents(stage, latents.cpu(), *args).to(latents.device)
+
+
+def register() -> tuple[str, str]:
     HookRegistry.register(HOOK_TARGET, compile_gen_layers, HookType.REPLACE)
-    return HOOK_TARGET
+    HookRegistry.register(DECODE_HOOK_TARGET, decode_latents_on_host, HookType.AROUND)
+    return HOOK_TARGET, DECODE_HOOK_TARGET

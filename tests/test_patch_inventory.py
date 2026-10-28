@@ -63,6 +63,12 @@ PATCH_DEBTS = [
         upstream_pattern='compile_kwargs = {\n                "mode": "default",',
         upstream_fix="build the kwargs through resolve_torch_compile_kwargs",
     ),
+    PatchDebt(
+        patch="stages/cosmos3 (decode)",
+        module=f"{STAGES}.cosmos3",
+        upstream_pattern="        video = self.vae.decode(latents)",
+        upstream_fix="let the platform choose the VAE decode device",
+    ),
     pytest.param(
         PatchDebt(
             patch="torch_rbln/ops_utils",
