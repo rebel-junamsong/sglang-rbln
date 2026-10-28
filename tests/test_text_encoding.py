@@ -2,7 +2,9 @@
 from types import SimpleNamespace
 
 import pytest
+import torch
 from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry
+from sglang.multimodal_gen.runtime.utils import torch_compile
 from torch import nn
 
 from sglang_rbln.patches.stages import text_encoding
@@ -20,6 +22,8 @@ def _encoder(*layer_names: str) -> nn.Module:
     encoder.language_model.layers = nn.ModuleList([_Layer(4, 4), _Layer(4, 4)])
     encoder.language_model.embed_tokens = nn.Embedding(8, 4)
     encoder.blocks = nn.ModuleList([_Layer(4, 4)])
+    encoder.video_aggregate_embed = _Layer(4, 4)
+    encoder.text_proj_in = None
     encoder.layer_names = list(layer_names)
     return encoder
 
@@ -75,7 +79,11 @@ def test_layers_of_one_module_share_its_compile_context(compiled):
     )
     text_encoding.compile_connectors(forward, stage, None, server_args)
     contexts = {id(kwargs["options"]["compile_context"]) for _, kwargs in compiled}
-    assert len(compiled) == 3
+    assert [module for module, _ in compiled] == [
+        *stage.connectors.language_model.layers,
+        *stage.connectors.blocks,
+        stage.connectors.video_aggregate_embed,
+    ]
     assert len(contexts) == 1
 
 
@@ -102,4 +110,30 @@ def test_text_encoder_offloaded_to_cpu_stays_eager(compiled):
     )
     text_encoding.compile_text_encoders(forward, stage, None, server_args)
     text_encoding.compile_connectors(forward, stage, None, server_args)
-    assert [module for module, _ in compiled] == list(stage.connectors.blocks)
+    assert [module for module, _ in compiled] == [
+        *stage.connectors.blocks,
+        stage.connectors.video_aggregate_embed,
+    ]
+
+
+def test_projections_trace_into_a_graph_that_owns_their_weights(monkeypatch):
+    graph_inputs = []
+
+    def backend(graph, example_inputs):
+        graph_inputs.extend(tuple(value.shape) for value in example_inputs)
+        return graph
+
+    monkeypatch.setattr(
+        torch_compile,
+        "build_torch_compile_kwargs",
+        lambda **kwargs: {"backend": backend},
+    )
+    connectors = nn.Module()
+    connectors.video_aggregate_embed = nn.Linear(8, 4)
+    projection = connectors.video_aggregate_embed
+    hidden_states = torch.randn(2, 8)
+    expected = projection(hidden_states)
+    assert text_encoding.compile_regions(connectors, ["video_aggregate_embed"]) == 1
+    torch.testing.assert_close(projection(hidden_states), expected)
+    assert isinstance(projection, nn.Linear)
+    assert graph_inputs == [(2, 8)]
