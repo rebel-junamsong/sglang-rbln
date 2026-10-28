@@ -69,6 +69,12 @@ PATCH_DEBTS = [
         upstream_pattern="        video = self.vae.decode(latents)",
         upstream_fix="let the platform choose the VAE decode device",
     ),
+    PatchDebt(
+        patch="models/cosmos3video",
+        module="sglang.multimodal_gen.runtime.models.dits.cosmos3video",
+        upstream_pattern="        t_scaled = t * self.timestep_scale",
+        upstream_fix="let the platform run float32 timestep embeddings on the host",
+    ),
     pytest.param(
         PatchDebt(
             patch="torch_rbln/ops_utils",

@@ -7,13 +7,15 @@ from types import ModuleType
 import pytest
 import torch
 from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry, HookType
+from torch import nn
 
 from sglang_rbln.patches import cuda_imports
 from sglang_rbln.patches.layers import layernorm
 from sglang_rbln.patches.layers.attention import video_sparse_attn
-from sglang_rbln.patches.models import ltx_2
+from sglang_rbln.patches.models import cosmos3video, ltx_2
 from sglang_rbln.patches.srt.layers.quantization import fp4_utils
 from sglang_rbln.patches.torch_rbln import ops_utils
+from sglang_rbln.platform import RUNS_ON_DEVICE
 
 
 class TestTritonNormExports:
@@ -144,3 +146,31 @@ class TestTorchRblnPromotion:
             module.is_type_promotion_allowed is ops_utils.is_type_promotion_allowed
             for module in fakes.values()
         )
+
+
+class _TimestepEmbedder(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.linear = nn.Linear(1, 4)
+
+    def forward(self, t):
+        return nn.functional.silu(self.linear(t[:, None]))
+
+
+class TestCosmos3TimestepEmbedderHook:
+    forward = staticmethod(_TimestepEmbedder.forward)
+
+    def test_host_weights_run_the_original(self):
+        embedder, t = _TimestepEmbedder(), torch.tensor([0.5, 0.25])
+        out = cosmos3video.embed_timesteps_on_host(self.forward, embedder, t)
+        assert torch.equal(out, embedder(t))
+        assert not hasattr(embedder, cosmos3video.HOST_STATE)
+
+    @pytest.mark.xfail(not RUNS_ON_DEVICE, reason="execution mode is host")
+    def test_device_weights_embed_in_float32_on_the_host(self):
+        embedder, t = _TimestepEmbedder(), torch.tensor([0.5, 0.25])
+        expected = embedder(t)
+        embedder.to("rbln:0")
+        out = cosmos3video.embed_timesteps_on_host(self.forward, embedder, t)
+        assert out.device.type == "rbln"
+        assert torch.equal(out.cpu(), expected)
