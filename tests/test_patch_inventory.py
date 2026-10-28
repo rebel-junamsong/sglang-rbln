@@ -75,6 +75,12 @@ PATCH_DEBTS = [
         upstream_pattern="        t_scaled = t * self.timestep_scale",
         upstream_fix="let the platform run float32 timestep embeddings on the host",
     ),
+    PatchDebt(
+        patch="stages/flux3_action",
+        module=f"{STAGES}.flux3_action",
+        upstream_pattern="class Flux3ActionDenoisingStage(PipelineStage):",
+        upstream_fix="compile the DiT blocks like DenoisingStage does",
+    ),
     pytest.param(
         PatchDebt(
             patch="torch_rbln/ops_utils",
