@@ -2,7 +2,7 @@
 import importlib
 import itertools
 import sys
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 
 import pytest
 import torch
@@ -260,3 +260,29 @@ class TestRunOnHost:
         out = layers(hidden.to("rbln:0"))
         assert all(t.device.type == "rbln" for pair in out for t in pair)
         assert torch.equal(out[1][0].cpu(), expected[1][0])
+
+
+class TestCosmos3QkNormRopeHook:
+    def test_registers_an_around_hook(self):
+        assert cosmos3video.QK_NORM_ROPE_HOOK_TARGET in cosmos3video.register()
+        assert any(
+            hook is cosmos3video.split_qk_norm_rope_on_device
+            for _, hook, _ in HookRegistry._hooks[cosmos3video.QK_NORM_ROPE_HOOK_TARGET]
+        )
+
+    @pytest.mark.parametrize(
+        ("device_type", "expected"), [("cpu", "fused"), ("rbln", "split")]
+    )
+    def test_device_tensors_take_the_split_path(
+        self, monkeypatch, device_type, expected
+    ):
+        from sglang.multimodal_gen.runtime.models.dits import cosmos3video as dit
+
+        monkeypatch.setattr(
+            dit, "_apply_qwen3_qk_norm_rope_split", lambda *args: "split"
+        )
+        q = SimpleNamespace(device=SimpleNamespace(type=device_type))
+        out = cosmos3video.split_qk_norm_rope_on_device(
+            lambda *args, **kwargs: "fused", q, None, None, None, 128, None, None
+        )
+        assert out == expected

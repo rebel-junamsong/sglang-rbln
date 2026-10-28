@@ -6,10 +6,9 @@ import torch
 from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry, HookType
 from torch import nn
 
-HOOK_TARGET = (
-    "sglang.multimodal_gen.runtime.models.dits.cosmos3video"
-    ".Cosmos3TimestepEmbedder.forward"
-)
+MODULE = "sglang.multimodal_gen.runtime.models.dits.cosmos3video"
+HOOK_TARGET = f"{MODULE}.Cosmos3TimestepEmbedder.forward"
+QK_NORM_ROPE_HOOK_TARGET = f"{MODULE}._apply_qwen3_qk_norm_rope"
 HOST_STATE = "_rbln_host_state"
 
 
@@ -32,9 +31,26 @@ def embed_timesteps_on_host(forward, embedder: nn.Module, t: torch.Tensor):
     return embedding.to(device)
 
 
-def register() -> str:
+def split_qk_norm_rope_on_device(
+    apply, q, k, q_norm, k_norm, head_dim, cos_sin_cache, positions, **kwargs
+):
+    if q.device.type != "rbln":
+        return apply(q, k, q_norm, k_norm, head_dim, cos_sin_cache, positions, **kwargs)
+    from sglang.multimodal_gen.runtime.models.dits.cosmos3video import (
+        _apply_qwen3_qk_norm_rope_split,
+    )
+
+    return _apply_qwen3_qk_norm_rope_split(
+        q, k, q_norm, k_norm, head_dim, cos_sin_cache
+    )
+
+
+def register() -> tuple[str, str]:
     HookRegistry.register(HOOK_TARGET, embed_timesteps_on_host, HookType.AROUND)
-    return HOOK_TARGET
+    HookRegistry.register(
+        QK_NORM_ROPE_HOOK_TARGET, split_qk_norm_rope_on_device, HookType.AROUND
+    )
+    return HOOK_TARGET, QK_NORM_ROPE_HOOK_TARGET
 
 
 def run_on_host(module: nn.Module) -> bool:

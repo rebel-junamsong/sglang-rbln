@@ -85,6 +85,12 @@ PATCH_DEBTS = [
         upstream_fix="let the platform run float32 timestep embeddings on the host",
     ),
     PatchDebt(
+        patch="models/cosmos3video (qk-norm rope)",
+        module="sglang.multimodal_gen.runtime.models.dits.cosmos3video",
+        upstream_pattern="use_fused_qk_norm_rope = T > 1 or (",
+        upstream_fix="take the split QK-norm RoPE path when no fused kernel exists",
+    ),
+    PatchDebt(
         patch="stages/cosmos3 (final norm)",
         module="sglang.multimodal_gen.runtime.models.dits.cosmos3video",
         upstream_pattern="        hidden_gen = self.norm_moe_gen(hidden_gen)",
