@@ -151,6 +151,25 @@ def dump_graph(graph: torch.fx.GraphModule, example_inputs, directory: Path) -> 
     return stem
 
 
+def contiguous_device_inputs(args):
+    return [
+        value.contiguous()
+        if isinstance(value, torch.Tensor)
+        and value.device.type == "rbln"
+        and not value.is_contiguous()
+        else value
+        for value in args
+    ]
+
+
+def _contiguous_callable(compiled):
+    @functools.wraps(compiled)
+    def run(*args, **kwargs):
+        return compiled(*contiguous_device_inputs(args), **kwargs)
+
+    return run
+
+
 def _logging_backend(backend):
     @functools.wraps(backend)
     def wrapped(graph, example_inputs, *args, **kwargs):
@@ -161,7 +180,14 @@ def _logging_backend(backend):
                 "rbln graph dumped to %s",
                 dump_graph(graph, example_inputs, Path(dump_dir)),
             )
-        compiled = backend(graph, example_inputs, *args, **kwargs)
+        compiled = backend(
+            graph, contiguous_device_inputs(example_inputs), *args, **kwargs
+        )
+        if any(
+            isinstance(value, torch.Tensor) and value.device.type == "rbln"
+            for value in example_inputs
+        ):
+            compiled = _contiguous_callable(compiled)
         if _env_flag(RUNTIME_REPORTS_ENV):
             compiled = _reporting_callable(compiled)
         return compiled
@@ -186,11 +212,6 @@ def ensure_compile_backend() -> str:
         )
     if _env_flag(RUNTIME_REPORTS_ENV):
         os.environ.setdefault("RBLN_RUNTIME_TIMER", "1")
-    diagnostics = (
-        _env_flag(LOG_GRAPHS_ENV)
-        or _env_flag(RUNTIME_REPORTS_ENV)
-        or bool(os.environ.get(DUMP_GRAPHS_ENV))
-    )
-    if diagnostics and not hasattr(backend, "__wrapped_backend__"):
+    if not hasattr(backend, "__wrapped_backend__"):
         registry._COMPILER_FNS[COMPILE_BACKEND_NAME] = _logging_backend(backend)
     return COMPILE_BACKEND_NAME

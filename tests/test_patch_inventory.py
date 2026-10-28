@@ -39,6 +39,14 @@ PATCH_DEBTS = [
         upstream_fix="also catch the CUDA RuntimeError vsa raises at import",
     ),
     PatchDebt(
+        patch="srt/layers/quantization/fp4_utils",
+        module="sglang.srt.layers.quantization.fp4_utils",
+        upstream_pattern=(
+            "    from flashinfer import fp4_quantize as _flashinfer_fp4_quantize"
+        ),
+        upstream_fix="catch the AssertionError flashinfer raises without CUDA",
+    ),
+    PatchDebt(
         patch="models/ltx_2",
         module="sglang.multimodal_gen.runtime.models.dits.ltx_2",
         upstream_pattern=(

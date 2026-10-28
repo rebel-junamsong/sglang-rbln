@@ -81,11 +81,22 @@ def test_dump_graph_writes_readable_inputs_and_export(tmp_path):
     assert torch.load(stem.with_suffix(".inputs.pt"))[0].shape == (2, 64)
 
 
+def test_contiguous_device_inputs_leave_host_tensors_alone():
+    cpu_view = torch.zeros(4, 6)[:, ::2]
+    plain = torch.zeros(3)
+    passed = compilation.contiguous_device_inputs([cpu_view, plain, 7])
+    assert passed[0] is cpu_view and passed[1] is plain and passed[2] == 7
+
+
 def test_log_graphs_wraps_the_registered_backend(monkeypatch, caplog):
     from torch._dynamo.backends import registry
 
     monkeypatch.setenv(compilation.LOG_GRAPHS_ENV, "1")
-    original = registry._COMPILER_FNS["rbln"]
+    original = getattr(
+        registry._COMPILER_FNS["rbln"],
+        "__wrapped_backend__",
+        registry._COMPILER_FNS["rbln"],
+    )
     monkeypatch.setitem(registry._COMPILER_FNS, "rbln", original)
     compilation.ensure_compile_backend()
     wrapped = registry._COMPILER_FNS["rbln"]

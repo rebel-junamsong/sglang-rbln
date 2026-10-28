@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+import importlib
 import sys
 from types import ModuleType
 
@@ -6,9 +7,11 @@ import pytest
 import torch
 from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry, HookType
 
+from sglang_rbln.patches import cuda_imports
 from sglang_rbln.patches.layers import layernorm
 from sglang_rbln.patches.layers.attention import video_sparse_attn
 from sglang_rbln.patches.models import ltx_2
+from sglang_rbln.patches.srt.layers.quantization import fp4_utils
 
 
 class TestTritonNormExports:
@@ -28,37 +31,49 @@ class TestTritonNormExports:
         assert layernorm.bind_missing_exports(exports_module) == []
 
 
-class TestVsaImportBlock:
+class TestCudaImportGuard:
     @pytest.fixture(autouse=True)
     def clean_meta_path(self, monkeypatch):
         monkeypatch.setattr(sys, "meta_path", list(sys.meta_path))
-        monkeypatch.delitem(sys.modules, "vsa", raising=False)
+        for name in ("vsa", "flashinfer"):
+            monkeypatch.delitem(sys.modules, name, raising=False)
 
-    def test_blocks_vsa_without_cuda(self, monkeypatch):
+    @pytest.mark.parametrize(
+        ("patch", "blocked"),
+        [(video_sparse_attn, "vsa"), (fp4_utils, "flashinfer")],
+        ids=["vsa", "flashinfer"],
+    )
+    def test_blocks_the_cuda_only_module(self, monkeypatch, patch, blocked):
         monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
-        assert video_sparse_attn.block_without_cuda()
+        assert patch.register()
         with pytest.raises(ImportError, match="blocked on rbln"):
-            import vsa  # noqa: F401
-        assert video_sparse_attn.block_without_cuda()
-        assert (
-            sum(
-                isinstance(f, video_sparse_attn._BlockedImportFinder)
-                for f in sys.meta_path
-            )
-            == 1
-        )
+            importlib.import_module(blocked)
+        assert patch.register()
+        finders = [
+            f for f in sys.meta_path if isinstance(f, cuda_imports._BlockedImportFinder)
+        ]
+        assert len(finders) == 1 and blocked in finders[0].modules
+
+    def test_one_finder_serves_both_modules(self, monkeypatch):
+        monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+        video_sparse_attn.register()
+        fp4_utils.register()
+        finders = [
+            f for f in sys.meta_path if isinstance(f, cuda_imports._BlockedImportFinder)
+        ]
+        assert len(finders) == 1 and finders[0].modules == {"vsa", "flashinfer"}
 
     def test_leaves_cuda_hosts_alone(self, monkeypatch):
         monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
-        assert not video_sparse_attn.block_without_cuda()
+        assert not video_sparse_attn.register()
         assert not any(
-            isinstance(f, video_sparse_attn._BlockedImportFinder) for f in sys.meta_path
+            isinstance(f, cuda_imports._BlockedImportFinder) for f in sys.meta_path
         )
 
-    def test_does_not_shadow_an_imported_vsa(self, monkeypatch):
+    def test_does_not_shadow_an_imported_module(self, monkeypatch):
         monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
         monkeypatch.setitem(sys.modules, "vsa", ModuleType("vsa"))
-        assert not video_sparse_attn.block_without_cuda()
+        assert not video_sparse_attn.register()
 
 
 class TestLtx2RopeHook:
