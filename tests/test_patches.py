@@ -35,6 +35,56 @@ class TestTritonNormExports:
         assert layernorm.bind_missing_exports(exports_module) == []
 
 
+@pytest.mark.usefixtures("rbln_platform")
+class TestQkNormRopePrebuild:
+    @pytest.fixture(autouse=True)
+    def fresh_rope_dict(self, monkeypatch):
+        from sglang.multimodal_gen.runtime.layers import layernorm as upstream
+
+        monkeypatch.setattr(upstream, "_QK_NORM_ROPE_DICT", {})
+        return upstream._QK_NORM_ROPE_DICT
+
+    @staticmethod
+    def qk_norm_rope_graphs() -> tuple[int, int]:
+        from sglang.multimodal_gen.runtime.layers.layernorm import RMSNorm
+        from sglang.multimodal_gen.runtime.models.dits import cosmos3video as dit
+
+        tokens, head_dim = 8, 128
+        q_norm, k_norm = RMSNorm(head_dim), RMSNorm(head_dim)
+
+        def qk_norm_rope(qkv, cos_sin_cache, positions):
+            return dit._apply_qwen3_qk_norm_rope(
+                qkv[:, :, :4],
+                qkv[:, :, 4:6],
+                q_norm,
+                k_norm,
+                head_dim,
+                cos_sin_cache,
+                positions,
+            )
+
+        torch._dynamo.reset()
+        explained = torch._dynamo.explain(qk_norm_rope)(
+            torch.randn(1, tokens, 8, head_dim),
+            torch.randn(tokens, head_dim),
+            torch.arange(tokens),
+        )
+        return explained.graph_count, explained.graph_break_count
+
+    def test_builds_the_rotary_module_once(self, fresh_rope_dict):
+        rotary_emb = layernorm.prebuild_qk_norm_rope(128)
+        assert fresh_rope_dict == {(128, True): rotary_emb}
+        assert layernorm.prebuild_qk_norm_rope(128) is rotary_emb
+        assert rotary_emb.is_neox_style and not rotary_emb.use_precomputed_cache
+
+    def test_lazy_rotary_module_splits_the_graph(self):
+        assert self.qk_norm_rope_graphs()[1] > 0
+
+    def test_prebuilt_rotary_module_traces_as_one_graph(self):
+        layernorm.prebuild_qk_norm_rope(128)
+        assert self.qk_norm_rope_graphs() == (1, 0)
+
+
 class TestCudaImportGuard:
     @pytest.fixture(autouse=True)
     def clean_meta_path(self, monkeypatch):

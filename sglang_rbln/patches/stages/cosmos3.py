@@ -9,6 +9,7 @@ from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry, HookTy
 from torch import nn
 
 from sglang_rbln import device
+from sglang_rbln.patches.layers import layernorm
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,7 @@ def compile_layers(stage, transformer: nn.Module, server_args) -> None:
     torch._dynamo.config.cache_size_limit = max(
         torch._dynamo.config.cache_size_limit, GEN_LAYER_CACHE_SIZE_LIMIT
     )
+    layernorm.prebuild_qk_norm_rope(transformer.head_dim)
     compile_kwargs = build_torch_compile_kwargs(mode=None, module=transformer)
     compile_kwargs["dynamic"] = False
     for name in compiled_layer_names(transformer):

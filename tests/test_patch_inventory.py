@@ -32,6 +32,15 @@ PATCH_DEBTS = [
         upstream_fix="gate the Triton norm import on has_triton()",
     ),
     PatchDebt(
+        patch="layers/layernorm (qk-norm rope)",
+        module="sglang.multimodal_gen.runtime.layers.layernorm",
+        upstream_pattern=(
+            "    rotary_emb = _QK_NORM_ROPE_DICT.get(rope_key)\n"
+            "    if rotary_emb is None:"
+        ),
+        upstream_fix="build the QK-norm RotaryEmbedding outside the traced call",
+    ),
+    PatchDebt(
         patch="layers/attention/video_sparse_attn",
         module="sglang.multimodal_gen.runtime.layers.attention.backends"
         ".video_sparse_attn",

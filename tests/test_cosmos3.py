@@ -7,6 +7,7 @@ import pytest
 import torch
 from sglang.multimodal_gen import registry
 from sglang.multimodal_gen.configs.pipeline_configs.cosmos3 import Cosmos3Config
+from sglang.multimodal_gen.runtime.layers import layernorm as upstream_layernorm
 from sglang.multimodal_gen.runtime.pipelines.cosmos3_pipeline import Cosmos3Pipeline
 from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry
 from torch import nn
@@ -69,6 +70,7 @@ class _GenLayer(nn.Module):
 @pytest.fixture
 def transformer() -> nn.Module:
     module = nn.Module()
+    module.head_dim = 128
     module.gen_layers = nn.ModuleList([_GenLayer(), _GenLayer()])
     module.language_model = nn.Module()
     module.language_model.layers = nn.ModuleList([_GenLayer()])
@@ -101,6 +103,7 @@ class TestGenLayerCompileHook:
             None, transformer, SimpleNamespace(enable_torch_compile=True)
         )
         assert transformer._gen_layers_torch_compiled is True
+        assert (128, True) in upstream_layernorm._QK_NORM_ROPE_DICT
         assert [call["backend"] for call in recorded_compiles] == ["rbln", "rbln"]
         assert all(call["dynamic"] is False for call in recorded_compiles)
         contexts = {
