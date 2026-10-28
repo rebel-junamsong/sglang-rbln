@@ -29,6 +29,7 @@ def compile_video_decoder(decode_video, stage, batch, server_args, *args, **kwar
         compile_kwargs = build_torch_compile_kwargs(mode=None, module=vae.decoder)
         compile_kwargs["dynamic"] = False
         vae.decoder.compile(**compile_kwargs)
+        vae.use_framewise_decoding = True
         setattr(vae, COMPILED, True)
         logger.info("Compiling the LTX-2 video decoder: %s", compile_kwargs)
     return decode_video(stage, batch, server_args, *args, **kwargs)

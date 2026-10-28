@@ -16,7 +16,9 @@ pytestmark = pytest.mark.usefixtures("rbln_platform")
 
 @pytest.fixture
 def stage():
-    return SimpleNamespace(vae=SimpleNamespace(decoder=nn.Linear(4, 4)))
+    return SimpleNamespace(
+        vae=SimpleNamespace(decoder=nn.Linear(4, 4), use_framewise_decoding=False)
+    )
 
 
 @pytest.fixture
@@ -52,6 +54,7 @@ def test_compiles_the_decoder_once(stage, compiled):
     assert [module for module, _ in compiled] == [stage.vae.decoder]
     assert compiled[0][1]["backend"] == "rbln"
     assert compiled[0][1]["dynamic"] is False
+    assert stage.vae.use_framewise_decoding
 
 
 @pytest.mark.parametrize(
@@ -66,6 +69,7 @@ def test_leaves_the_decoder_eager(
     server_args = SimpleNamespace(enable_torch_compile=enable_torch_compile)
     decoding_av.compile_video_decoder(decode_video, stage, batch, server_args)
     assert compiled == []
+    assert not stage.vae.use_framewise_decoding
 
 
 @pytest.mark.npu
