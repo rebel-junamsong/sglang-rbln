@@ -273,7 +273,8 @@ def ensure_compile_backend() -> None:
             f"rebel-compiler did not register the {COMPILE_BACKEND_NAME!r} "
             "torch.compile backend"
         )
-    os.environ.setdefault("RBLN_POOL_IO_BUFFERS", "1")
+    for flag in ("RBLN_POOL_IO_BUFFERS", "RBLN_RSD_GROUPING"):
+        os.environ.setdefault(flag, "1")
     if envs.SGLANG_RBLN_RUNTIME_REPORTS:
         os.environ.setdefault("RBLN_RUNTIME_TIMER", "1")
     if not hasattr(backend, "__wrapped_backend__"):

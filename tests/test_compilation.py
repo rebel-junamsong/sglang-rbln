@@ -181,16 +181,17 @@ def test_log_graphs_wraps_the_registered_backend(monkeypatch, caplog):
     assert registry._COMPILER_FNS["rbln"] is wrapped
 
 
+@pytest.mark.parametrize("flag", ["RBLN_POOL_IO_BUFFERS", "RBLN_RSD_GROUPING"])
 @pytest.mark.parametrize(("preset", "expected"), [(None, "1"), ("0", "0")])
-def test_block_runtimes_share_io_buffers_unless_told_otherwise(
-    monkeypatch, preset, expected
+def test_compiler_flags_default_on_unless_told_otherwise(
+    monkeypatch, flag, preset, expected
 ):
     if preset is None:
-        monkeypatch.delenv("RBLN_POOL_IO_BUFFERS", raising=False)
+        monkeypatch.delenv(flag, raising=False)
     else:
-        monkeypatch.setenv("RBLN_POOL_IO_BUFFERS", preset)
+        monkeypatch.setenv(flag, preset)
     compilation.ensure_compile_backend()
-    assert os.environ["RBLN_POOL_IO_BUFFERS"] == expected
+    assert os.environ[flag] == expected
 
 
 class TestCompileOptions:
