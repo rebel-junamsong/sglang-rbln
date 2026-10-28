@@ -38,7 +38,7 @@ def test_entry_points_are_registered():
 class TestActivate:
     @pytest.fixture(autouse=True)
     def no_forced_name(self, monkeypatch):
-        monkeypatch.delenv(device.FORCE_NPU_NAME_ENV, raising=False)
+        monkeypatch.delenv("RBLN_FORCE_NPU_NAME", raising=False)
 
     def test_returns_none_without_device_nodes(self, monkeypatch):
         monkeypatch.setattr(device, "device_nodes", list)
@@ -51,7 +51,7 @@ class TestActivate:
     @pytest.mark.parametrize("npu", NPU_FAMILIES)
     def test_forced_npu_name_activates_off_host(self, monkeypatch, npu):
         monkeypatch.setattr(device, "device_nodes", list)
-        monkeypatch.setenv(device.FORCE_NPU_NAME_ENV, npu)
+        monkeypatch.setenv("RBLN_FORCE_NPU_NAME", npu)
         assert sglang_rbln.activate() == sglang_rbln.PLATFORM_CLASS_PATH
 
     @pytest.mark.xfail(not ON_NPU_HOST, reason="no RBLN device nodes on host")
@@ -65,7 +65,7 @@ class TestActivate:
             assert name != "rebel", "activate() imported rebel"
             return real_import(name, *args, **kwargs)
 
-        monkeypatch.setenv(device.FORCE_NPU_NAME_ENV, NPU_FAMILIES[0])
+        monkeypatch.setenv("RBLN_FORCE_NPU_NAME", NPU_FAMILIES[0])
         monkeypatch.setattr(builtins, "__import__", guarded_import)
         assert sglang_rbln.activate() == sglang_rbln.PLATFORM_CLASS_PATH
 
@@ -73,7 +73,7 @@ class TestActivate:
 class TestExecutionMode:
     @pytest.mark.parametrize("requested", ["host", "device"])
     def test_explicit_mode_wins(self, monkeypatch, requested):
-        monkeypatch.setenv(device.EXECUTION_MODE_ENV, requested)
+        monkeypatch.setenv("SGLANG_RBLN_EXECUTION_MODE", requested)
         assert device.execution_mode() == requested
 
     @pytest.mark.parametrize(
@@ -82,15 +82,15 @@ class TestExecutionMode:
         ids=["without-torch-rbln", "with-torch-rbln"],
     )
     def test_auto_follows_torch_rbln(self, monkeypatch, torch_rbln_installed, expected):
-        monkeypatch.delenv(device.EXECUTION_MODE_ENV, raising=False)
+        monkeypatch.delenv("SGLANG_RBLN_EXECUTION_MODE", raising=False)
         monkeypatch.setattr(
             device, "torch_rbln_available", lambda: torch_rbln_installed
         )
         assert device.execution_mode() is expected
 
     def test_unknown_mode_is_rejected(self, monkeypatch):
-        monkeypatch.setenv(device.EXECUTION_MODE_ENV, "npu")
-        with pytest.raises(ValueError, match=device.EXECUTION_MODE_ENV):
+        monkeypatch.setenv("SGLANG_RBLN_EXECUTION_MODE", "npu")
+        with pytest.raises(ValueError, match="SGLANG_RBLN_EXECUTION_MODE"):
             device.execution_mode()
 
     def test_platform_identity_matches_mode(self):
@@ -166,7 +166,7 @@ class TestDeviceQueries:
 
     @pytest.mark.xfail(not ON_NPU_HOST, reason="no RBLN device nodes on host")
     def test_device_name_comes_from_rebel(self, monkeypatch):
-        monkeypatch.delenv(device.FORCE_NPU_NAME_ENV, raising=False)
+        monkeypatch.delenv("RBLN_FORCE_NPU_NAME", raising=False)
         assert RBLNPlatform.get_device_name(0).startswith("RBLN")
 
     @pytest.mark.xfail(not RUNS_ON_DEVICE, reason="execution mode is host")
