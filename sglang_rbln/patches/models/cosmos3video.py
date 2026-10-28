@@ -9,6 +9,7 @@ from torch import nn
 MODULE = "sglang.multimodal_gen.runtime.models.dits.cosmos3video"
 HOOK_TARGET = f"{MODULE}.Cosmos3TimestepEmbedder.forward"
 QK_NORM_ROPE_HOOK_TARGET = f"{MODULE}._apply_qwen3_qk_norm_rope"
+TEXT_KV_HOOK_TARGET = f"{MODULE}.Cosmos3UndDecoderLayer.forward"
 HOST_STATE = "_rbln_host_state"
 
 
@@ -43,12 +44,18 @@ def split_qk_norm_rope(
     )
 
 
-def register() -> tuple[str, str]:
+def contiguous_text_kv(forward, layer: nn.Module, *args, **kwargs):
+    hidden_states, key, value = forward(layer, *args, **kwargs)
+    return hidden_states, key.contiguous(), value.contiguous()
+
+
+def register() -> tuple[str, str, str]:
     HookRegistry.register(HOOK_TARGET, embed_timesteps_on_host, HookType.AROUND)
     HookRegistry.register(
         QK_NORM_ROPE_HOOK_TARGET, split_qk_norm_rope, HookType.REPLACE
     )
-    return HOOK_TARGET, QK_NORM_ROPE_HOOK_TARGET
+    HookRegistry.register(TEXT_KV_HOOK_TARGET, contiguous_text_kv, HookType.AROUND)
+    return HOOK_TARGET, QK_NORM_ROPE_HOOK_TARGET, TEXT_KV_HOOK_TARGET
 
 
 def run_on_host(module: nn.Module) -> bool:

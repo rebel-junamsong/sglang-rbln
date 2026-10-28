@@ -91,6 +91,12 @@ PATCH_DEBTS = [
         upstream_fix="take the split QK-norm RoPE path when no fused kernel exists",
     ),
     PatchDebt(
+        patch="models/cosmos3video (text kv)",
+        module="sglang.multimodal_gen.runtime.models.dits.cosmos3video",
+        upstream_pattern="        return out, k_gen, v",
+        upstream_fix="return the cached text K/V with one layout on every request",
+    ),
+    PatchDebt(
         patch="stages/cosmos3 (final norm)",
         module="sglang.multimodal_gen.runtime.models.dits.cosmos3video",
         upstream_pattern="        hidden_gen = self.norm_moe_gen(hidden_gen)",

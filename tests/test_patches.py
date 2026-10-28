@@ -283,3 +283,22 @@ class TestCosmos3QkNormRopeHook:
         actual = cosmos3video.split_qk_norm_rope(*args)
         for output, reference in zip(actual, expected, strict=True):
             torch.testing.assert_close(output, reference)
+
+
+class TestCosmos3TextKvHook:
+    def test_registers_an_around_hook(self):
+        assert cosmos3video.TEXT_KV_HOOK_TARGET in cosmos3video.register()
+        assert any(
+            hook is cosmos3video.contiguous_text_kv
+            for _, hook, _ in HookRegistry._hooks[cosmos3video.TEXT_KV_HOOK_TARGET]
+        )
+
+    def test_returns_contiguous_kv_with_the_same_values(self):
+        qkv = torch.randn(1, 5, 32, 8)
+        k, v = qkv[:, :, 16:24], qkv[:, :, 24:]
+        hidden, key, value = cosmos3video.contiguous_text_kv(
+            lambda layer, x: (x, k, v), None, qkv
+        )
+        assert hidden is qkv
+        assert key.is_contiguous() and value.is_contiguous()
+        assert torch.equal(key, k) and torch.equal(value, v)
