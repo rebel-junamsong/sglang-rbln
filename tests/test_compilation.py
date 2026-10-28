@@ -161,7 +161,7 @@ class TestCompileOptions:
             is not compilation.compile_options(_TinyMlp())["compile_context"]
         )
         assert first["cache_dir"] == str(tmp_path)
-        assert first["mega_cache_only"] is True
+        assert "mega_cache_only" not in first
         assert "mode" not in first
 
     def test_static_output_switch(self, monkeypatch):
@@ -285,3 +285,4 @@ def test_compiled_module_runs_on_the_npu(monkeypatch, tmp_path):
     assert first.device.type == "cpu"
     assert torch.equal(first, second)
     assert torch.allclose(first.float(), eager.float(), atol=2e-2, rtol=2e-2)
+    assert list(tmp_path.glob("*.rbln")), "the compiled graph was not persisted"

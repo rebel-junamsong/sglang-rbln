@@ -61,7 +61,6 @@ def compile_options(module: torch.nn.Module | None = None) -> dict[str, Any]:
     compile_cache_dir = cache_dir()
     if compile_cache_dir:
         options["cache_dir"] = compile_cache_dir
-        options["mega_cache_only"] = True
     if _env_flag(STATIC_OUTPUT_ENV):
         options["use_static_output"] = True
     if num_devices := os.environ.get(NUM_DEVICES_ENV):
