@@ -5,7 +5,6 @@ import contextvars
 
 import pytest
 import torch
-from sglang.multimodal_gen.configs.models.vaes import WanVAEConfig
 from sglang.multimodal_gen.runtime.models.vaes import wanvae as upstream
 
 from sglang_rbln.patches.models import wanvae
@@ -17,18 +16,6 @@ pytestmark = pytest.mark.usefixtures("rbln_platform")
 def context_vars(monkeypatch):
     for name in wanvae.CONTEXT_VARS:
         monkeypatch.setattr(upstream, name, contextvars.ContextVar(name, default=None))
-
-
-@pytest.fixture
-def tiny_vae() -> upstream.AutoencoderKLWan:
-    config = WanVAEConfig(load_encoder=False, use_parallel_decode=False)
-    arch = config.arch_config
-    arch.base_dim = arch.decoder_base_dim = 16
-    arch.z_dim, arch.is_residual, arch.patch_size = 4, True, 2
-    arch.in_channels = arch.out_channels = 12
-    arch.latents_mean, arch.latents_std = arch.latents_mean[:4], arch.latents_std[:4]
-    arch.__post_init__()
-    return upstream.AutoencoderKLWan(config).eval()
 
 
 def decode_graphs(vae: upstream.AutoencoderKLWan) -> int:
@@ -57,15 +44,15 @@ def test_register_replaces_each_context_var_once():
 
 
 @pytest.mark.usefixtures("context_vars")
-def test_context_vars_split_the_decoder(tiny_vae):
-    assert decode_graphs(tiny_vae) > 100
+def test_context_vars_split_the_decoder(tiny_wan_vae):
+    assert decode_graphs(tiny_wan_vae) > 100
 
 
 @pytest.mark.usefixtures("context_vars")
-def test_traceable_feature_cache_keeps_the_decoder_whole(tiny_vae):
+def test_traceable_feature_cache_keeps_the_decoder_whole(tiny_wan_vae):
     latents = torch.randn(1, 4, 3, 4, 6, generator=torch.Generator().manual_seed(0))
     with torch.no_grad():
-        expected = tiny_vae.decode(latents)
+        expected = tiny_wan_vae.decode(latents)
         wanvae.register()
-        assert decode_graphs(tiny_vae) <= 5
-        assert torch.equal(tiny_vae.decode(latents), expected)
+        assert decode_graphs(tiny_wan_vae) <= 5
+        assert torch.equal(tiny_wan_vae.decode(latents), expected)

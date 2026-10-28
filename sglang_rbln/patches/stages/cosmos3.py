@@ -8,6 +8,7 @@ import torch
 from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry, HookType
 from torch import nn
 
+from sglang_rbln import envs
 from sglang_rbln.patches.layers import layernorm
 from sglang_rbln.patches.models import cosmos3video
 
@@ -42,7 +43,46 @@ def compile_layers(stage, transformer: nn.Module, server_args) -> None:
     transformer._gen_layers_torch_compiled = True
 
 
-def decode_latents_on_host(decode_latents, stage, latents: torch.Tensor, *args):
+def vae_regions(module: nn.Module) -> list[nn.Module]:
+    from sglang.multimodal_gen.runtime.models.vaes import wanvae
+
+    region_types = (
+        wanvae.WanResidualBlock,
+        wanvae.WanResample,
+        wanvae.WanAttentionBlock,
+        wanvae.WanCausalConv3d,
+        wanvae.WanRMS_norm,
+        wanvae.DupUp3D,
+    )
+    regions = []
+    for child in module.children():
+        if isinstance(child, region_types):
+            regions.append(child)
+        else:
+            regions.extend(vae_regions(child))
+    return regions
+
+
+def compile_vae_regions(vae: nn.Module) -> None:
+    from sglang.multimodal_gen.runtime.utils.torch_compile import (
+        build_torch_compile_kwargs,
+    )
+
+    if getattr(vae, "_rbln_regions_compiled", False):
+        return
+    compile_kwargs = build_torch_compile_kwargs(mode=None, module=vae)
+    compile_kwargs["dynamic"] = False
+    regions = vae_regions(vae)
+    logger.info("Compiling %d VAE regions: %s", len(regions), compile_kwargs)
+    for region in regions:
+        region.compile(**compile_kwargs)
+    vae._rbln_regions_compiled = True
+
+
+def place_vae_decode(decode_latents, stage, latents: torch.Tensor, *args):
+    if envs.SGLANG_RBLN_COMPILE_VAE:
+        compile_vae_regions(stage.vae)
+        return decode_latents(stage, latents, *args)
     if latents.device.type != "rbln":
         return decode_latents(stage, latents, *args)
     if next(stage.vae.parameters()).device.type == "rbln":
@@ -53,5 +93,5 @@ def decode_latents_on_host(decode_latents, stage, latents: torch.Tensor, *args):
 
 def register() -> tuple[str, str]:
     HookRegistry.register(HOOK_TARGET, compile_layers, HookType.REPLACE)
-    HookRegistry.register(DECODE_HOOK_TARGET, decode_latents_on_host, HookType.AROUND)
+    HookRegistry.register(DECODE_HOOK_TARGET, place_vae_decode, HookType.AROUND)
     return HOOK_TARGET, DECODE_HOOK_TARGET

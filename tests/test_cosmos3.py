@@ -132,7 +132,7 @@ class TestGenLayerCompileHook:
         assert not hasattr(transformer, "_gen_layers_torch_compiled")
 
 
-class TestHostDecodeHook:
+class TestVaeDecodePlacement:
     @pytest.fixture
     def stage(self):
         vae = nn.Conv3d(4, 3, 1).to(torch.bfloat16)
@@ -145,25 +145,87 @@ class TestHostDecodeHook:
     def test_registers_an_around_hook(self):
         cosmos3.register()
         assert any(
-            hook is cosmos3.decode_latents_on_host
+            hook is cosmos3.place_vae_decode
             for _, hook, _ in HookRegistry._hooks[cosmos3.DECODE_HOOK_TARGET]
         )
 
     def test_host_latents_pass_straight_through(self, stage):
         latents = torch.randn(1, 4, 1, 2, 2, dtype=torch.bfloat16)
-        out = cosmos3.decode_latents_on_host(self.decode_latents, stage, latents)
+        out = cosmos3.place_vae_decode(self.decode_latents, stage, latents)
         assert torch.equal(out, stage.vae(latents))
+
+    def test_flag_compiles_the_vae_regions_for_host_latents(
+        self, monkeypatch, tiny_wan_vae
+    ):
+        compiled = []
+        monkeypatch.setattr(
+            nn.Module, "compile", lambda module, **kwargs: compiled.append(module)
+        )
+        monkeypatch.setenv("SGLANG_RBLN_COMPILE_VAE", "1")
+        latents = torch.randn(1, 4, 3, 4, 6, generator=torch.Generator().manual_seed(0))
+        with torch.no_grad():
+            expected = tiny_wan_vae.decode(latents)
+            out = cosmos3.place_vae_decode(
+                lambda stage, z: stage.vae.decode(z),
+                SimpleNamespace(vae=tiny_wan_vae),
+                latents,
+            )
+        assert compiled == cosmos3.vae_regions(tiny_wan_vae)
+        assert torch.equal(out, expected)
 
     @pytest.mark.device_mode
     def test_device_latents_decode_on_the_cpu_and_return_to_the_device(self, stage):
         stage.vae.to("rbln:0")
         stage._latents_mean = torch.zeros(1)
         latents = torch.randn(1, 4, 1, 2, 2, dtype=torch.bfloat16).to("rbln:0")
-        out = cosmos3.decode_latents_on_host(self.decode_latents, stage, latents)
+        out = cosmos3.place_vae_decode(self.decode_latents, stage, latents)
         assert out.device == latents.device
         assert next(stage.vae.parameters()).device.type == "cpu"
         assert stage._latents_mean is None
         assert torch.equal(out.cpu(), stage.vae(latents.cpu()))
+
+
+class TestVaeRegions:
+    def test_every_causal_conv_belongs_to_one_region(self, tiny_wan_vae):
+        from sglang.multimodal_gen.runtime.models.vaes.wanvae import WanCausalConv3d
+
+        regions = cosmos3.vae_regions(tiny_wan_vae)
+        owners = {
+            id(conv): [r for r in regions if any(m is conv for m in r.modules())]
+            for conv in tiny_wan_vae.modules()
+            if isinstance(conv, WanCausalConv3d)
+        }
+        assert all(len(owner) == 1 for owner in owners.values())
+
+    def test_compiles_each_region_once(self, monkeypatch, tiny_wan_vae):
+        compiled = []
+        monkeypatch.setattr(
+            nn.Module, "compile", lambda module, **kwargs: compiled.append(module)
+        )
+        cosmos3.compile_vae_regions(tiny_wan_vae)
+        cosmos3.compile_vae_regions(tiny_wan_vae)
+        assert compiled == cosmos3.vae_regions(tiny_wan_vae)
+
+    @pytest.mark.device_mode
+    def test_flag_decodes_on_the_npu(self, monkeypatch, tiny_wan_vae):
+        from sglang.multimodal_gen.runtime.models.vaes import wanvae as upstream
+
+        from sglang_rbln.patches.models import wanvae
+
+        for name in wanvae.CONTEXT_VARS:
+            monkeypatch.setattr(upstream, name, getattr(upstream, name))
+        wanvae.register()
+        monkeypatch.setenv("SGLANG_RBLN_COMPILE_VAE", "1")
+        latents = torch.randn(1, 4, 3, 4, 6, generator=torch.Generator().manual_seed(0))
+        with torch.no_grad():
+            expected = tiny_wan_vae.decode(latents)
+            stage = SimpleNamespace(vae=tiny_wan_vae.to("rbln:0"))
+            out = cosmos3.place_vae_decode(
+                lambda stage, z: stage.vae.decode(z), stage, latents.to("rbln:0")
+            )
+        assert out.device.type == "rbln"
+        assert next(tiny_wan_vae.parameters()).device.type == "rbln"
+        torch.testing.assert_close(out.cpu(), expected, atol=0.05, rtol=0.05)
 
 
 @pytest.mark.parametrize("execution_mode", [ExecutionMode.HOST, ExecutionMode.DEVICE])

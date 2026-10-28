@@ -91,3 +91,18 @@ def run_probe(rbln_override: dict[str, str]) -> Callable[[str, str], dict]:
         return json.loads(completed.stdout.strip().splitlines()[-1])
 
     return run
+
+
+@pytest.fixture
+def tiny_wan_vae():
+    from sglang.multimodal_gen.configs.models.vaes import WanVAEConfig
+    from sglang.multimodal_gen.runtime.models.vaes.wanvae import AutoencoderKLWan
+
+    config = WanVAEConfig(load_encoder=False, use_parallel_decode=False)
+    arch = config.arch_config
+    arch.base_dim = arch.decoder_base_dim = 16
+    arch.z_dim, arch.is_residual, arch.patch_size = 4, True, 2
+    arch.in_channels = arch.out_channels = 12
+    arch.latents_mean, arch.latents_std = arch.latents_mean[:4], arch.latents_std[:4]
+    arch.__post_init__()
+    return AutoencoderKLWan(config).eval()
