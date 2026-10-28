@@ -69,9 +69,9 @@ def decode_video(config) -> torch.Tensor:
     latents = torch.cat([observation, video], dim=2)
     decoder = vae.model.decoder
     normalizer = copy.deepcopy(vae.model.z_normalizer).float()
-    latents = latents.to(next(decoder.parameters()).device)
+    latents = normalizer.denormalize(latents).to(next(decoder.parameters()))
     with torch.no_grad():
-        frames = decoder(normalizer.denormalize(latents)).clamp(-1, 1)[0].cpu()
+        frames = decoder(latents).float().clamp(-1, 1)[0].cpu()
     height, width = content_hw(config)
     frames = (frames[:, :, :height, :width] + 1) * 127.5
     return frames.round().to(torch.uint8).permute(1, 2, 3, 0).contiguous()

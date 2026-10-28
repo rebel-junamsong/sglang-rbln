@@ -208,6 +208,22 @@ PATCH_DEBTS = [
         ),
         upstream_fix="return the predicted video in the action envelope",
     ),
+    PatchDebt(
+        patch="models/flux3_video_vae (attention)",
+        module="sglang.multimodal_gen.runtime.models.vaes.flux3_video_vae",
+        upstream_pattern=(
+            "out = neighborhood_attention(q2, k2, v2, kernel_size=kernel)"
+        ),
+        upstream_fix="let the platform choose the neighborhood attention kernel",
+    ),
+    PatchDebt(
+        patch="models/flux3_video_vae (compile)",
+        module="sglang.multimodal_gen.runtime.pipelines.flux3_action",
+        upstream_pattern=(
+            'return vae.to(resolve_component_precision(server_args, "vae"))'
+        ),
+        upstream_fix="compile the video VAE blocks like DenoisingStage does",
+    ),
     pytest.param(
         PatchDebt(
             patch="torch_rbln/ops_utils",

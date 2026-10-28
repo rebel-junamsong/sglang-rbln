@@ -63,6 +63,7 @@ def config() -> Flux3ActionPipelineConfig:
 def latents(config):
     h, w = config.latent_hw
     vae = _VAE()
+    vae.model.decoder.float()
     observation = torch.randn(1, 96, 1, h + 1, w + 1, dtype=torch.bfloat16)
     predicted = torch.randn(1, LATENT_FRAMES * h * w, 96)
     video.keep_observation_latent(observation, vae, None)
@@ -132,6 +133,13 @@ def test_decodes_observed_then_denoised_latents_in_float32(config, latents):
         *video.content_hw(config),
         3,
     )
+
+
+def test_feeds_a_compiled_bfloat16_decoder_its_own_dtype(config, latents):
+    latents.vae.model.decoder.to(torch.bfloat16)
+    video.decode_video(config)
+    (decoded,) = latents.vae.decoded
+    assert decoded.dtype == torch.bfloat16
 
 
 def test_attaches_an_mp4_when_requested(config, latents):

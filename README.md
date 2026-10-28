@@ -89,6 +89,7 @@ covers the full request options for both models.
 | `SGLANG_RBLN_STATIC_OUTPUT=1` | reuse one device output buffer per graph output instead of allocating per run |
 | `SGLANG_RBLN_CHECK_GRAPHS=1` | rerun each compiled graph once on the CPU and log the deviation of the NPU output (precision triage) |
 | `SGLANG_RBLN_NUM_DEVICES=4` | compile every graph for tensor parallelism over that many NPUs (rebel `num_devices`) |
+| `SGLANG_RBLN_COMPILE_VAE=1` | also compile the FLUX 3 Action video VAE for the NPU (it otherwise runs on the host) |
 | `SGLANG_RBLN_COMPILE_ONLY=1` | compile the graphs and stop before running them |
 | `SGLANG_RBLN_COMPILE_STRICT=1` | fail a request whose graph cannot be compiled instead of running it on the host |
 | `SGLANG_RBLN_LOG_GRAPHS=1` | log every graph handed to the compiler |
@@ -113,7 +114,8 @@ FLUX 3 Action does not fit one NPU: serve it with `SGLANG_RBLN_NUM_DEVICES=4`.
 It denoises the future video jointly with the actions; send
 `"parameters": {"return_video": true}` to also get that video, decoded by the
 video VAE, as `data[0].video` (`format` `mp4`, `fps`, `shape` `[frames, height,
-width, 3]`, `b64_json`).
+width, 3]`, `b64_json`). The video VAE decodes on the host unless
+`SGLANG_RBLN_COMPILE_VAE=1`; compiled, it needs an NPU's memory to itself.
 Tensor parallelism needs a compiler that keeps LayerNorm statistics whole across
 devices; older ones return actions that drift from the CPU result.
 

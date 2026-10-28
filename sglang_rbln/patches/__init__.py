@@ -7,7 +7,7 @@ from sglang_rbln.compilation import residency
 from sglang_rbln.patches.layers import layernorm
 from sglang_rbln.patches.layers.attention import video_sparse_attn
 from sglang_rbln.patches.managers import gpu_worker
-from sglang_rbln.patches.models import cosmos3video, ltx_2
+from sglang_rbln.patches.models import cosmos3video, flux3_video_vae, ltx_2
 from sglang_rbln.patches.srt.layers.quantization import fp4_utils
 from sglang_rbln.patches.stages import (
     cosmos3,
@@ -33,6 +33,7 @@ def register() -> None:
     cosmos3video.register()
     flux3_action.register()
     flux3_action_video.register()
+    flux3_video_vae.register()
     ltx_2.register()
     text_encoding.register()
     ltx_2_vocoder.register()
