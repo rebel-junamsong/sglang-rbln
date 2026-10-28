@@ -2,7 +2,7 @@
 import importlib
 import itertools
 import sys
-from types import ModuleType, SimpleNamespace
+from types import ModuleType
 
 import pytest
 import torch
@@ -260,26 +260,26 @@ class TestRunOnHost:
 
 
 class TestCosmos3QkNormRopeHook:
-    def test_registers_an_around_hook(self):
+    def test_registers_a_replace_hook(self):
         assert cosmos3video.QK_NORM_ROPE_HOOK_TARGET in cosmos3video.register()
         assert any(
-            hook is cosmos3video.split_qk_norm_rope_on_device
+            hook is cosmos3video.split_qk_norm_rope
             for _, hook, _ in HookRegistry._hooks[cosmos3video.QK_NORM_ROPE_HOOK_TARGET]
         )
 
-    @pytest.mark.parametrize(
-        ("device_type", "expected"), [("cpu", "fused"), ("rbln", "split")]
-    )
-    def test_device_tensors_take_the_split_path(
-        self, monkeypatch, device_type, expected
-    ):
+    @pytest.mark.usefixtures("rbln_platform")
+    def test_matches_the_fused_fallback_on_cpu(self):
+        from sglang.multimodal_gen.runtime.layers.layernorm import RMSNorm
         from sglang.multimodal_gen.runtime.models.dits import cosmos3video as dit
 
-        monkeypatch.setattr(
-            dit, "_apply_qwen3_qk_norm_rope_split", lambda *args: "split"
-        )
-        q = SimpleNamespace(device=SimpleNamespace(type=device_type))
-        out = cosmos3video.split_qk_norm_rope_on_device(
-            lambda *args, **kwargs: "fused", q, None, None, None, 128, None, None
-        )
-        assert out == expected
+        generator = torch.Generator().manual_seed(0)
+        tokens, head_dim = 8, 128
+        qkv = torch.randn(1, tokens, 8, head_dim, generator=generator)
+        q, k = qkv[:, :, :4], qkv[:, :, 4:6]
+        cos_sin_cache = torch.randn(tokens, head_dim, generator=generator)
+        norms = RMSNorm(head_dim), RMSNorm(head_dim)
+        args = (q, k, *norms, head_dim, cos_sin_cache, torch.arange(tokens))
+        expected = dit._apply_qwen3_qk_norm_rope(*args)
+        actual = cosmos3video.split_qk_norm_rope(*args)
+        for output, reference in zip(actual, expected, strict=True):
+            torch.testing.assert_close(output, reference)

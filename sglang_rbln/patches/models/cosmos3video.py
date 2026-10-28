@@ -31,11 +31,9 @@ def embed_timesteps_on_host(forward, embedder: nn.Module, t: torch.Tensor):
     return embedding.to(device)
 
 
-def split_qk_norm_rope_on_device(
-    apply, q, k, q_norm, k_norm, head_dim, cos_sin_cache, positions, **kwargs
+def split_qk_norm_rope(
+    q, k, q_norm, k_norm, head_dim, cos_sin_cache, positions, **kwargs
 ):
-    if q.device.type != "rbln":
-        return apply(q, k, q_norm, k_norm, head_dim, cos_sin_cache, positions, **kwargs)
     from sglang.multimodal_gen.runtime.models.dits.cosmos3video import (
         _apply_qwen3_qk_norm_rope_split,
     )
@@ -48,7 +46,7 @@ def split_qk_norm_rope_on_device(
 def register() -> tuple[str, str]:
     HookRegistry.register(HOOK_TARGET, embed_timesteps_on_host, HookType.AROUND)
     HookRegistry.register(
-        QK_NORM_ROPE_HOOK_TARGET, split_qk_norm_rope_on_device, HookType.AROUND
+        QK_NORM_ROPE_HOOK_TARGET, split_qk_norm_rope, HookType.REPLACE
     )
     return HOOK_TARGET, QK_NORM_ROPE_HOOK_TARGET
 
