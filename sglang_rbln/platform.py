@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import torch
 from sglang.multimodal_gen import envs
 from sglang.multimodal_gen.runtime.platforms import Platform, PlatformEnum
@@ -19,6 +21,8 @@ RUNS_ON_DEVICE = EXECUTION_MODE is device.ExecutionMode.DEVICE
 compilation.ensure_compile_backend()
 
 
+TORCH_RBLN_FALLBACK_ENV = "TORCH_RBLN_DISABLE_FALLBACK"
+TORCH_RBLN_FALLBACK_DEFAULT = "compile_error"
 OFFLOAD_FLAGS = (
     "dit_cpu_offload",
     "text_encoder_cpu_offload",
@@ -38,6 +42,7 @@ class RBLNPlatform(Platform):
     def init_backend(self) -> None:
         if not RUNS_ON_DEVICE:
             return
+        os.environ.setdefault(TORCH_RBLN_FALLBACK_ENV, TORCH_RBLN_FALLBACK_DEFAULT)
         try:
             import torch_rbln  # noqa: F401
         except ImportError as e:

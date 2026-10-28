@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+from sglang_rbln import device
+
 STAGES = "sglang.multimodal_gen.runtime.pipelines_core.stages.model_specific_stages"
 
 
@@ -61,6 +63,21 @@ PATCH_DEBTS = [
         upstream_pattern='compile_kwargs = {\n                "mode": "default",',
         upstream_fix="build the kwargs through resolve_torch_compile_kwargs",
     ),
+    pytest.param(
+        PatchDebt(
+            patch="torch_rbln/ops_utils",
+            module="torch_rbln._internal.ops_utils",
+            upstream_pattern=(
+                "promoted_dtype = torch.promote_types(promoted_dtype, tensor.dtype)"
+            ),
+            upstream_fix="promote like torch.result_type (zero-dim tensors do not"
+            " raise the result dtype within a category)",
+        ),
+        id="torch_rbln/ops_utils",
+        marks=pytest.mark.xfail(
+            not device.torch_rbln_available(), reason="torch-rbln is not installed"
+        ),
+    ),
 ]
 
 
@@ -70,7 +87,11 @@ def _upstream_source(module: str) -> str:
     return Path(spec.origin).read_text()
 
 
-@pytest.mark.parametrize("debt", PATCH_DEBTS, ids=lambda debt: debt.patch)
+@pytest.mark.parametrize(
+    "debt",
+    PATCH_DEBTS,
+    ids=lambda debt: debt.patch if isinstance(debt, PatchDebt) else None,
+)
 def test_upstream_still_needs_the_patch(debt: PatchDebt):
     assert debt.upstream_pattern in _upstream_source(debt.module), (
         f"sglang no longer has the code patches/{debt.patch} works around "

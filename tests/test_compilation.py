@@ -1,5 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
-from types import SimpleNamespace
+import os
+import sys
+from types import ModuleType, SimpleNamespace
 
 import pytest
 import torch
@@ -7,6 +9,7 @@ from torch import nn
 from torch._dynamo import list_backends
 
 from sglang_rbln import device
+from sglang_rbln import platform as platform_module
 from sglang_rbln.compilation import backend as compilation
 from sglang_rbln.platform import OFFLOAD_FLAGS, RBLNPlatform
 
@@ -196,6 +199,22 @@ class TestServerArgDefaults:
             False,
             True,
         ]
+
+    @pytest.mark.parametrize(
+        ("preset", "expected"),
+        [(None, platform_module.TORCH_RBLN_FALLBACK_DEFAULT), ("all", "all")],
+        ids=["default", "explicit"],
+    )
+    def test_device_mode_forbids_silent_compile_fallback(
+        self, monkeypatch, preset, expected
+    ):
+        monkeypatch.setattr(platform_module, "RUNS_ON_DEVICE", True)
+        monkeypatch.setitem(sys.modules, "torch_rbln", ModuleType("torch_rbln"))
+        monkeypatch.delenv(platform_module.TORCH_RBLN_FALLBACK_ENV, raising=False)
+        if preset is not None:
+            monkeypatch.setenv(platform_module.TORCH_RBLN_FALLBACK_ENV, preset)
+        RBLNPlatform().init_backend()
+        assert os.environ[platform_module.TORCH_RBLN_FALLBACK_ENV] == expected
 
     def test_keeps_an_explicit_vocoder_precision(self, server_args, monkeypatch):
         monkeypatch.setattr(RBLNPlatform, "is_cpu", lambda self: True)
