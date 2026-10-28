@@ -104,6 +104,11 @@ flag explicitly to change it.
 |---|---|---|
 | `Lightricks/LTX-2.5-Diffusers` | `LTX2Pipeline` | `/v1/videos` |
 | `nvidia/Cosmos3-Edge`, `nvidia/Cosmos3-Super` | `Cosmos3Pipeline` | `/v1/images/generations`, `/v1/videos` |
+| `black-forest-labs/flux-3-action-droid` | `Flux3ActionPipeline` | `/v1/actions/generations` |
+
+FLUX 3 Action does not fit one NPU: serve it with `SGLANG_RBLN_NUM_DEVICES=4`.
+Tensor parallelism needs a compiler that keeps LayerNorm statistics whole across
+devices; older ones return actions that drift from the CPU result.
 
 ## Contributing
 
