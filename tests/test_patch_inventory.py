@@ -32,6 +32,15 @@ PATCH_DEBTS = [
         upstream_fix="gate the Triton norm import on has_triton()",
     ),
     PatchDebt(
+        patch="layers/layernorm (qk-norm rope)",
+        module="sglang.multimodal_gen.runtime.layers.layernorm",
+        upstream_pattern=(
+            "    rotary_emb = _QK_NORM_ROPE_DICT.get(rope_key)\n"
+            "    if rotary_emb is None:"
+        ),
+        upstream_fix="build the QK-norm RotaryEmbedding outside the traced call",
+    ),
+    PatchDebt(
         patch="layers/attention/video_sparse_attn",
         module="sglang.multimodal_gen.runtime.layers.attention.backends"
         ".video_sparse_attn",
@@ -74,6 +83,18 @@ PATCH_DEBTS = [
         module="sglang.multimodal_gen.runtime.models.dits.cosmos3video",
         upstream_pattern="        t_scaled = t * self.timestep_scale",
         upstream_fix="let the platform run float32 timestep embeddings on the host",
+    ),
+    PatchDebt(
+        patch="models/cosmos3video (qk-norm rope)",
+        module="sglang.multimodal_gen.runtime.models.dits.cosmos3video",
+        upstream_pattern="use_fused_qk_norm_rope = T > 1 or (",
+        upstream_fix="take the split QK-norm RoPE path when no fused kernel exists",
+    ),
+    PatchDebt(
+        patch="stages/cosmos3 (final norm)",
+        module="sglang.multimodal_gen.runtime.models.dits.cosmos3video",
+        upstream_pattern="        hidden_gen = self.norm_moe_gen(hidden_gen)",
+        upstream_fix="let the platform run float32 norms on the host",
     ),
     PatchDebt(
         patch="stages/flux3_action",

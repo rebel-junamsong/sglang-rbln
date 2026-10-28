@@ -2,7 +2,7 @@
 import importlib
 import itertools
 import sys
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 
 import pytest
 import torch
@@ -30,6 +30,56 @@ class TestTritonNormExports:
         exports_module = ModuleType("fake_exports")
         assert layernorm.register(exports_module) == list(layernorm.TRITON_NORM_EXPORTS)
         assert layernorm.register(exports_module) == []
+
+
+@pytest.mark.usefixtures("rbln_platform")
+class TestQkNormRopePrebuild:
+    @pytest.fixture(autouse=True)
+    def fresh_rope_dict(self, monkeypatch):
+        from sglang.multimodal_gen.runtime.layers import layernorm as upstream
+
+        monkeypatch.setattr(upstream, "_QK_NORM_ROPE_DICT", {})
+        return upstream._QK_NORM_ROPE_DICT
+
+    @staticmethod
+    def qk_norm_rope_graphs() -> tuple[int, int]:
+        from sglang.multimodal_gen.runtime.layers.layernorm import RMSNorm
+        from sglang.multimodal_gen.runtime.models.dits import cosmos3video as dit
+
+        tokens, head_dim = 8, 128
+        q_norm, k_norm = RMSNorm(head_dim), RMSNorm(head_dim)
+
+        def qk_norm_rope(qkv, cos_sin_cache, positions):
+            return dit._apply_qwen3_qk_norm_rope(
+                qkv[:, :, :4],
+                qkv[:, :, 4:6],
+                q_norm,
+                k_norm,
+                head_dim,
+                cos_sin_cache,
+                positions,
+            )
+
+        torch._dynamo.reset()
+        explained = torch._dynamo.explain(qk_norm_rope)(
+            torch.randn(1, tokens, 8, head_dim),
+            torch.randn(tokens, head_dim),
+            torch.arange(tokens),
+        )
+        return explained.graph_count, explained.graph_break_count
+
+    def test_builds_the_rotary_module_once(self, fresh_rope_dict):
+        rotary_emb = layernorm.prebuild_qk_norm_rope(128)
+        assert fresh_rope_dict == {(128, True): rotary_emb}
+        assert layernorm.prebuild_qk_norm_rope(128) is rotary_emb
+        assert rotary_emb.is_neox_style and not rotary_emb.use_precomputed_cache
+
+    def test_lazy_rotary_module_splits_the_graph(self):
+        assert self.qk_norm_rope_graphs()[1] > 0
+
+    def test_prebuilt_rotary_module_traces_as_one_graph(self):
+        layernorm.prebuild_qk_norm_rope(128)
+        assert self.qk_norm_rope_graphs() == (1, 0)
 
 
 class TestCudaImportGuard:
@@ -171,3 +221,65 @@ class TestCosmos3TimestepEmbedderHook:
         out = cosmos3video.embed_timesteps_on_host(self.forward, embedder, t)
         assert out.device.type == "rbln"
         assert torch.equal(out.cpu(), expected)
+
+
+class TestRunOnHost:
+    @staticmethod
+    def norm() -> nn.Module:
+        norm = nn.RMSNorm(8, eps=1e-6)
+        nn.init.uniform_(norm.weight, 0.5, 1.5)
+        return norm
+
+    def test_host_weights_stay_untouched(self):
+        norm = self.norm()
+        assert not cosmos3video.run_on_host(norm)
+        assert "forward" not in vars(norm)
+
+    @pytest.mark.xfail(not RUNS_ON_DEVICE, reason="execution mode is host")
+    def test_device_weights_run_in_float32_on_the_host(self):
+        norm, hidden = self.norm(), torch.randn(2, 3, 8)
+        expected = norm(hidden)
+        norm.to("rbln:0")
+        assert cosmos3video.run_on_host(norm)
+        out = norm(hidden.to("rbln:0"))
+        assert out.device.type == "rbln"
+        assert torch.equal(out.cpu(), expected)
+        assert next(norm.parameters()).device.type == "rbln"
+
+    @pytest.mark.xfail(not RUNS_ON_DEVICE, reason="execution mode is host")
+    def test_nested_outputs_return_to_the_device(self):
+        layers = nn.ModuleList([nn.Linear(8, 8), nn.Linear(8, 8)])
+        layers.forward = lambda hidden: [(layer(hidden), hidden) for layer in layers]
+        hidden = torch.randn(2, 8)
+        expected = layers(hidden)
+        layers.to("rbln:0")
+        assert cosmos3video.run_on_host(layers)
+        out = layers(hidden.to("rbln:0"))
+        assert all(t.device.type == "rbln" for pair in out for t in pair)
+        assert torch.equal(out[1][0].cpu(), expected[1][0])
+
+
+class TestCosmos3QkNormRopeHook:
+    def test_registers_an_around_hook(self):
+        assert cosmos3video.QK_NORM_ROPE_HOOK_TARGET in cosmos3video.register()
+        assert any(
+            hook is cosmos3video.split_qk_norm_rope_on_device
+            for _, hook, _ in HookRegistry._hooks[cosmos3video.QK_NORM_ROPE_HOOK_TARGET]
+        )
+
+    @pytest.mark.parametrize(
+        ("device_type", "expected"), [("cpu", "fused"), ("rbln", "split")]
+    )
+    def test_device_tensors_take_the_split_path(
+        self, monkeypatch, device_type, expected
+    ):
+        from sglang.multimodal_gen.runtime.models.dits import cosmos3video as dit
+
+        monkeypatch.setattr(
+            dit, "_apply_qwen3_qk_norm_rope_split", lambda *args: "split"
+        )
+        q = SimpleNamespace(device=SimpleNamespace(type=device_type))
+        out = cosmos3video.split_qk_norm_rope_on_device(
+            lambda *args, **kwargs: "fused", q, None, None, None, 128, None, None
+        )
+        assert out == expected

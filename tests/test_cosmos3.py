@@ -7,11 +7,11 @@ import pytest
 import torch
 from sglang.multimodal_gen import registry
 from sglang.multimodal_gen.configs.pipeline_configs.cosmos3 import Cosmos3Config
+from sglang.multimodal_gen.runtime.layers import layernorm as upstream_layernorm
 from sglang.multimodal_gen.runtime.pipelines.cosmos3_pipeline import Cosmos3Pipeline
 from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry
 from torch import nn
 
-from sglang_rbln import device
 from sglang_rbln.device import ExecutionMode
 from sglang_rbln.patches.stages import cosmos3
 
@@ -68,6 +68,8 @@ class _GenLayer(nn.Module):
 @pytest.fixture
 def transformer() -> nn.Module:
     module = nn.Module()
+    module.head_dim = 128
+    module.norm_moe_gen = nn.RMSNorm(8)
     module.gen_layers = nn.ModuleList([_GenLayer(), _GenLayer()])
     module.language_model = nn.Module()
     module.language_model.layers = nn.ModuleList([_GenLayer()])
@@ -100,6 +102,7 @@ class TestGenLayerCompileHook:
             None, transformer, SimpleNamespace(enable_torch_compile=True)
         )
         assert transformer._gen_layers_torch_compiled is True
+        assert (128, True) in upstream_layernorm._QK_NORM_ROPE_DICT
         assert [call["backend"] for call in recorded_compiles] == ["rbln", "rbln"]
         assert all(call["dynamic"] is False for call in recorded_compiles)
         contexts = {
@@ -107,23 +110,19 @@ class TestGenLayerCompileHook:
         }
         assert len(contexts) == 1
 
-    @pytest.mark.parametrize(
-        ("execution_mode", "expected"),
-        [
-            (ExecutionMode.HOST, ["gen_layers"]),
-            (ExecutionMode.DEVICE, ["gen_layers", "language_model.layers"]),
-        ],
-        ids=["host", "device"],
-    )
-    def test_language_model_compiles_only_on_device(
-        self, monkeypatch, transformer, recorded_compiles, execution_mode, expected
-    ):
-        monkeypatch.setattr(device, "execution_mode", lambda: execution_mode)
-        assert cosmos3.compiled_layer_names(transformer) == expected
+    def test_language_model_is_not_compiled(self, transformer, recorded_compiles):
         cosmos3.compile_layers(
             None, transformer, SimpleNamespace(enable_torch_compile=True)
         )
-        assert len(recorded_compiles) == 2 + (execution_mode is ExecutionMode.DEVICE)
+        assert len(recorded_compiles) == len(transformer.gen_layers)
+
+    def test_text_and_final_norm_run_on_the_host(self, monkeypatch, transformer):
+        hosted = []
+        monkeypatch.setattr(cosmos3.cosmos3video, "run_on_host", hosted.append)
+        cosmos3.compile_layers(
+            None, transformer, SimpleNamespace(enable_torch_compile=False)
+        )
+        assert hosted == [transformer.language_model, transformer.norm_moe_gen]
 
     def test_respects_disabled_compile(self, transformer, recorded_compiles):
         cosmos3.compile_layers(
