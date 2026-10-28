@@ -20,7 +20,7 @@ classifiers = [
     "Operating System :: POSIX :: Linux",
 ]
 dependencies = [
-    "sglang[diffusion]==0.5.22",
+    "sglang[diffusion]==0.5.21",
     "rebel-compiler==0.12.0",
 ]
 

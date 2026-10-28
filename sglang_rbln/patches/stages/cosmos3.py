@@ -37,8 +37,8 @@ def compile_gen_layers(stage, transformer: nn.Module, server_args) -> None:
         "Compiling %d Cosmos3 gen_layers with %s", len(gen_layers), compile_kwargs
     )
     transformer._gen_layers_torch_compiled = True
-    for index, layer in enumerate(gen_layers):
-        gen_layers[index] = torch.compile(layer, **compile_kwargs)
+    for layer in gen_layers:
+        layer.compile(**compile_kwargs)
 
 
 def register() -> str:
