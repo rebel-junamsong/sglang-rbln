@@ -19,6 +19,14 @@ RUNS_ON_DEVICE = EXECUTION_MODE is device.ExecutionMode.DEVICE
 compilation.ensure_compile_backend()
 
 
+OFFLOAD_FLAGS = (
+    "dit_cpu_offload",
+    "text_encoder_cpu_offload",
+    "image_encoder_cpu_offload",
+    "vae_cpu_offload",
+)
+
+
 class RBLNPlatform(Platform):
     _enum = PlatformEnum.OOT
     device_name = "rbln"
@@ -46,6 +54,10 @@ class RBLNPlatform(Platform):
             server_args.regional_compile = True
         if self.is_cpu():
             server_args.component_precisions.setdefault("vocoder", "fp32")
+            return
+        for flag in OFFLOAD_FLAGS:
+            if flag not in explicit_args and getattr(server_args, flag, None) is None:
+                setattr(server_args, flag, False)
 
     def get_compile_backend(self, mode: str | None = None) -> str:
         return compilation.COMPILE_BACKEND_NAME

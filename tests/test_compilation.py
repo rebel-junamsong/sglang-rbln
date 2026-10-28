@@ -8,7 +8,7 @@ from torch._dynamo import list_backends
 
 from sglang_rbln import device
 from sglang_rbln.compilation import backend as compilation
-from sglang_rbln.platform import RBLNPlatform
+from sglang_rbln.platform import OFFLOAD_FLAGS, RBLNPlatform
 
 ON_NPU_HOST = bool(device.device_nodes())
 
@@ -171,6 +171,20 @@ class TestServerArgDefaults:
         monkeypatch.setattr(RBLNPlatform, "is_cpu", lambda self: on_host)
         RBLNPlatform().apply_server_args_defaults(server_args)
         assert server_args.component_precisions == expected
+
+    def test_device_mode_keeps_components_resident(self, server_args, monkeypatch):
+        monkeypatch.setattr(RBLNPlatform, "is_cpu", lambda self: False)
+        for flag in OFFLOAD_FLAGS:
+            setattr(server_args, flag, None)
+        server_args._explicit_arg_names = {"vae_cpu_offload"}
+        server_args.vae_cpu_offload = True
+        RBLNPlatform().apply_server_args_defaults(server_args)
+        assert [getattr(server_args, flag) for flag in OFFLOAD_FLAGS] == [
+            False,
+            False,
+            False,
+            True,
+        ]
 
     def test_keeps_an_explicit_vocoder_precision(self, server_args, monkeypatch):
         monkeypatch.setattr(RBLNPlatform, "is_cpu", lambda self: True)
