@@ -6,6 +6,7 @@ import functools
 import itertools
 import logging
 import os
+import pickle
 import weakref
 from pathlib import Path
 from typing import Any
@@ -151,7 +152,12 @@ def dump_graph(graph: torch.fx.GraphModule, example_inputs, directory: Path) -> 
         for value in example_inputs
     ]
     torch.save(tensors, stem.with_suffix(".inputs.pt"))
-    torch.save(graph, stem.with_suffix(".module.pt"))
+    torch.save(graph.state_dict(), stem.with_suffix(".state.pt"))
+    try:
+        torch.save(graph, stem.with_suffix(".module.pt"))
+    except (TypeError, pickle.PicklingError) as error:
+        stem.with_suffix(".module.pt").unlink(missing_ok=True)
+        logger.warning("rbln graph %s kept without its module: %s", stem, error)
     return stem
 
 

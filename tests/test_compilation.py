@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import os
 import sys
+import threading
 from types import ModuleType, SimpleNamespace
 
 import pytest
@@ -84,6 +85,16 @@ def test_dump_graph_round_trips(tmp_path):
     inputs = torch.load(stem.with_suffix(".inputs.pt"))
     module = torch.load(stem.with_suffix(".module.pt"), weights_only=False)
     assert torch.equal(module(*inputs), graph(*inputs))
+    assert torch.load(stem.with_suffix(".state.pt")).keys() == graph.state_dict().keys()
+
+
+def test_dump_graph_keeps_weights_of_unpicklable_graphs(tmp_path, caplog):
+    graph = torch.fx.symbolic_trace(_TinyMlp())
+    graph.process_group = threading.Lock()
+    stem = compilation.dump_graph(graph, [torch.zeros(2, 64)], tmp_path)
+    assert not stem.with_suffix(".module.pt").exists()
+    assert torch.load(stem.with_suffix(".state.pt")).keys() == graph.state_dict().keys()
+    assert "kept without its module" in caplog.text
 
 
 class TestGraphCheck:
