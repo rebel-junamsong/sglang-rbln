@@ -31,7 +31,7 @@ def compile_options(module: torch.nn.Module) -> dict[str, Any]:
 
     context = _compile_contexts.get(module)
     if context is None:
-        context = _compile_contexts[module] = CompileContext()
+        context = _compile_contexts[module] = CompileContext(use_weight_sharing=True)
     options: dict[str, Any] = {"compile_context": context}
     modes = [
         mode

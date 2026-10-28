@@ -207,6 +207,10 @@ class TestCompileOptions:
         assert first["cache_dir"] == str(tmp_path)
         assert "mode" not in first
 
+    def test_context_shares_weights_across_graphs(self):
+        context = compilation.compile_options(_TinyMlp())["compile_context"]
+        assert context.state.use_weight_sharing
+
     @pytest.mark.parametrize(
         ("env", "expected"),
         [
