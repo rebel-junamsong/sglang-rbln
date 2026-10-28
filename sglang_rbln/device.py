@@ -6,6 +6,7 @@ import importlib.util
 import os
 from enum import StrEnum
 from pathlib import Path
+from typing import NamedTuple
 
 import psutil
 
@@ -13,6 +14,12 @@ FORCE_NPU_NAME_ENV = "RBLN_FORCE_NPU_NAME"
 EXECUTION_MODE_ENV = "SGLANG_RBLN_EXECUTION_MODE"
 DEVICE_NODE_DIR = Path("/dev")
 DEVICE_NODE_PATTERN = "rbln[0-9]*"
+
+
+class MemoryInfo(NamedTuple):
+    total: int
+    used: int
+    free: int
 
 
 class ExecutionMode(StrEnum):
@@ -72,13 +79,13 @@ def npu_name(device_id: int = 0) -> str:
     return str(name)
 
 
-def npu_memory_info(device_id: int = 0) -> tuple[int, int, int]:
+def npu_memory_info(device_id: int = 0) -> MemoryInfo:
     import rebel
 
     info = rebel.get_device_memory_info(device_id)
-    return int(info.total), int(info.used), int(info.free)
+    return MemoryInfo(int(info.total), int(info.used), int(info.free))
 
 
-def host_memory_info() -> tuple[int, int, int]:
+def host_memory_info() -> MemoryInfo:
     memory = psutil.virtual_memory()
-    return int(memory.total), int(memory.used), int(memory.available)
+    return MemoryInfo(int(memory.total), int(memory.used), int(memory.available))

@@ -52,20 +52,19 @@ class RBLNPlatform(Platform):
             ) from e
 
     def apply_server_args_defaults(self, server_args) -> None:
-        explicit_args = getattr(server_args, "_explicit_arg_names", None) or ()
-        if "enable_torch_compile" not in explicit_args:
+        if not server_args.is_arg_explicitly_set("enable_torch_compile"):
             server_args.enable_torch_compile = True
-        if "regional_compile" not in explicit_args:
+        if not server_args.is_arg_explicitly_set("regional_compile"):
             server_args.regional_compile = True
         if self.is_cpu():
             server_args.component_precisions.setdefault("vocoder", "fp32")
             return
         for flag in OFFLOAD_FLAGS:
-            if flag not in explicit_args and getattr(server_args, flag, None) is None:
+            if (
+                not server_args.is_arg_explicitly_set(flag)
+                and getattr(server_args, flag) is None
+            ):
                 setattr(server_args, flag, False)
-
-    def get_compile_backend(self, mode: str | None = None) -> str:
-        return compilation.COMPILE_BACKEND_NAME
 
     def get_compile_options(self, module: torch.nn.Module) -> dict[str, object]:
         return compilation.compile_options(module)
@@ -100,10 +99,6 @@ class RBLNPlatform(Platform):
     def get_device_uuid(cls, device_id: int = 0) -> str:
         return f"{device.npu_name(device_id)}:{device_id}"
 
-    @classmethod
-    def get_device_capability(cls, device_id: int = 0):
-        return None
-
     def tensor_on_device(self, tensor: torch.Tensor) -> bool:
         return tensor.device.type == self.device_type
 
@@ -117,26 +112,15 @@ class RBLNPlatform(Platform):
 
     @classmethod
     def get_device_total_memory(cls, device_id: int = 0) -> int:
-        total, _, _ = _memory_info(device_id)
-        return total
+        return _memory_info(device_id).total
 
     @classmethod
     def get_current_memory_usage(cls, device=None) -> float:
-        _, used, _ = _memory_info(_device_index(device))
-        return float(used)
+        return float(_memory_info(_device_index(device)).used)
 
     @classmethod
     def get_available_gpu_memory(cls, device_id=None, *args, **kwargs) -> float:
-        _, _, free = _memory_info(_device_index(device_id))
-        return free / (1 << 30)
-
-    @classmethod
-    def empty_cache(cls) -> None:
-        pass
-
-    @classmethod
-    def synchronize(cls) -> None:
-        pass
+        return _memory_info(_device_index(device_id)).free / (1 << 30)
 
     @classmethod
     def inference_mode(cls):
@@ -165,7 +149,7 @@ def _device_index(torch_device) -> int:
     return torch.device(torch_device).index or 0
 
 
-def _memory_info(device_id: int) -> tuple[int, int, int]:
+def _memory_info(device_id: int) -> device.MemoryInfo:
     if RUNS_ON_DEVICE:
         return device.npu_memory_info(device_id)
     return device.host_memory_info()

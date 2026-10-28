@@ -1,7 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 import builtins
+import os
+import sys
 from importlib.metadata import entry_points
 from pkgutil import resolve_name
+from types import ModuleType, SimpleNamespace
 
 import pytest
 import torch
@@ -11,7 +14,8 @@ from sglang.multimodal_gen.runtime.platforms import PlatformEnum
 
 import sglang_rbln
 from sglang_rbln import device
-from sglang_rbln.platform import RUNS_ON_DEVICE, RBLNPlatform
+from sglang_rbln import platform as platform_module
+from sglang_rbln.platform import OFFLOAD_FLAGS, RUNS_ON_DEVICE, RBLNPlatform
 from tests.conftest import NPU_FAMILIES
 
 ON_NPU_HOST = bool(device.device_nodes())
@@ -170,3 +174,85 @@ class TestDeviceQueries:
         monkeypatch.setenv("LOCAL_RANK", "1")
         local_device = RBLNPlatform.get_local_torch_device()
         assert (local_device.type, local_device.index) == ("rbln", 1)
+
+
+def test_platform_compiles_through_rbln():
+    platform = RBLNPlatform()
+    assert platform.get_compile_backend("max-autotune") == "rbln"
+    assert platform.simple_compile_backend == "rbln"
+
+
+class _ServerArgs(SimpleNamespace):
+    def is_arg_explicitly_set(self, arg_name: str) -> bool:
+        return arg_name in self.explicit_args
+
+
+class TestServerArgDefaults:
+    @pytest.fixture
+    def server_args(self) -> _ServerArgs:
+        return _ServerArgs(
+            enable_torch_compile=False,
+            regional_compile=False,
+            component_precisions={},
+            explicit_args=set(),
+            **dict.fromkeys(OFFLOAD_FLAGS),
+        )
+
+    @pytest.fixture
+    def on_host(self, monkeypatch: pytest.MonkeyPatch, request) -> bool:
+        monkeypatch.setattr(RBLNPlatform, "is_cpu", lambda self: request.param)
+        return request.param
+
+    def test_compiles_per_block_through_the_platform(self, server_args):
+        RBLNPlatform().apply_server_args_defaults(server_args)
+        assert server_args.enable_torch_compile is True
+        assert server_args.regional_compile is True
+
+    @pytest.mark.parametrize("flag", ["enable_torch_compile", "regional_compile"])
+    def test_keeps_an_explicit_choice(self, server_args, flag):
+        server_args.explicit_args = {flag}
+        RBLNPlatform().apply_server_args_defaults(server_args)
+        assert getattr(server_args, flag) is False
+
+    @pytest.mark.parametrize(
+        ("on_host", "expected"),
+        [(True, {"vocoder": "fp32"}), (False, {})],
+        ids=["host", "device"],
+        indirect=["on_host"],
+    )
+    def test_host_mode_runs_the_vocoder_in_fp32(self, server_args, on_host, expected):
+        RBLNPlatform().apply_server_args_defaults(server_args)
+        assert server_args.component_precisions == expected
+
+    @pytest.mark.parametrize("on_host", [True], indirect=True)
+    def test_keeps_an_explicit_vocoder_precision(self, server_args, on_host):
+        server_args.component_precisions = {"vocoder": "bf16"}
+        RBLNPlatform().apply_server_args_defaults(server_args)
+        assert server_args.component_precisions == {"vocoder": "bf16"}
+
+    @pytest.mark.parametrize("on_host", [False], indirect=True)
+    def test_device_mode_keeps_components_resident(self, server_args, on_host):
+        server_args.explicit_args = {"vae_cpu_offload"}
+        server_args.vae_cpu_offload = True
+        RBLNPlatform().apply_server_args_defaults(server_args)
+        assert [getattr(server_args, flag) for flag in OFFLOAD_FLAGS] == [
+            False,
+            False,
+            False,
+            True,
+        ]
+
+
+@pytest.mark.parametrize(
+    ("preset", "expected"),
+    [(None, platform_module.TORCH_RBLN_FALLBACK_DEFAULT), ("all", "all")],
+    ids=["default", "explicit"],
+)
+def test_device_mode_forbids_silent_compile_fallback(monkeypatch, preset, expected):
+    monkeypatch.setattr(platform_module, "RUNS_ON_DEVICE", True)
+    monkeypatch.setitem(sys.modules, "torch_rbln", ModuleType("torch_rbln"))
+    monkeypatch.delenv(platform_module.TORCH_RBLN_FALLBACK_ENV, raising=False)
+    if preset is not None:
+        monkeypatch.setenv(platform_module.TORCH_RBLN_FALLBACK_ENV, preset)
+    RBLNPlatform().init_backend()
+    assert os.environ[platform_module.TORCH_RBLN_FALLBACK_ENV] == expected

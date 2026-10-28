@@ -1,8 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-import os
-import sys
 import threading
-from types import ModuleType, SimpleNamespace
 
 import pytest
 import torch
@@ -10,9 +7,7 @@ from torch import nn
 from torch._dynamo import list_backends
 
 from sglang_rbln import device
-from sglang_rbln import platform as platform_module
 from sglang_rbln.compilation import backend as compilation
-from sglang_rbln.platform import OFFLOAD_FLAGS, RBLNPlatform
 
 ON_NPU_HOST = bool(device.device_nodes())
 
@@ -162,12 +157,6 @@ def test_log_graphs_wraps_the_registered_backend(monkeypatch, caplog):
     assert registry._COMPILER_FNS["rbln"] is wrapped
 
 
-def test_platform_compiles_through_rbln():
-    platform = RBLNPlatform()
-    assert platform.get_compile_backend("max-autotune") == "rbln"
-    assert platform.simple_compile_backend == "rbln"
-
-
 class TestCompileOptions:
     def test_context_is_per_module(self, monkeypatch, tmp_path):
         monkeypatch.setenv(compilation.CACHE_DIR_ENV, str(tmp_path))
@@ -216,76 +205,6 @@ class TestCompileOptions:
             monkeypatch.setenv(flag, "1")
         monkeypatch.setenv(compilation.DISABLE_CACHE_ENV, "1")
         assert compilation.compile_options() == {"mode": modes}
-
-
-class TestServerArgDefaults:
-    @pytest.fixture
-    def server_args(self):
-        return SimpleNamespace(
-            enable_torch_compile=False,
-            regional_compile=False,
-            component_precisions={},
-            _explicit_arg_names=set(),
-        )
-
-    def test_compiles_per_block_through_the_platform(self, server_args):
-        RBLNPlatform().apply_server_args_defaults(server_args)
-        assert server_args.enable_torch_compile is True
-        assert server_args.regional_compile is True
-
-    @pytest.mark.parametrize(
-        ("on_host", "expected"),
-        [(True, {"vocoder": "fp32"}), (False, {})],
-        ids=["host", "device"],
-    )
-    def test_host_mode_runs_the_vocoder_in_fp32(
-        self, server_args, monkeypatch, on_host, expected
-    ):
-        monkeypatch.setattr(RBLNPlatform, "is_cpu", lambda self: on_host)
-        RBLNPlatform().apply_server_args_defaults(server_args)
-        assert server_args.component_precisions == expected
-
-    def test_device_mode_keeps_components_resident(self, server_args, monkeypatch):
-        monkeypatch.setattr(RBLNPlatform, "is_cpu", lambda self: False)
-        for flag in OFFLOAD_FLAGS:
-            setattr(server_args, flag, None)
-        server_args._explicit_arg_names = {"vae_cpu_offload"}
-        server_args.vae_cpu_offload = True
-        RBLNPlatform().apply_server_args_defaults(server_args)
-        assert [getattr(server_args, flag) for flag in OFFLOAD_FLAGS] == [
-            False,
-            False,
-            False,
-            True,
-        ]
-
-    @pytest.mark.parametrize(
-        ("preset", "expected"),
-        [(None, platform_module.TORCH_RBLN_FALLBACK_DEFAULT), ("all", "all")],
-        ids=["default", "explicit"],
-    )
-    def test_device_mode_forbids_silent_compile_fallback(
-        self, monkeypatch, preset, expected
-    ):
-        monkeypatch.setattr(platform_module, "RUNS_ON_DEVICE", True)
-        monkeypatch.setitem(sys.modules, "torch_rbln", ModuleType("torch_rbln"))
-        monkeypatch.delenv(platform_module.TORCH_RBLN_FALLBACK_ENV, raising=False)
-        if preset is not None:
-            monkeypatch.setenv(platform_module.TORCH_RBLN_FALLBACK_ENV, preset)
-        RBLNPlatform().init_backend()
-        assert os.environ[platform_module.TORCH_RBLN_FALLBACK_ENV] == expected
-
-    def test_keeps_an_explicit_vocoder_precision(self, server_args, monkeypatch):
-        monkeypatch.setattr(RBLNPlatform, "is_cpu", lambda self: True)
-        server_args.component_precisions = {"vocoder": "bf16"}
-        RBLNPlatform().apply_server_args_defaults(server_args)
-        assert server_args.component_precisions == {"vocoder": "bf16"}
-
-    @pytest.mark.parametrize("flag", ["enable_torch_compile", "regional_compile"])
-    def test_keeps_an_explicit_choice(self, server_args, flag):
-        server_args._explicit_arg_names = {flag}
-        RBLNPlatform().apply_server_args_defaults(server_args)
-        assert getattr(server_args, flag) is False
 
 
 @pytest.mark.xfail(not ON_NPU_HOST, reason="no RBLN device nodes on host")
