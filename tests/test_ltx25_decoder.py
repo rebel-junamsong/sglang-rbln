@@ -83,6 +83,7 @@ def test_video_decoder_runs_on_the_npu(caplog, monkeypatch, tmp_path):
             upsample_residual=(False,) * 4,
             upsample_factor=(2, 2, 1, 2),
             upsample_type=("spatiotemporal", "spatiotemporal", "temporal", "spatial"),
+            spatial_padding_mode="zeros",
         )
         .to(torch.bfloat16)
         .eval()
