@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 
 import torch
-from sglang.multimodal_gen import envs
+from sglang.multimodal_gen import envs as sglang_envs
 from sglang.multimodal_gen.runtime.platforms import Platform, PlatformEnum
 from sglang.multimodal_gen.runtime.platforms.cpu import CpuPlatform
 
@@ -15,9 +15,6 @@ from sglang_rbln.compilation import backend as compilation
 ATTENTION_BACKEND_PATH = "sglang_rbln.layers.attention.backends.sdpa.RBLNSdpaBackend"
 EXECUTION_MODE = device.execution_mode()
 RUNS_ON_DEVICE = EXECUTION_MODE is device.ExecutionMode.DEVICE
-compilation.ensure_compile_backend()
-
-
 TORCH_RBLN_FALLBACK_ENV = "TORCH_RBLN_DISABLE_FALLBACK"
 TORCH_RBLN_FALLBACK_DEFAULT = "compile_error"
 OFFLOAD_FLAGS = (
@@ -26,6 +23,8 @@ OFFLOAD_FLAGS = (
     "image_encoder_cpu_offload",
     "vae_cpu_offload",
 )
+
+compilation.ensure_compile_backend()
 
 
 class RBLNPlatform(Platform):
@@ -75,7 +74,7 @@ class RBLNPlatform(Platform):
     @classmethod
     def get_local_torch_device(cls) -> torch.device:
         if RUNS_ON_DEVICE:
-            return torch.device("rbln", envs.LOCAL_RANK)
+            return torch.device("rbln", sglang_envs.LOCAL_RANK)
         return torch.device("cpu")
 
     def get_device(self, local_rank: int) -> torch.device:
