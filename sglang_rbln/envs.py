@@ -20,6 +20,8 @@ if TYPE_CHECKING:
     SGLANG_RBLN_LOG_GRAPHS: bool = False
     SGLANG_RBLN_DUMP_GRAPHS: Path | None = None
     SGLANG_RBLN_RUNTIME_REPORTS: bool = False
+    SGLANG_RBLN_PROFILE_DIR: Path | None = None
+    SGLANG_RBLN_PROFILE_REQUEST: int = 3
 
 
 def _flag(name: str) -> Callable[[], bool]:
@@ -47,6 +49,10 @@ environment_variables: dict[str, Callable[[], Any]] = {
     "SGLANG_RBLN_LOG_GRAPHS": _flag("SGLANG_RBLN_LOG_GRAPHS"),
     "SGLANG_RBLN_DUMP_GRAPHS": _optional("SGLANG_RBLN_DUMP_GRAPHS", Path),
     "SGLANG_RBLN_RUNTIME_REPORTS": _flag("SGLANG_RBLN_RUNTIME_REPORTS"),
+    "SGLANG_RBLN_PROFILE_DIR": _optional("SGLANG_RBLN_PROFILE_DIR", Path),
+    "SGLANG_RBLN_PROFILE_REQUEST": lambda: int(
+        os.environ.get("SGLANG_RBLN_PROFILE_REQUEST") or 3
+    ),
 }
 
 

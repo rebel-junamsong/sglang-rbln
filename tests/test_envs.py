@@ -22,6 +22,8 @@ def test_flags_accept_truthy_spellings(monkeypatch, value, expected):
         ("SGLANG_RBLN_NUM_DEVICES", "4", 4),
         ("SGLANG_RBLN_DUMP_GRAPHS", "/tmp/graphs", Path("/tmp/graphs")),
         ("SGLANG_RBLN_EXECUTION_MODE", " Device ", "device"),
+        ("SGLANG_RBLN_PROFILE_DIR", "/tmp/trace", Path("/tmp/trace")),
+        ("SGLANG_RBLN_PROFILE_REQUEST", "5", 5),
     ],
 )
 def test_values_are_parsed(monkeypatch, name, value, expected):
@@ -36,6 +38,8 @@ def test_values_are_parsed(monkeypatch, name, value, expected):
         ("SGLANG_RBLN_NUM_DEVICES", None),
         ("SGLANG_RBLN_DUMP_GRAPHS", None),
         ("SGLANG_RBLN_EXECUTION_MODE", "auto"),
+        ("SGLANG_RBLN_PROFILE_DIR", None),
+        ("SGLANG_RBLN_PROFILE_REQUEST", 3),
         ("SGLANG_RBLN_CACHE_DIR", Path.home() / ".cache" / "sglang_rbln"),
     ],
 )

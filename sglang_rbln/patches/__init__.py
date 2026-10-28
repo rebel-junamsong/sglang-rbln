@@ -5,6 +5,7 @@ from __future__ import annotations
 from sglang_rbln import device
 from sglang_rbln.patches.layers import layernorm
 from sglang_rbln.patches.layers.attention import video_sparse_attn
+from sglang_rbln.patches.managers import gpu_worker
 from sglang_rbln.patches.models import cosmos3video, ltx_2
 from sglang_rbln.patches.srt.layers.quantization import fp4_utils
 from sglang_rbln.patches.stages import cosmos3, flux3_action
@@ -25,5 +26,6 @@ def register() -> None:
     cosmos3video.register()
     flux3_action.register()
     ltx_2.register()
+    gpu_worker.register()
     if device.torch_rbln_available():
         ops_utils.register()
