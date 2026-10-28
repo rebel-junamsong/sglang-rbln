@@ -22,17 +22,15 @@ class TestTritonNormExports:
     def test_binds_only_missing_names(self):
         exports_module = ModuleType("fake_exports")
         exports_module.rms_norm_fn = real_kernel = object()
-        assert layernorm.bind_missing_exports(exports_module) == ["norm_infer"]
+        assert layernorm.register(exports_module) == ["norm_infer"]
         assert exports_module.rms_norm_fn is real_kernel
         with pytest.raises(NotImplementedError):
             exports_module.norm_infer()
 
     def test_is_idempotent(self):
         exports_module = ModuleType("fake_exports")
-        assert layernorm.bind_missing_exports(exports_module) == list(
-            layernorm.TRITON_NORM_EXPORTS
-        )
-        assert layernorm.bind_missing_exports(exports_module) == []
+        assert layernorm.register(exports_module) == list(layernorm.TRITON_NORM_EXPORTS)
+        assert layernorm.register(exports_module) == []
 
 
 class TestCudaImportGuard:
@@ -141,7 +139,7 @@ class TestTorchRblnPromotion:
         for name, module in fakes.items():
             module.is_type_promotion_allowed = object()
             monkeypatch.setitem(sys.modules, name, module)
-        assert ops_utils.register()
+        ops_utils.register()
         assert all(
             module.is_type_promotion_allowed is ops_utils.is_type_promotion_allowed
             for module in fakes.values()

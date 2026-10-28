@@ -11,7 +11,7 @@ def _triton_norm_unavailable(*args, **kwargs):
     raise NotImplementedError("Triton norm kernels are not available on rbln.")
 
 
-def bind_missing_exports(exports_module: ModuleType | None = None) -> list[str]:
+def register(exports_module: ModuleType | None = None) -> list[str]:
     if exports_module is None:
         import sglang.kernels.ops.diffusion as exports_module
 

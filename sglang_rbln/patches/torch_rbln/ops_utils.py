@@ -50,7 +50,6 @@ def is_type_promotion_allowed(input_tensors, output_tensor: torch.Tensor) -> boo
     return promoted == output_tensor.dtype
 
 
-def register() -> bool:
+def register() -> None:
     for module_name in PATCHED_MODULES:
         setattr(import_module(module_name), PATCHED_NAME, is_type_promotion_allowed)
-    return True
