@@ -71,6 +71,7 @@ class _GenLayer(nn.Module):
 def transformer() -> nn.Module:
     module = nn.Module()
     module.head_dim = 128
+    module.norm_moe_gen = nn.RMSNorm(8)
     module.gen_layers = nn.ModuleList([_GenLayer(), _GenLayer()])
     module.language_model = nn.Module()
     module.language_model.layers = nn.ModuleList([_GenLayer()])
@@ -128,6 +129,14 @@ class TestGenLayerCompileHook:
             None, transformer, SimpleNamespace(enable_torch_compile=True)
         )
         assert len(recorded_compiles) == 2 + (execution_mode is ExecutionMode.DEVICE)
+
+    def test_final_norm_runs_on_the_host(self, monkeypatch, transformer):
+        hosted = []
+        monkeypatch.setattr(cosmos3.cosmos3video, "run_on_host", hosted.append)
+        cosmos3.compile_layers(
+            None, transformer, SimpleNamespace(enable_torch_compile=False)
+        )
+        assert hosted == [transformer.norm_moe_gen]
 
     def test_respects_disabled_compile(self, transformer, recorded_compiles):
         cosmos3.compile_layers(

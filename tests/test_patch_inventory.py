@@ -85,6 +85,12 @@ PATCH_DEBTS = [
         upstream_fix="let the platform run float32 timestep embeddings on the host",
     ),
     PatchDebt(
+        patch="stages/cosmos3 (final norm)",
+        module="sglang.multimodal_gen.runtime.models.dits.cosmos3video",
+        upstream_pattern="        hidden_gen = self.norm_moe_gen(hidden_gen)",
+        upstream_fix="let the platform run float32 norms on the host",
+    ),
+    PatchDebt(
         patch="stages/flux3_action",
         module=f"{STAGES}.flux3_action",
         upstream_pattern="class Flux3ActionDenoisingStage(PipelineStage):",

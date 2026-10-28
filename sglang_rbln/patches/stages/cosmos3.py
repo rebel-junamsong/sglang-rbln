@@ -10,6 +10,7 @@ from torch import nn
 
 from sglang_rbln import device
 from sglang_rbln.patches.layers import layernorm
+from sglang_rbln.patches.models import cosmos3video
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +32,10 @@ def compile_layers(stage, transformer: nn.Module, server_args) -> None:
         build_torch_compile_kwargs,
     )
 
-    if not server_args.enable_torch_compile or not isinstance(transformer, nn.Module):
+    if not isinstance(transformer, nn.Module):
+        return
+    cosmos3video.run_on_host(transformer.norm_moe_gen)
+    if not server_args.enable_torch_compile:
         return
     torch._dynamo.config.cache_size_limit = max(
         torch._dynamo.config.cache_size_limit, GEN_LAYER_CACHE_SIZE_LIMIT

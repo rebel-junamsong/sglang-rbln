@@ -224,3 +224,27 @@ class TestCosmos3TimestepEmbedderHook:
         out = cosmos3video.embed_timesteps_on_host(self.forward, embedder, t)
         assert out.device.type == "rbln"
         assert torch.equal(out.cpu(), expected)
+
+
+class TestRunOnHost:
+    @staticmethod
+    def norm() -> nn.Module:
+        norm = nn.RMSNorm(8, eps=1e-6)
+        nn.init.uniform_(norm.weight, 0.5, 1.5)
+        return norm
+
+    def test_host_weights_stay_untouched(self):
+        norm = self.norm()
+        assert not cosmos3video.run_on_host(norm)
+        assert "forward" not in vars(norm)
+
+    @pytest.mark.xfail(not RUNS_ON_DEVICE, reason="execution mode is host")
+    def test_device_weights_run_in_float32_on_the_host(self):
+        norm, hidden = self.norm(), torch.randn(2, 3, 8)
+        expected = norm(hidden)
+        norm.to("rbln:0")
+        assert cosmos3video.run_on_host(norm)
+        out = norm(hidden.to("rbln:0"))
+        assert out.device.type == "rbln"
+        assert torch.equal(out.cpu(), expected)
+        assert next(norm.parameters()).device.type == "rbln"
