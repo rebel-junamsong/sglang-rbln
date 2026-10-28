@@ -151,6 +151,7 @@ def dump_graph(graph: torch.fx.GraphModule, example_inputs, directory: Path) -> 
         for value in example_inputs
     ]
     torch.save(tensors, stem.with_suffix(".inputs.pt"))
+    torch.save(graph, stem.with_suffix(".module.pt"))
     return stem
 
 
