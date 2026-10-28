@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+import os
 import threading
 
 import pytest
@@ -178,6 +179,18 @@ def test_log_graphs_wraps_the_registered_backend(monkeypatch, caplog):
     assert wrapped.__wrapped_backend__ is original
     compilation.ensure_compile_backend()
     assert registry._COMPILER_FNS["rbln"] is wrapped
+
+
+@pytest.mark.parametrize(("preset", "expected"), [(None, "1"), ("0", "0")])
+def test_block_runtimes_share_io_buffers_unless_told_otherwise(
+    monkeypatch, preset, expected
+):
+    if preset is None:
+        monkeypatch.delenv("RBLN_POOL_IO_BUFFERS", raising=False)
+    else:
+        monkeypatch.setenv("RBLN_POOL_IO_BUFFERS", preset)
+    compilation.ensure_compile_backend()
+    assert os.environ["RBLN_POOL_IO_BUFFERS"] == expected
 
 
 class TestCompileOptions:
