@@ -96,6 +96,7 @@ covers the full request options for both models.
 | `SGLANG_RBLN_RUNTIME_REPORTS=1` | log the runtime's device / host-op / buffer-prep time split every 100 graph runs |
 | `SGLANG_RBLN_PROFILE_DIR=<dir>` | write an RBLN Profiler trace (`*.pb`, Perfetto) of one request to `<dir>`; start the server with `RBLN_PROFILER=1` |
 | `SGLANG_RBLN_PROFILE_REQUEST=3` | which request (counting from 1, warmups excluded) `SGLANG_RBLN_PROFILE_DIR` captures |
+| `SGLANG_RBLN_VOCODER_ON_NPU=1` | compile the LTX-2 vocoder for one NPU (off by default: the CPU is faster below about 2 s of audio) |
 
 `--enable-torch-compile` and `--regional-compile` are on by default; pass either
 flag explicitly to change it.

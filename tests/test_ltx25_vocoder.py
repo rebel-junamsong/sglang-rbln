@@ -25,6 +25,7 @@ def stage():
 
 @pytest.fixture
 def compiled(monkeypatch):
+    monkeypatch.setenv("SGLANG_RBLN_VOCODER_ON_NPU", "1")
     calls = []
     monkeypatch.setattr(
         nn.Module, "compile", lambda module, **kwargs: calls.append((module, kwargs))
@@ -65,8 +66,16 @@ def test_runs_the_vocoder_on_the_last_tensor_parallel_device(
     assert (options["num_devices"], options["device"]) == (1, 3)
 
 
-def test_leaves_the_vocoder_eager_without_torch_compile(stage, compiled):
-    server_args = SimpleNamespace(enable_torch_compile=False)
+@pytest.mark.parametrize(
+    ("on_npu", "enable_torch_compile"),
+    [("", True), ("1", False)],
+    ids=["not-requested", "compile-disabled"],
+)
+def test_leaves_the_vocoder_eager(
+    stage, compiled, monkeypatch, on_npu, enable_torch_compile
+):
+    monkeypatch.setenv("SGLANG_RBLN_VOCODER_ON_NPU", on_npu)
+    server_args = SimpleNamespace(enable_torch_compile=enable_torch_compile)
     vocoder.compile_vocoder(forward, stage, None, server_args)
     assert compiled == []
 

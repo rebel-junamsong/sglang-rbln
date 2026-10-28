@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     SGLANG_RBLN_RUNTIME_REPORTS: bool = False
     SGLANG_RBLN_PROFILE_DIR: Path | None = None
     SGLANG_RBLN_PROFILE_REQUEST: int = 3
+    SGLANG_RBLN_VOCODER_ON_NPU: bool = False
 
 
 def _flag(name: str) -> Callable[[], bool]:
@@ -53,6 +54,7 @@ environment_variables: dict[str, Callable[[], Any]] = {
     "SGLANG_RBLN_PROFILE_REQUEST": lambda: int(
         os.environ.get("SGLANG_RBLN_PROFILE_REQUEST") or 3
     ),
+    "SGLANG_RBLN_VOCODER_ON_NPU": _flag("SGLANG_RBLN_VOCODER_ON_NPU"),
 }
 
 

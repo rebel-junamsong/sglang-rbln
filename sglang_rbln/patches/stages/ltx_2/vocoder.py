@@ -6,6 +6,8 @@ import logging
 
 from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry, HookType
 
+from sglang_rbln import envs
+
 logger = logging.getLogger(__name__)
 
 HOOK_TARGET = (
@@ -21,7 +23,11 @@ def compile_vocoder(forward, stage, batch, server_args):
     )
 
     vocoder = stage.vocoder
-    if server_args.enable_torch_compile and not getattr(vocoder, COMPILED, False):
+    if (
+        envs.SGLANG_RBLN_VOCODER_ON_NPU
+        and server_args.enable_torch_compile
+        and not getattr(vocoder, COMPILED, False)
+    ):
         compile_kwargs = build_torch_compile_kwargs(mode=None, module=vocoder)
         compile_kwargs["dynamic"] = False
         if num_devices := compile_kwargs["options"].get("num_devices"):
