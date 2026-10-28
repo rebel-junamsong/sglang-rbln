@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import sys
 from importlib.abc import MetaPathFinder
 
@@ -16,10 +17,20 @@ class _BlockedImportFinder(MetaPathFinder):
         return None
 
 
+def _imports_cleanly(module: str) -> bool:
+    try:
+        importlib.import_module(module)
+    except Exception:
+        return False
+    return True
+
+
 def block_without_cuda(module: str) -> bool:
     import torch
 
     if torch.cuda.is_available() or module in sys.modules:
+        return False
+    if _imports_cleanly(module):
         return False
     finder = next(
         (item for item in sys.meta_path if isinstance(item, _BlockedImportFinder)),

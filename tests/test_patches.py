@@ -45,6 +45,7 @@ class TestCudaImportGuard:
     )
     def test_blocks_the_cuda_only_module(self, monkeypatch, patch, blocked):
         monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+        monkeypatch.setattr(cuda_imports, "_imports_cleanly", lambda module: False)
         assert patch.register()
         with pytest.raises(ImportError, match="blocked on rbln"):
             importlib.import_module(blocked)
@@ -56,6 +57,7 @@ class TestCudaImportGuard:
 
     def test_one_finder_serves_both_modules(self, monkeypatch):
         monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+        monkeypatch.setattr(cuda_imports, "_imports_cleanly", lambda module: False)
         video_sparse_attn.register()
         fp4_utils.register()
         finders = [
@@ -69,6 +71,11 @@ class TestCudaImportGuard:
         assert not any(
             isinstance(f, cuda_imports._BlockedImportFinder) for f in sys.meta_path
         )
+
+    def test_leaves_importable_modules_alone(self, monkeypatch):
+        monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+        monkeypatch.setattr(fp4_utils, "BLOCKED_MODULE", "json")
+        assert not fp4_utils.register()
 
     def test_does_not_shadow_an_imported_module(self, monkeypatch):
         monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
