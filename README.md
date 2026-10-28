@@ -109,6 +109,10 @@ flag explicitly to change it.
 | `black-forest-labs/flux-3-action-droid` | `Flux3ActionPipeline` | `/v1/actions/generations` |
 
 FLUX 3 Action does not fit one NPU: serve it with `SGLANG_RBLN_NUM_DEVICES=4`.
+It denoises the future video jointly with the actions; send
+`"parameters": {"return_video": true}` to also get that video, decoded by the
+video VAE, as `data[0].video` (`format` `mp4`, `fps`, `shape` `[frames, height,
+width, 3]`, `b64_json`).
 Tensor parallelism needs a compiler that keeps LayerNorm statistics whole across
 devices; older ones return actions that drift from the CPU result.
 

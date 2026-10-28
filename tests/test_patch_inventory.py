@@ -135,6 +135,64 @@ PATCH_DEBTS = [
         upstream_pattern="class LTX2TextConnectorStage(PipelineStage):",
         upstream_fix="compile the connector layer stacks like DenoisingStage does",
     ),
+    PatchDebt(
+        patch="stages/flux3_action_video (request)",
+        module="sglang.multimodal_gen.runtime.entrypoints.action.protocol",
+        upstream_pattern=(
+            '    for name in ("seed", "guidance_scale", "guidance_scale_action"):'
+        ),
+        upstream_fix="forward parameters.return_video to the sampling params",
+    ),
+    PatchDebt(
+        patch="stages/flux3_action_video (decoder)",
+        module="sglang.multimodal_gen.configs.pipeline_configs.flux3_action",
+        upstream_pattern=(
+            "default_factory=lambda: Flux3VideoVAEConfig(load_decoder=False)"
+        ),
+        upstream_fix="load the video VAE decoder when the pipeline returns video",
+    ),
+    PatchDebt(
+        patch="stages/flux3_action_video (observation latent)",
+        module=f"{STAGES}.flux3_action",
+        upstream_pattern=(
+            "            latent = self.vae.encode_frame(frame)[..., :h, :w]\n"
+            "        video, video_ids = pack_video("
+        ),
+        upstream_fix="keep the observation latent in the VLA state",
+    ),
+    PatchDebt(
+        patch="stages/flux3_action_video (denoised video)",
+        module=f"{STAGES}.flux3_action",
+        upstream_pattern=(
+            "targets = result[cfg.action_modality][0].float() / cfg.action_scale"
+        ),
+        upstream_fix="keep the denoised video latent in the VLA state",
+    ),
+    PatchDebt(
+        patch="stages/flux3_action_video (content region)",
+        module="sglang.multimodal_gen.configs.pipeline_configs.flux3_action",
+        upstream_pattern="            content = (540, 640)",
+        upstream_fix="expose the canvas content region on the pipeline config",
+    ),
+    PatchDebt(
+        patch="stages/flux3_action_video (decode)",
+        module="sglang.multimodal_gen.runtime.pipelines_core.stages.vla",
+        upstream_pattern=(
+            "        payload = {\n"
+            '            "request_id": batch.request_id,\n'
+            '            "actions": actions_out,\n'
+            "        }"
+        ),
+        upstream_fix="decode the predicted video in a stage when the request asks",
+    ),
+    PatchDebt(
+        patch="stages/flux3_action_video (response)",
+        module="sglang.multimodal_gen.runtime.entrypoints.action.protocol",
+        upstream_pattern=(
+            '        for name in ("action_mode", "domain_id", "raw_action_dim"):'
+        ),
+        upstream_fix="return the predicted video in the action envelope",
+    ),
     pytest.param(
         PatchDebt(
             patch="torch_rbln/ops_utils",
