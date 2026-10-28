@@ -67,7 +67,7 @@ class _Attention(nn.Module):
 
 @pytest.mark.xfail(not ON_NPU_HOST, reason="no RBLN device nodes on host")
 def test_grouped_query_attention_compiles_on_the_npu(caplog, monkeypatch, tmp_path):
-    monkeypatch.setenv(compilation.CACHE_DIR_ENV, str(tmp_path))
+    monkeypatch.setenv("SGLANG_RBLN_CACHE_DIR", str(tmp_path))
     compilation.ensure_compile_backend()
     query, key, value = _qkv()
     reference = _impl(SDPAImpl).forward(query, key, value, None)

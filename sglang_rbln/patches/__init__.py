@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 
 from sglang_rbln import device
-from sglang_rbln.compilation import backend as compilation
 from sglang_rbln.patches.layers import layernorm
 from sglang_rbln.patches.layers.attention import video_sparse_attn
 from sglang_rbln.patches.models import cosmos3video, ltx_2
@@ -26,7 +25,6 @@ def register() -> None:
     vsa_blocked = video_sparse_attn.register()
     flashinfer_blocked = fp4_utils.register()
     bound_exports = layernorm.bind_missing_exports()
-    compile_backend = compilation.ensure_compile_backend()
     cosmos3_target = cosmos3.register()
     flux3_action_target = flux3_action.register()
     ltx_2_target = ltx_2.register()
@@ -34,12 +32,11 @@ def register() -> None:
     promotion_patched = device.torch_rbln_available() and ops_utils.register()
     logger.debug(
         "sglang_rbln patches registered (vsa blocked: %s, flashinfer blocked: %s, "
-        "triton_norm: %s, compile backend: %s, cosmos3: %s, ltx_2: %s, "
+        "triton_norm: %s, cosmos3: %s, ltx_2: %s, "
         "torch_rbln promotion: %s, cosmos3video: %s, flux3_action: %s).",
         vsa_blocked,
         flashinfer_blocked,
         bound_exports,
-        compile_backend,
         cosmos3_target,
         ltx_2_target,
         promotion_patched,

@@ -9,64 +9,46 @@ import os
 import pickle
 import types
 import weakref
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import torch
 
+from sglang_rbln import envs
+
 logger = logging.getLogger(__name__)
 
 COMPILE_BACKEND_NAME = "rbln"
-COMPILE_ONLY_ENV = "SGLANG_RBLN_COMPILE_ONLY"
-STRICT_ENV = "SGLANG_RBLN_COMPILE_STRICT"
-LOG_GRAPHS_ENV = "SGLANG_RBLN_LOG_GRAPHS"
-RUNTIME_REPORTS_ENV = "SGLANG_RBLN_RUNTIME_REPORTS"
-DUMP_GRAPHS_ENV = "SGLANG_RBLN_DUMP_GRAPHS"
-STATIC_OUTPUT_ENV = "SGLANG_RBLN_STATIC_OUTPUT"
-NUM_DEVICES_ENV = "SGLANG_RBLN_NUM_DEVICES"
-CHECK_GRAPHS_ENV = "SGLANG_RBLN_CHECK_GRAPHS"
-RUNTIME_REPORT_EVERY = 100
-CACHE_DIR_ENV = "SGLANG_RBLN_CACHE_DIR"
-DISABLE_CACHE_ENV = "SGLANG_RBLN_DISABLE_COMPILE_CACHE"
-DEFAULT_CACHE_DIR = "~/.cache/sglang_rbln"
 DYNAMO_CACHE_SIZE_LIMIT = 64
+RUNTIME_REPORT_EVERY = 100
 
 _compile_contexts: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 
 
-def _env_flag(name: str) -> bool:
-    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes")
-
-
-def cache_dir() -> str | None:
-    if _env_flag(DISABLE_CACHE_ENV):
-        return None
-    return str(Path(os.environ.get(CACHE_DIR_ENV) or DEFAULT_CACHE_DIR).expanduser())
-
-
-def compile_options(module: torch.nn.Module | None = None) -> dict[str, Any]:
+def compile_options(module: torch.nn.Module) -> dict[str, Any]:
     from rebel import CompileContext
 
-    options: dict[str, Any] = {}
-    if module is not None:
-        context = _compile_contexts.get(module)
-        if context is None:
-            context = _compile_contexts[module] = CompileContext()
-        options["compile_context"] = context
+    context = _compile_contexts.get(module)
+    if context is None:
+        context = _compile_contexts[module] = CompileContext()
+    options: dict[str, Any] = {"compile_context": context}
     modes = [
         mode
-        for mode, env in (("compile_only", COMPILE_ONLY_ENV), ("strict", STRICT_ENV))
-        if _env_flag(env)
+        for mode, enabled in (
+            ("compile_only", envs.SGLANG_RBLN_COMPILE_ONLY),
+            ("strict", envs.SGLANG_RBLN_COMPILE_STRICT),
+        )
+        if enabled
     ]
     if modes:
         options["mode"] = modes
-    compile_cache_dir = cache_dir()
-    if compile_cache_dir:
-        options["cache_dir"] = compile_cache_dir
-    if _env_flag(STATIC_OUTPUT_ENV):
+    if not envs.SGLANG_RBLN_DISABLE_COMPILE_CACHE:
+        options["cache_dir"] = str(envs.SGLANG_RBLN_CACHE_DIR)
+    if envs.SGLANG_RBLN_STATIC_OUTPUT:
         options["use_static_output"] = True
-    if num_devices := os.environ.get(NUM_DEVICES_ENV):
-        options["num_devices"] = int(num_devices)
+    if num_devices := envs.SGLANG_RBLN_NUM_DEVICES:
+        options["num_devices"] = num_devices
     return options
 
 
@@ -81,14 +63,17 @@ def describe_graph(graph: torch.fx.GraphModule, example_inputs) -> str:
     return f"{node_count} ops, inputs [{', '.join(inputs)}]"
 
 
+_TIMER_TOTALS = frozenset({"seq", "total", "total_host", "total_device", "total_ccl"})
+
+
+@dataclass
 class RuntimeReportTotals:
-    def __init__(self) -> None:
-        self.calls = 0
-        self.device_us = 0
-        self.host_us = 0
-        self.ccl_us = 0
-        self.prepare_us = 0
-        self.node_us: dict[str, int] = {}
+    calls: int = 0
+    device_us: int = 0
+    host_us: int = 0
+    ccl_us: int = 0
+    prepare_us: int = 0
+    node_us: dict[str, int] = field(default_factory=dict)
 
     def add(self, reports: list[dict]) -> None:
         for report in reports:
@@ -104,10 +89,6 @@ class RuntimeReportTotals:
                 self.prepare_us += report.get("prepare_input_us", 0)
                 self.prepare_us += report.get("prepare_output_us", 0)
 
-    @property
-    def host_ops(self) -> set[str]:
-        return {name for name in self.node_us if name.startswith("host_")}
-
     def top_nodes(self, count: int = 5) -> list[tuple[str, int]]:
         return sorted(self.node_us.items(), key=lambda item: -item[1])[:count]
 
@@ -122,7 +103,6 @@ class RuntimeReportTotals:
         )
 
 
-_TIMER_TOTALS = frozenset({"seq", "total", "total_host", "total_device", "total_ccl"})
 runtime_report_totals = RuntimeReportTotals()
 
 
@@ -251,15 +231,14 @@ def _contiguous_callable(compiled):
     return run
 
 
-def _logging_backend(backend):
+def _instrumented_backend(backend):
     @functools.wraps(backend)
     def wrapped(graph, example_inputs, *args, **kwargs):
-        if _env_flag(LOG_GRAPHS_ENV):
+        if envs.SGLANG_RBLN_LOG_GRAPHS:
             logger.info("rbln graph: %s", describe_graph(graph, example_inputs))
-        if dump_dir := os.environ.get(DUMP_GRAPHS_ENV):
+        if dump_dir := envs.SGLANG_RBLN_DUMP_GRAPHS:
             logger.info(
-                "rbln graph dumped to %s",
-                dump_graph(graph, example_inputs, Path(dump_dir)),
+                "rbln graph dumped to %s", dump_graph(graph, example_inputs, dump_dir)
             )
         compiled = backend(
             graph, contiguous_device_inputs(example_inputs), *args, **kwargs
@@ -269,11 +248,11 @@ def _logging_backend(backend):
             for value in example_inputs
         ):
             compiled = _contiguous_callable(compiled)
-        if _env_flag(CHECK_GRAPHS_ENV):
+        if envs.SGLANG_RBLN_CHECK_GRAPHS:
             compiled = _checking_callable(
                 compiled, graph, describe_graph(graph, example_inputs)
             )
-        if _env_flag(RUNTIME_REPORTS_ENV):
+        if envs.SGLANG_RBLN_RUNTIME_REPORTS:
             compiled = _reporting_callable(compiled)
         return compiled
 
@@ -281,7 +260,7 @@ def _logging_backend(backend):
     return wrapped
 
 
-def ensure_compile_backend() -> str:
+def ensure_compile_backend() -> None:
     import rebel.core.torch_compile  # noqa: F401
     from torch._dynamo.backends import registry
 
@@ -295,8 +274,7 @@ def ensure_compile_backend() -> str:
             f"rebel-compiler did not register the {COMPILE_BACKEND_NAME!r} "
             "torch.compile backend"
         )
-    if _env_flag(RUNTIME_REPORTS_ENV):
+    if envs.SGLANG_RBLN_RUNTIME_REPORTS:
         os.environ.setdefault("RBLN_RUNTIME_TIMER", "1")
     if not hasattr(backend, "__wrapped_backend__"):
-        registry._COMPILER_FNS[COMPILE_BACKEND_NAME] = _logging_backend(backend)
-    return COMPILE_BACKEND_NAME
+        registry._COMPILER_FNS[COMPILE_BACKEND_NAME] = _instrumented_backend(backend)

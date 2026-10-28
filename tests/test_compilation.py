@@ -6,7 +6,7 @@ import torch
 from torch import nn
 from torch._dynamo import list_backends
 
-from sglang_rbln import device
+from sglang_rbln import device, envs
 from sglang_rbln.compilation import backend as compilation
 
 ON_NPU_HOST = bool(device.device_nodes())
@@ -23,7 +23,7 @@ class _TinyMlp(nn.Module):
 
 
 def test_rebel_backend_is_available():
-    assert compilation.ensure_compile_backend() == "rbln"
+    compilation.ensure_compile_backend()
     assert "rbln" in list_backends()
     assert torch._dynamo.config.cache_size_limit >= compilation.DYNAMO_CACHE_SIZE_LIMIT
     assert torch._dynamo.config.automatic_dynamic_shapes is False
@@ -68,7 +68,7 @@ def test_runtime_report_totals_split_device_and_host():
         83,
         140,
     )
-    assert totals.host_ops == {"host_pad"}
+    assert totals.node_us == {"host_pad": 83, "main_0": 425}
     assert totals.top_nodes(1) == [("main_0", 425)]
     assert "device share 65.6%" in totals.summary()
 
@@ -143,7 +143,7 @@ def test_contiguous_device_inputs_leave_host_tensors_alone():
 def test_log_graphs_wraps_the_registered_backend(monkeypatch, caplog):
     from torch._dynamo.backends import registry
 
-    monkeypatch.setenv(compilation.LOG_GRAPHS_ENV, "1")
+    monkeypatch.setenv("SGLANG_RBLN_LOG_GRAPHS", "1")
     original = getattr(
         registry._COMPILER_FNS["rbln"],
         "__wrapped_backend__",
@@ -158,14 +158,21 @@ def test_log_graphs_wraps_the_registered_backend(monkeypatch, caplog):
 
 
 class TestCompileOptions:
+    @pytest.fixture(autouse=True)
+    def clean_env(self, monkeypatch):
+        for name in envs.environment_variables:
+            monkeypatch.delenv(name, raising=False)
+        monkeypatch.setenv("SGLANG_RBLN_DISABLE_COMPILE_CACHE", "1")
+
+    @staticmethod
+    def switches(module=None) -> dict:
+        options = compilation.compile_options(module or _TinyMlp())
+        del options["compile_context"]
+        return options
+
     def test_context_is_per_module(self, monkeypatch, tmp_path):
-        monkeypatch.setenv(compilation.CACHE_DIR_ENV, str(tmp_path))
-        for flag in (
-            compilation.COMPILE_ONLY_ENV,
-            compilation.STRICT_ENV,
-            compilation.DISABLE_CACHE_ENV,
-        ):
-            monkeypatch.delenv(flag, raising=False)
+        monkeypatch.delenv("SGLANG_RBLN_DISABLE_COMPILE_CACHE")
+        monkeypatch.setenv("SGLANG_RBLN_CACHE_DIR", str(tmp_path))
         module = _TinyMlp()
         first = compilation.compile_options(module)
         second = compilation.compile_options(module)
@@ -175,43 +182,34 @@ class TestCompileOptions:
             is not compilation.compile_options(_TinyMlp())["compile_context"]
         )
         assert first["cache_dir"] == str(tmp_path)
-        assert "mega_cache_only" not in first
         assert "mode" not in first
 
-    def test_static_output_switch(self, monkeypatch):
-        monkeypatch.setenv(compilation.STATIC_OUTPUT_ENV, "1")
-        monkeypatch.setenv(compilation.DISABLE_CACHE_ENV, "1")
-        assert compilation.compile_options() == {"use_static_output": True}
-
-    def test_num_devices_switch(self, monkeypatch):
-        monkeypatch.setenv(compilation.NUM_DEVICES_ENV, "4")
-        monkeypatch.setenv(compilation.DISABLE_CACHE_ENV, "1")
-        assert compilation.compile_options() == {"num_devices": 4}
-
     @pytest.mark.parametrize(
-        ("flags", "modes"),
+        ("env", "expected"),
         [
-            ((compilation.COMPILE_ONLY_ENV,), ["compile_only"]),
-            ((compilation.STRICT_ENV,), ["strict"]),
+            ({}, {}),
+            ({"SGLANG_RBLN_STATIC_OUTPUT": "1"}, {"use_static_output": True}),
+            ({"SGLANG_RBLN_NUM_DEVICES": "4"}, {"num_devices": 4}),
+            ({"SGLANG_RBLN_COMPILE_ONLY": "1"}, {"mode": ["compile_only"]}),
+            ({"SGLANG_RBLN_COMPILE_STRICT": "1"}, {"mode": ["strict"]}),
             (
-                (compilation.COMPILE_ONLY_ENV, compilation.STRICT_ENV),
-                ["compile_only", "strict"],
+                {"SGLANG_RBLN_COMPILE_ONLY": "1", "SGLANG_RBLN_COMPILE_STRICT": "1"},
+                {"mode": ["compile_only", "strict"]},
             ),
         ],
-        ids=["compile-only", "strict", "both"],
+        ids=["none", "static-output", "num-devices", "compile-only", "strict", "both"],
     )
-    def test_mode_and_cache_switches(self, monkeypatch, flags, modes):
-        for flag in flags:
-            monkeypatch.setenv(flag, "1")
-        monkeypatch.setenv(compilation.DISABLE_CACHE_ENV, "1")
-        assert compilation.compile_options() == {"mode": modes}
+    def test_switches(self, monkeypatch, env, expected):
+        for name, value in env.items():
+            monkeypatch.setenv(name, value)
+        assert self.switches() == expected
 
 
 @pytest.mark.xfail(not ON_NPU_HOST, reason="no RBLN device nodes on host")
 def test_compiled_module_runs_on_the_npu(monkeypatch, tmp_path):
-    monkeypatch.setenv(compilation.CACHE_DIR_ENV, str(tmp_path))
-    monkeypatch.delenv(compilation.COMPILE_ONLY_ENV, raising=False)
-    monkeypatch.delenv(compilation.DISABLE_CACHE_ENV, raising=False)
+    monkeypatch.setenv("SGLANG_RBLN_CACHE_DIR", str(tmp_path))
+    monkeypatch.delenv("SGLANG_RBLN_COMPILE_ONLY", raising=False)
+    monkeypatch.delenv("SGLANG_RBLN_DISABLE_COMPILE_CACHE", raising=False)
     compilation.ensure_compile_backend()
     module = _TinyMlp().eval().to(torch.bfloat16)
     hidden = torch.randn(4, 64, dtype=torch.bfloat16)
