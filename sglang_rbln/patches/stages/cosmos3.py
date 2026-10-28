@@ -16,7 +16,6 @@ logger = logging.getLogger(__name__)
 STAGES = "sglang.multimodal_gen.runtime.pipelines_core.stages.model_specific_stages"
 HOOK_TARGET = f"{STAGES}.cosmos3.Cosmos3DenoisingStage._maybe_enable_torch_compile"
 DECODE_HOOK_TARGET = f"{STAGES}.cosmos3.Cosmos3DecodingStage._decode_latents"
-GEN_LAYER_CACHE_SIZE_LIMIT = 128
 
 
 HOST_MODULES = ("language_model", "norm_moe_gen")
@@ -33,9 +32,6 @@ def compile_layers(stage, transformer: nn.Module, server_args) -> None:
         cosmos3video.run_on_host(transformer.get_submodule(name))
     if not server_args.enable_torch_compile:
         return
-    torch._dynamo.config.cache_size_limit = max(
-        torch._dynamo.config.cache_size_limit, GEN_LAYER_CACHE_SIZE_LIMIT
-    )
     layernorm.prebuild_qk_norm_rope(transformer.head_dim)
     compile_kwargs = build_torch_compile_kwargs(mode=None, module=transformer)
     compile_kwargs["dynamic"] = False
