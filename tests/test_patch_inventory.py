@@ -127,6 +127,12 @@ PATCH_DEBTS = [
         upstream_fix="let the platform run float32 norms on the host",
     ),
     PatchDebt(
+        patch="models/wanvae",
+        module="sglang.multimodal_gen.runtime.models.vaes.wanvae",
+        upstream_pattern='feat_cache = contextvars.ContextVar("feat_cache"',
+        upstream_fix="keep the Wan feature cache on the module instead of ContextVars",
+    ),
+    PatchDebt(
         patch="stages/flux3_action",
         module=f"{STAGES}.flux3_action",
         upstream_pattern="class Flux3ActionDenoisingStage(PipelineStage):",

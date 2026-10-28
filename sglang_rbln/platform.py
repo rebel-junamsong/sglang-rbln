@@ -104,6 +104,10 @@ class RBLNPlatform(Platform):
         return tensor.device.type == self.device_type
 
     @classmethod
+    def is_amp_supported(cls) -> bool:
+        return True
+
+    @classmethod
     def is_float64_supported(cls) -> bool:
         return not RUNS_ON_DEVICE
 

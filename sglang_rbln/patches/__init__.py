@@ -7,7 +7,7 @@ from sglang_rbln.compilation import residency
 from sglang_rbln.patches.layers import layernorm
 from sglang_rbln.patches.layers.attention import video_sparse_attn
 from sglang_rbln.patches.managers import gpu_worker
-from sglang_rbln.patches.models import cosmos3video, flux3_video_vae, ltx_2
+from sglang_rbln.patches.models import cosmos3video, flux3_video_vae, ltx_2, wanvae
 from sglang_rbln.patches.srt.layers.quantization import fp4_utils
 from sglang_rbln.patches.stages import (
     cosmos3,
@@ -40,6 +40,7 @@ def register() -> None:
     ltx_2_vocoder.register()
     decoding_av.register()
     gpu_worker.register()
+    wanvae.register()
     if device.torch_rbln_available():
         ops_utils.register()
     if device.resident_regions():

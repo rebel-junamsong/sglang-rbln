@@ -266,3 +266,11 @@ def test_device_mode_forbids_silent_compile_fallback(monkeypatch, preset, expect
         monkeypatch.setenv(platform_module.TORCH_RBLN_FALLBACK_ENV, preset)
     RBLNPlatform().init_backend()
     assert os.environ[platform_module.TORCH_RBLN_FALLBACK_ENV] == expected
+
+
+def test_amp_query_traces_without_a_graph_break():
+    torch._dynamo.reset()
+    explained = torch._dynamo.explain(
+        lambda x: x + 1 if RBLNPlatform.is_amp_supported() else x
+    )(torch.ones(1))
+    assert explained.graph_break_count == 0
