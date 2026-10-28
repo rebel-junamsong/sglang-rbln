@@ -32,7 +32,6 @@ def test_entry_points_are_registered():
     for group, (entry_name, entry_value) in expected.items():
         (entry,) = [ep for ep in entry_points(group=group) if ep.name == entry_name]
         assert entry.value == entry_value
-    assert sglang_rbln.ENTRY_POINT_NAME == "rbln"
 
 
 class TestActivate:
@@ -45,7 +44,7 @@ class TestActivate:
         assert sglang_rbln.activate() is None
 
     def test_returns_none_without_the_rebel_distribution(self, monkeypatch):
-        monkeypatch.setattr(device, "_distribution_installed", lambda name: False)
+        monkeypatch.setattr(device, "_module_available", lambda name: False)
         assert sglang_rbln.activate() is None
 
     @pytest.mark.parametrize("npu", NPU_FAMILIES)
@@ -154,6 +153,18 @@ class TestCustomOpDispatch:
 
 
 class TestDeviceQueries:
+    @pytest.mark.parametrize(
+        ("runs_on_device", "communicator"),
+        [(False, "CpuCommunicator"), (True, "DeviceCommunicatorBase")],
+        ids=["host", "device"],
+    )
+    def test_communicator_follows_the_mode(
+        self, monkeypatch, runs_on_device, communicator
+    ):
+        monkeypatch.setattr(platform_module, "RUNS_ON_DEVICE", runs_on_device)
+        resolved = resolve_name(RBLNPlatform.get_device_communicator_cls())
+        assert resolved.__name__ == communicator
+
     def test_attention_backend_is_importable(self):
         backend_cls = resolve_name(RBLNPlatform().get_attn_backend_cls_str())
         assert backend_cls.__name__ == "RBLNSdpaBackend"

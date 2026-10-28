@@ -7,15 +7,12 @@ import os
 import torch
 from sglang.multimodal_gen import envs
 from sglang.multimodal_gen.runtime.platforms import Platform, PlatformEnum
+from sglang.multimodal_gen.runtime.platforms.cpu import CpuPlatform
 
 from sglang_rbln import device
 from sglang_rbln.compilation import backend as compilation
 
 ATTENTION_BACKEND_PATH = "sglang_rbln.layers.attention.backends.sdpa.RBLNSdpaBackend"
-CPU_COMMUNICATOR_PATH = (
-    "sglang.multimodal_gen.runtime.distributed.device_communicators"
-    ".cpu_communicator.CpuCommunicator"
-)
 EXECUTION_MODE = device.execution_mode()
 RUNS_ON_DEVICE = EXECUTION_MODE is device.ExecutionMode.DEVICE
 compilation.ensure_compile_backend()
@@ -136,7 +133,7 @@ class RBLNPlatform(Platform):
     def get_device_communicator_cls(cls) -> str:
         if RUNS_ON_DEVICE:
             return super().get_device_communicator_cls()
-        return CPU_COMMUNICATOR_PATH
+        return CpuPlatform.get_device_communicator_cls()
 
     @classmethod
     def enable_dit_layerwise_offload_by_default(cls) -> bool:

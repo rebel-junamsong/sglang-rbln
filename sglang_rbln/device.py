@@ -31,7 +31,7 @@ def device_nodes() -> list[Path]:
     return sorted(DEVICE_NODE_DIR.glob(DEVICE_NODE_PATTERN))
 
 
-def _distribution_installed(module_name: str) -> bool:
+def _module_available(module_name: str) -> bool:
     try:
         return importlib.util.find_spec(module_name) is not None
     except (ImportError, ValueError):
@@ -41,11 +41,11 @@ def _distribution_installed(module_name: str) -> bool:
 def rbln_available() -> bool:
     if envs.RBLN_FORCE_NPU_NAME:
         return True
-    return _distribution_installed("rebel") and bool(device_nodes())
+    return _module_available("rebel") and bool(device_nodes())
 
 
 def torch_rbln_available() -> bool:
-    return _distribution_installed("torch_rbln")
+    return _module_available("torch_rbln")
 
 
 def execution_mode() -> ExecutionMode:
