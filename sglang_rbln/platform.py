@@ -11,10 +11,12 @@ from sglang.multimodal_gen.runtime.platforms.cpu import CpuPlatform
 
 from sglang_rbln import device
 from sglang_rbln.compilation import backend as compilation
+from sglang_rbln.compilation import residency
 
 ATTENTION_BACKEND_PATH = "sglang_rbln.layers.attention.backends.sdpa.RBLNSdpaBackend"
 EXECUTION_MODE = device.execution_mode()
-RUNS_ON_DEVICE = EXECUTION_MODE is device.ExecutionMode.DEVICE
+RESIDENT_REGIONS = device.resident_regions()
+RUNS_ON_DEVICE = EXECUTION_MODE is device.ExecutionMode.DEVICE and not RESIDENT_REGIONS
 TORCH_RBLN_FALLBACK_ENV = "TORCH_RBLN_DISABLE_FALLBACK"
 TORCH_RBLN_FALLBACK_DEFAULT = "compile_error"
 OFFLOAD_FLAGS = (
@@ -36,9 +38,12 @@ class RBLNPlatform(Platform):
     simple_compile_backend = compilation.COMPILE_BACKEND_NAME
 
     def init_backend(self) -> None:
-        if not RUNS_ON_DEVICE:
+        if not (RUNS_ON_DEVICE or RESIDENT_REGIONS):
             return
         os.environ.setdefault(TORCH_RBLN_FALLBACK_ENV, TORCH_RBLN_FALLBACK_DEFAULT)
+        if RESIDENT_REGIONS:
+            residency.configure_device_group()
+            return
         try:
             import torch_rbln  # noqa: F401
         except ImportError as e:

@@ -62,6 +62,13 @@ def execution_mode() -> ExecutionMode:
     return mode
 
 
+def resident_regions() -> bool:
+    return (
+        execution_mode() is ExecutionMode.DEVICE
+        and (envs.SGLANG_RBLN_NUM_DEVICES or 1) > 1
+    )
+
+
 def npu_name(device_id: int = 0) -> str:
     import rebel
 
