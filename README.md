@@ -26,16 +26,21 @@ uv pip install --index-strategy unsafe-best-match \
   --extra-index-url https://download.pytorch.org/whl/cpu \
   --extra-index-url https://pypi.rbln.ai/simple \
   sglang-rbln
+uv pip install flashinfer-python==0.7.1
 ```
 
 Requires Python 3.11–3.14, an RBLN NPU with its driver, and an account on the
 [RBLN package index](https://docs.rbln.ai/latest/getting_started/installation_guide.html).
 sglang 0.5.21 pins `flashinfer-python==0.6.18`, which asserts a CUDA device at
-import; install `flashinfer-python==0.7.1` on top (it is never used on RBLN).
-For `device` mode add `torch-rbln` built for `torch==2.13.0`.
-The plugin activates itself when an NPU is present; set
-`SGLANG_DIFFUSION_PLATFORM_OVERRIDE=rbln` when several platform plugins are
-installed.
+import; the second command replaces it with 0.7.1, which does not. flashinfer
+is never used on RBLN.
+Install `sglang-rbln[device]` instead to add `torch-rbln` (built for
+`torch==2.13.0`) for `device` execution mode.
+
+The plugin activates itself when an NPU is present, or when
+`RBLN_FORCE_NPU_NAME` names the target NPU (for example `RBLN-CA25`) on a host
+without one. Set `SGLANG_DIFFUSION_PLATFORM_OVERRIDE=rbln` when several platform
+plugins are installed.
 
 ## Quick start
 

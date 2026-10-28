@@ -1,14 +1,15 @@
 [build-system]
-requires = ["setuptools>=64", "setuptools-scm>=8"]
+requires = ["setuptools>=77", "setuptools-scm>=8"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "sglang-rbln"
 dynamic = ["version"]
-description = "Out-of-tree RBLN NPU platform plugin for SGLang Diffusion, backed by torch-rbln."
+description = "Out-of-tree RBLN NPU platform plugin for SGLang Diffusion."
 readme = "README.md"
 requires-python = ">=3.11,<3.15"
-license = { text = "Apache-2.0" }
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 authors = [{ name = "Rebellions Inc.", email = "support@rebellions.ai" }]
 keywords = ["sglang", "diffusion", "rbln", "npu", "torch.compile"]
 classifiers = [
@@ -16,8 +17,8 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
-    "License :: OSI Approved :: Apache Software License",
     "Operating System :: POSIX :: Linux",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
     "sglang[diffusion]==0.5.21",
