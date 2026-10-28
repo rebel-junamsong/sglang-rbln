@@ -88,6 +88,18 @@ def test_dump_graph_round_trips(tmp_path):
     assert torch.load(stem.with_suffix(".state.pt")).keys() == graph.state_dict().keys()
 
 
+def test_dump_graph_drops_process_groups(tmp_path, monkeypatch):
+    lock_type = type(threading.Lock())
+    monkeypatch.setattr(compilation, "_dropped_on_dump", lambda: (lock_type,))
+    graph = torch.fx.symbolic_trace(_TinyMlp())
+    graph.process_group = threading.Lock()
+    stem = compilation.dump_graph(graph, [torch.zeros(2, 64)], tmp_path)
+    module = torch.load(stem.with_suffix(".module.pt"), weights_only=False)
+    assert module.process_group is None
+    hidden = torch.zeros(2, 64)
+    assert torch.equal(module(hidden), graph(hidden))
+
+
 def test_dump_graph_keeps_weights_of_unpicklable_graphs(tmp_path, caplog):
     graph = torch.fx.symbolic_trace(_TinyMlp())
     graph.process_group = threading.Lock()
