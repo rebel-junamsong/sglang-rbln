@@ -5,6 +5,7 @@ import pytest
 import torch
 from torch import nn
 from torch._dynamo import list_backends
+from torch._dynamo.testing import CompileCounter
 
 from sglang_rbln import envs
 from sglang_rbln.compilation import backend as compilation
@@ -23,8 +24,32 @@ class _TinyMlp(nn.Module):
 def test_rebel_backend_is_available():
     compilation.ensure_compile_backend()
     assert "rbln" in list_backends()
-    assert torch._dynamo.config.cache_size_limit >= compilation.DYNAMO_CACHE_SIZE_LIMIT
     assert torch._dynamo.config.automatic_dynamic_shapes is False
+
+
+class _Block(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.proj = nn.Linear(16, 16)
+
+    def forward(self, hidden):
+        return hidden + self.proj(hidden)
+
+
+def test_every_block_compiles_for_every_request_shape():
+    compilation.ensure_compile_backend()
+    torch._dynamo.reset()
+    counter = CompileCounter()
+    blocks = nn.ModuleList(_Block() for _ in range(48))
+    for block in blocks:
+        block.compile(backend=counter, dynamic=False)
+    shapes = range(8, 40, 4)
+    with torch.no_grad():
+        for tokens in shapes:
+            hidden = torch.randn(1, tokens, 16)
+            for block in blocks:
+                hidden = block(hidden)
+    assert counter.frame_count == len(blocks) * len(shapes)
 
 
 def test_describe_graph_lists_ops_and_inputs():

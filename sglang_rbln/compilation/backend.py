@@ -7,6 +7,7 @@ import itertools
 import logging
 import os
 import pickle
+import sys
 import types
 import weakref
 from dataclasses import dataclass, field
@@ -20,7 +21,6 @@ from sglang_rbln import envs
 logger = logging.getLogger(__name__)
 
 COMPILE_BACKEND_NAME = "rbln"
-DYNAMO_CACHE_SIZE_LIMIT = 64
 RUNTIME_REPORT_EVERY = 100
 
 _compile_contexts: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
@@ -264,9 +264,8 @@ def ensure_compile_backend() -> None:
     import rebel.core.torch_compile  # noqa: F401
     from torch._dynamo.backends import registry
 
-    torch._dynamo.config.cache_size_limit = max(
-        torch._dynamo.config.cache_size_limit, DYNAMO_CACHE_SIZE_LIMIT
-    )
+    torch._dynamo.config.recompile_limit = sys.maxsize
+    torch._dynamo.config.accumulated_recompile_limit = sys.maxsize
     torch._dynamo.config.automatic_dynamic_shapes = False
     backend = registry._COMPILER_FNS.get(COMPILE_BACKEND_NAME)
     if backend is None:
