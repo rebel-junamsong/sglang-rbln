@@ -15,6 +15,7 @@ from sglang_rbln.patches.stages import (
     flux3_action_video,
     text_encoding,
 )
+from sglang_rbln.patches.stages.ltx_2 import decoding_av
 from sglang_rbln.patches.stages.ltx_2 import vocoder as ltx_2_vocoder
 from sglang_rbln.patches.torch_rbln import ops_utils
 
@@ -37,6 +38,7 @@ def register() -> None:
     ltx_2.register()
     text_encoding.register()
     ltx_2_vocoder.register()
+    decoding_av.register()
     gpu_worker.register()
     if device.torch_rbln_available():
         ops_utils.register()

@@ -224,6 +224,12 @@ PATCH_DEBTS = [
         ),
         upstream_fix="compile the video VAE blocks like DenoisingStage does",
     ),
+    PatchDebt(
+        patch="stages/ltx_2/decoding_av",
+        module=f"{STAGES}.ltx_2.decoding_av",
+        upstream_pattern="decode_output = vae.decode(latents",
+        upstream_fix="compile the video decoder like DenoisingStage compiles the DiT",
+    ),
     pytest.param(
         PatchDebt(
             patch="torch_rbln/ops_utils",
