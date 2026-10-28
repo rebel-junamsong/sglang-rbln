@@ -55,6 +55,7 @@ def test_compiles_the_decoder_once(stage, compiled):
     assert compiled[0][1]["backend"] == "rbln"
     assert compiled[0][1]["dynamic"] is False
     assert stage.vae.use_framewise_decoding
+    assert compiled[0][1]["options"]["compile_context"].state.use_weight_sharing
 
 
 def test_moves_the_decoder_off_the_first_tensor_parallel_device(
