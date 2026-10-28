@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import importlib
 import itertools
+import operator
 import sys
 from types import ModuleType
 
@@ -284,6 +285,45 @@ class TestCosmos3QkNormRopeHook:
         actual = cosmos3video.split_qk_norm_rope(*args)
         for output, reference in zip(actual, expected, strict=True):
             torch.testing.assert_close(output, reference)
+
+
+class TestCosmos3RopeHook:
+    def test_registers_a_replace_hook(self):
+        assert cosmos3video.ROPE_HOOK_TARGET in cosmos3video.register()
+        assert any(
+            hook is cosmos3video.rope_from_cache
+            for _, hook, _ in HookRegistry._hooks[cosmos3video.ROPE_HOOK_TARGET]
+        )
+
+    @pytest.mark.usefixtures("rbln_platform")
+    @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
+    def test_matches_upstream_bit_for_bit(self, dtype):
+        from sglang.multimodal_gen.runtime.models.dits import cosmos3video as dit
+
+        generator = torch.Generator().manual_seed(0)
+        tokens, head_dim = 6, 128
+        q = torch.randn(1, tokens, 4, head_dim, generator=generator).to(dtype)
+        k = torch.randn(1, tokens, 2, head_dim, generator=generator).to(dtype)
+        cos_sin_cache = torch.randn(tokens, head_dim, generator=generator)
+        expected = dit._apply_qwen3_rope_from_cache(q, k, cos_sin_cache)
+        actual = cosmos3video.rope_from_cache(q, k, cos_sin_cache)
+        for output, reference in zip(actual, expected, strict=True):
+            assert torch.equal(output, reference)
+
+    def test_traces_without_slice_assignment(self):
+        graphs = []
+
+        def backend(graph, example_inputs):
+            graphs.append(graph)
+            return graph
+
+        q, k = torch.randn(1, 6, 4, 128), torch.randn(1, 6, 2, 128)
+        torch.compile(cosmos3video.rope_from_cache, backend=backend, fullgraph=True)(
+            q, k, torch.randn(6, 128)
+        )
+        targets = {node.target for graph in graphs for node in graph.graph.nodes}
+        assert operator.setitem not in targets
+        assert torch.empty_like not in targets
 
 
 class TestCosmos3TextKvHook:

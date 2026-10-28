@@ -106,6 +106,15 @@ PATCH_DEBTS = [
         upstream_fix="return the cached text K/V with one layout on every request",
     ),
     PatchDebt(
+        patch="models/cosmos3video (rope)",
+        module="sglang.multimodal_gen.runtime.models.dits.cosmos3video",
+        upstream_pattern=(
+            "    q_out = torch.empty_like(q)\n"
+            "    q_out[..., :half] = q1 * cos - q2 * sin"
+        ),
+        upstream_fix="build the rotated halves with torch.cat, not slice assignment",
+    ),
+    PatchDebt(
         patch="stages/cosmos3 (final norm)",
         module="sglang.multimodal_gen.runtime.models.dits.cosmos3video",
         upstream_pattern="        hidden_gen = self.norm_moe_gen(hidden_gen)",
