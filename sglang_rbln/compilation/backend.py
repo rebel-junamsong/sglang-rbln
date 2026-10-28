@@ -22,6 +22,7 @@ RUNTIME_REPORTS_ENV = "SGLANG_RBLN_RUNTIME_REPORTS"
 DUMP_GRAPHS_ENV = "SGLANG_RBLN_DUMP_GRAPHS"
 STATIC_OUTPUT_ENV = "SGLANG_RBLN_STATIC_OUTPUT"
 NUM_DEVICES_ENV = "SGLANG_RBLN_NUM_DEVICES"
+CHECK_GRAPHS_ENV = "SGLANG_RBLN_CHECK_GRAPHS"
 RUNTIME_REPORT_EVERY = 100
 CACHE_DIR_ENV = "SGLANG_RBLN_CACHE_DIR"
 DISABLE_CACHE_ENV = "SGLANG_RBLN_DISABLE_COMPILE_CACHE"
@@ -154,6 +155,58 @@ def dump_graph(graph: torch.fx.GraphModule, example_inputs, directory: Path) -> 
     return stem
 
 
+def output_deviation(actual, expected) -> tuple[float, float]:
+    pairs = [
+        (a.detach().cpu().float(), e.detach().cpu().float())
+        for a, e in zip(
+            torch.utils._pytree.tree_leaves(actual),
+            torch.utils._pytree.tree_leaves(expected),
+            strict=True,
+        )
+        if isinstance(a, torch.Tensor) and a.is_floating_point()
+    ]
+    if not pairs:
+        return 0.0, 0.0
+    max_abs = max((a - e).abs().max().item() for a, e in pairs)
+    scale = max(e.abs().max().item() for _, e in pairs) or 1.0
+    return max_abs, max_abs / scale
+
+
+def _checking_callable(compiled, graph: torch.fx.GraphModule, name: str):
+    checked = False
+
+    @functools.wraps(compiled)
+    def run(*args, **kwargs):
+        nonlocal checked
+        outputs = compiled(*args, **kwargs)
+        if not checked:
+            checked = True
+            with torch.no_grad():
+                expected = torch.func.functional_call(
+                    graph,
+                    {
+                        name: tensor.cpu()
+                        for name, tensor in itertools.chain(
+                            graph.named_parameters(), graph.named_buffers()
+                        )
+                    },
+                    tuple(
+                        value.cpu() if isinstance(value, torch.Tensor) else value
+                        for value in args
+                    ),
+                )
+            max_abs, relative = output_deviation(outputs, expected)
+            logger.info(
+                "rbln graph check %s: max abs %.4g, relative to output range %.4g",
+                name,
+                max_abs,
+                relative,
+            )
+        return outputs
+
+    return run
+
+
 def contiguous_device_inputs(args):
     return [
         value.contiguous()
@@ -191,6 +244,10 @@ def _logging_backend(backend):
             for value in example_inputs
         ):
             compiled = _contiguous_callable(compiled)
+        if _env_flag(CHECK_GRAPHS_ENV):
+            compiled = _checking_callable(
+                compiled, graph, describe_graph(graph, example_inputs)
+            )
         if _env_flag(RUNTIME_REPORTS_ENV):
             compiled = _reporting_callable(compiled)
         return compiled

@@ -84,6 +84,35 @@ def test_dump_graph_writes_readable_inputs_and_export(tmp_path):
     assert torch.load(stem.with_suffix(".inputs.pt"))[0].shape == (2, 64)
 
 
+class TestGraphCheck:
+    @pytest.mark.parametrize(
+        ("offset", "expected"),
+        [(0.0, (0.0, 0.0)), (0.5, (0.5, 0.25))],
+        ids=["exact", "shifted"],
+    )
+    def test_output_deviation(self, offset, expected):
+        reference = (torch.tensor([2.0, -1.0]), 3)
+        actual = (reference[0] + offset, 3)
+        assert compilation.output_deviation(actual, reference) == expected
+
+    def test_checks_only_the_first_run(self, caplog):
+        graph = torch.fx.symbolic_trace(_TinyMlp())
+        calls = []
+
+        def compiled(x):
+            calls.append(x)
+            return graph(x) + 1.0
+
+        run = compilation._checking_callable(compiled, graph, "tiny")
+        x = torch.ones(2, 64)
+        with caplog.at_level("INFO", logger=compilation.__name__):
+            run(x)
+            run(x)
+        checks = [r for r in caplog.records if "graph check tiny" in r.message]
+        assert len(calls) == 2 and len(checks) == 1
+        assert "max abs 1" in checks[0].message
+
+
 def test_contiguous_device_inputs_leave_host_tensors_alone():
     cpu_view = torch.zeros(4, 6)[:, ::2]
     plain = torch.zeros(3)
