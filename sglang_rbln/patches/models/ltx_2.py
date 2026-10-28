@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry, HookType
 
-HOOK_TARGET = (
-    "sglang.multimodal_gen.runtime.models.dits.ltx_2"
-    ".LTX2AudioVideoRotaryPosEmbed.forward"
+MODELS = "sglang.multimodal_gen.runtime.models"
+HOOK_TARGETS = (
+    f"{MODELS}.dits.ltx_2.LTX2AudioVideoRotaryPosEmbed.forward",
+    f"{MODELS}.adapter.ltx_2_connector.LTX2RotaryPosEmbed1d.forward",
 )
 
 
@@ -15,6 +16,7 @@ def contiguous_rotary_tables(result, *args, **kwargs):
     return cos.contiguous(), sin.contiguous()
 
 
-def register() -> str:
-    HookRegistry.register(HOOK_TARGET, contiguous_rotary_tables, HookType.AFTER)
-    return HOOK_TARGET
+def register() -> tuple[str, ...]:
+    for target in HOOK_TARGETS:
+        HookRegistry.register(target, contiguous_rotary_tables, HookType.AFTER)
+    return HOOK_TARGETS

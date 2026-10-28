@@ -143,11 +143,12 @@ class TestLtx2RopeHook:
         assert cos.is_contiguous() and sin.is_contiguous()
         assert torch.equal(cos, table.swapaxes(1, 2))
 
-    def test_registers_an_after_hook(self):
-        assert ltx_2.register() == ltx_2.HOOK_TARGET
+    @pytest.mark.parametrize("target", ltx_2.HOOK_TARGETS)
+    def test_registers_an_after_hook(self, target):
+        assert target in ltx_2.register()
         assert any(
             hook is ltx_2.contiguous_rotary_tables and kind is HookType.AFTER
-            for kind, hook, _ in HookRegistry._hooks[ltx_2.HOOK_TARGET]
+            for kind, hook, _ in HookRegistry._hooks[target]
         )
 
 

@@ -67,6 +67,15 @@ PATCH_DEBTS = [
         upstream_fix="return the rotary cos/sin tables contiguous",
     ),
     PatchDebt(
+        patch="models/ltx_2 (connector rope)",
+        module="sglang.multimodal_gen.runtime.models.adapter.ltx_2_connector",
+        upstream_pattern=(
+            "cos_freqs = torch.swapaxes(cos_freq, 1, 2)  # (B,H,T,D//2)\n"
+            "            sin_freqs = torch.swapaxes(sin_freq, 1, 2)  # (B,H,T,D//2)"
+        ),
+        upstream_fix="return the connector rotary cos/sin tables contiguous",
+    ),
+    PatchDebt(
         patch="stages/cosmos3",
         module=f"{STAGES}.cosmos3",
         upstream_pattern='compile_kwargs = {\n                "mode": "default",',
@@ -113,6 +122,18 @@ PATCH_DEBTS = [
         module=f"{STAGES}.flux3_action",
         upstream_pattern="class Flux3ActionObservationEncodingStage(PipelineStage):",
         upstream_fix="compile the DiT blocks before the first stage that runs them",
+    ),
+    PatchDebt(
+        patch="stages/text_encoding",
+        module="sglang.multimodal_gen.runtime.pipelines_core.stages.text_encoding",
+        upstream_pattern="class TextEncodingStage(ConditionEncodingStage):",
+        upstream_fix="compile the text encoder layer stacks like DenoisingStage does",
+    ),
+    PatchDebt(
+        patch="stages/text_encoding (ltx_2 connectors)",
+        module=f"{STAGES}.ltx_2.text_connector",
+        upstream_pattern="class LTX2TextConnectorStage(PipelineStage):",
+        upstream_fix="compile the connector layer stacks like DenoisingStage does",
     ),
     pytest.param(
         PatchDebt(
