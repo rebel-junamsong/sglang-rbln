@@ -64,7 +64,9 @@ def run_on_host(module: nn.Module) -> bool:
                 )
         finally:
             reentered = False
-        return out.to(args[0].device)
+        return torch.utils._pytree.tree_map_only(
+            torch.Tensor, lambda tensor: tensor.to(args[0].device), out
+        )
 
     module.forward = forward
     return True

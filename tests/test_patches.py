@@ -248,3 +248,15 @@ class TestRunOnHost:
         assert out.device.type == "rbln"
         assert torch.equal(out.cpu(), expected)
         assert next(norm.parameters()).device.type == "rbln"
+
+    @pytest.mark.xfail(not RUNS_ON_DEVICE, reason="execution mode is host")
+    def test_nested_outputs_return_to_the_device(self):
+        layers = nn.ModuleList([nn.Linear(8, 8), nn.Linear(8, 8)])
+        layers.forward = lambda hidden: [(layer(hidden), hidden) for layer in layers]
+        hidden = torch.randn(2, 8)
+        expected = layers(hidden)
+        layers.to("rbln:0")
+        assert cosmos3video.run_on_host(layers)
+        out = layers(hidden.to("rbln:0"))
+        assert all(t.device.type == "rbln" for pair in out for t in pair)
+        assert torch.equal(out[1][0].cpu(), expected[1][0])
