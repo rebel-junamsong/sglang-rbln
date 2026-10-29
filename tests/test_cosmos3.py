@@ -154,15 +154,16 @@ class TestVaeDecodePlacement:
         out = cosmos3.place_vae_decode(self.decode_latents, stage, latents)
         assert torch.equal(out, stage.vae(latents))
 
+    @pytest.mark.parametrize("shape", [(3, 4, 6), (2, 5, 7), (1, 3, 9)], ids=str)
     def test_flag_compiles_the_vae_regions_for_host_latents(
-        self, monkeypatch, tiny_wan_vae
+        self, monkeypatch, tiny_wan_vae, shape
     ):
         compiled = []
         monkeypatch.setattr(
             nn.Module, "compile", lambda module, **kwargs: compiled.append(module)
         )
         monkeypatch.setenv("SGLANG_RBLN_COMPILE_VAE", "1")
-        latents = torch.randn(1, 4, 3, 4, 6, generator=torch.Generator().manual_seed(0))
+        latents = torch.randn(1, 4, *shape, generator=torch.Generator().manual_seed(0))
         with torch.no_grad():
             expected = tiny_wan_vae.decode(latents)
             out = cosmos3.place_vae_decode(
@@ -205,6 +206,21 @@ class TestVaeRegions:
         cosmos3.compile_vae_regions(tiny_wan_vae)
         cosmos3.compile_vae_regions(tiny_wan_vae)
         assert compiled == cosmos3.vae_regions(tiny_wan_vae)
+
+    def test_spreads_the_vae_regions_over_the_tensor_parallel_npus(
+        self, monkeypatch, tiny_wan_vae
+    ):
+        options = []
+        monkeypatch.setattr(
+            nn.Module,
+            "compile",
+            lambda module, **kwargs: options.append(kwargs["options"]),
+        )
+        monkeypatch.setenv("SGLANG_RBLN_NUM_DEVICES", "4")
+        cosmos3.compile_vae_regions(tiny_wan_vae)
+        assert len(options) == len(cosmos3.vae_regions(tiny_wan_vae)) > 4
+        assert all(o["num_devices"] == 1 for o in options)
+        assert [o["device"] for o in options] == [i % 4 for i in range(len(options))]
 
     @pytest.mark.device_mode
     @pytest.mark.xfail(

@@ -72,10 +72,14 @@ def compile_vae_regions(vae: nn.Module) -> None:
         return
     compile_kwargs = build_torch_compile_kwargs(mode=None, module=vae)
     compile_kwargs["dynamic"] = False
+    num_devices = compile_kwargs["options"].pop("num_devices", None) or 1
     regions = vae_regions(vae)
     logger.info("Compiling %d VAE regions: %s", len(regions), compile_kwargs)
-    for region in regions:
-        region.compile(**compile_kwargs)
+    for index, region in enumerate(regions):
+        options = compile_kwargs["options"]
+        if num_devices > 1:
+            options = options | {"num_devices": 1, "device": index % num_devices}
+        region.compile(**(compile_kwargs | {"options": options}))
     vae._rbln_regions_compiled = True
 
 
