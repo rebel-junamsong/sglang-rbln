@@ -36,6 +36,10 @@ def _optional(name: str, parse: Callable[[str], Any] = str) -> Callable[[], Any]
     return lambda: parse(value) if (value := os.environ.get(name)) else None
 
 
+def _int(name: str, default: int) -> Callable[[], int]:
+    return lambda: int(os.environ.get(name) or default)
+
+
 environment_variables: dict[str, Callable[[], Any]] = {
     "RBLN_FORCE_NPU_NAME": _optional("RBLN_FORCE_NPU_NAME"),
     "SGLANG_RBLN_EXECUTION_MODE": lambda: (
@@ -55,13 +59,9 @@ environment_variables: dict[str, Callable[[], Any]] = {
     "SGLANG_RBLN_DUMP_GRAPHS": _optional("SGLANG_RBLN_DUMP_GRAPHS", Path),
     "SGLANG_RBLN_RUNTIME_REPORTS": _flag("SGLANG_RBLN_RUNTIME_REPORTS"),
     "SGLANG_RBLN_PROFILE_DIR": _optional("SGLANG_RBLN_PROFILE_DIR", Path),
-    "SGLANG_RBLN_PROFILE_REQUEST": lambda: int(
-        os.environ.get("SGLANG_RBLN_PROFILE_REQUEST") or 3
-    ),
+    "SGLANG_RBLN_PROFILE_REQUEST": _int("SGLANG_RBLN_PROFILE_REQUEST", 3),
     "SGLANG_RBLN_VOCODER_ON_NPU": _flag("SGLANG_RBLN_VOCODER_ON_NPU"),
-    "SGLANG_RBLN_BLOCKS_PER_REGION": lambda: int(
-        os.environ.get("SGLANG_RBLN_BLOCKS_PER_REGION") or 4
-    ),
+    "SGLANG_RBLN_BLOCKS_PER_REGION": _int("SGLANG_RBLN_BLOCKS_PER_REGION", 4),
     "SGLANG_RBLN_FLUX3_ONE_GRAPH": _flag("SGLANG_RBLN_FLUX3_ONE_GRAPH"),
 }
 
