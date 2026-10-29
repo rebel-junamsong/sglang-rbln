@@ -23,6 +23,12 @@ class PatchDebt:
 
 PATCH_DEBTS = [
     PatchDebt(
+        patch="configs/arch_config",
+        module="sglang.multimodal_gen.configs.models.base",
+        upstream_pattern='d = object.__getattribute__(self, "__dict__")',
+        upstream_fix="read extra_attrs through self.__dict__ so dynamo can trace it",
+    ),
+    PatchDebt(
         patch="layers/layernorm",
         module="sglang.multimodal_gen.runtime.layers.layernorm",
         upstream_pattern=(
