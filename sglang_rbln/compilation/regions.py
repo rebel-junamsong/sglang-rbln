@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import contextlib
 import copy
-from collections.abc import Callable, Sequence
+import logging
+from collections.abc import Callable, Iterator, Sequence
 from typing import Any
 
 import torch
 from torch import nn
 
 from sglang_rbln import envs
+
+logger = logging.getLogger(__name__)
 
 HOOK_TARGET = (
     "sglang.multimodal_gen.runtime.utils.torch_compile.compile_matching_submodules"
@@ -72,6 +76,110 @@ class BlockGroup(nn.Module):
             args, kwargs = _fill(args, kwargs, self.slots, values)
             values = _leading(block(*args, **kwargs))
         return _restore(values, len(self.slots))
+
+
+class RegionDoesNotFit(RuntimeError):
+    def __init__(self, needed: list[int], free: list[int]) -> None:
+        super().__init__(f"needs {needed} bytes per node, {free} free")
+        self.needed = needed
+        self.free = free
+
+
+def _node_devices(device: Any, nodes: int) -> list[int]:
+    if isinstance(device, list | tuple):
+        return list(device)
+    return [(device or 0) + node for node in range(nodes)]
+
+
+def check_fits(compiled_model: Any, device: Any = None) -> None:
+    import rebel
+
+    needed = list(compiled_model.get_alloc_per_node())
+    infos = [
+        rebel.get_device_memory_info(index)
+        for index in _node_devices(device, len(needed))
+    ]
+    free = [info.free - info.granularity for info in infos]
+    if any(need > room for need, room in zip(needed, free, strict=True)):
+        raise RegionDoesNotFit(needed, free)
+
+
+@contextlib.contextmanager
+def checking_fit() -> Iterator[None]:
+    try:
+        from rebel import RBLNCompiledModel
+    except ImportError:
+        yield
+        return
+    create_runtime = RBLNCompiledModel.create_runtime
+
+    def checked(compiled_model, *args, **kwargs):
+        check_fits(compiled_model, kwargs.get("device", args[0] if args else None))
+        return create_runtime(compiled_model, *args, **kwargs)
+
+    RBLNCompiledModel.create_runtime = checked
+    try:
+        yield
+    finally:
+        RBLNCompiledModel.create_runtime = create_runtime
+
+
+def _does_not_fit(error: BaseException | None) -> bool:
+    while error is not None:
+        if isinstance(error, RegionDoesNotFit) or "Lack of device memory" in str(error):
+            return True
+        error = getattr(error, "inner_exception", None) or error.__cause__
+    return False
+
+
+class Region:
+    """A compiled group that halves itself when the device cannot hold it."""
+
+    def __init__(self, blocks: Sequence[nn.Module], compile_kwargs: dict) -> None:
+        self.blocks = list(blocks)
+        self.compile_kwargs = compile_kwargs
+        self.group: BlockGroup | None = BlockGroup(self.blocks)
+        self.group.compile(**compile_kwargs)
+        self.parts: list[Region] = []
+        self.loaded = False
+
+    def _split(self, error: BaseException) -> None:
+        half = (len(self.blocks) + 1) // 2
+        logger.warning(
+            "A %d-block region does not fit (%s); splitting it into %d + %d blocks",
+            len(self.blocks),
+            error,
+            half,
+            len(self.blocks) - half,
+        )
+        slots = self.group.slots
+        self.parts = [
+            Region(self.blocks[:half], self.compile_kwargs),
+            Region(self.blocks[half:], self.compile_kwargs),
+        ]
+        for part in self.parts:
+            part.group.slots = slots
+        self.group = None
+
+    def __call__(self, values: tuple, calls: list[tuple[tuple, dict]]) -> Any:
+        if self.parts:
+            output = None
+            for part in self.parts:
+                output = part(values, calls[: len(part.blocks)])
+                values, calls = _leading(output), calls[len(part.blocks) :]
+            return output
+        if self.loaded:
+            return self.group(values, calls)
+        try:
+            with checking_fit():
+                output = self.group(values, calls)
+        except Exception as error:
+            if len(self.blocks) == 1 or not _does_not_fit(error):
+                raise
+            self._split(error)
+            return self(values, calls)
+        self.loaded = True
+        return output
 
 
 class DeferredBlock:
@@ -146,24 +254,24 @@ def _consecutive_runs(
 
 
 def group_blocks(
-    blocks: Sequence[nn.Module], size: int, compile_kwargs: dict
-) -> list[BlockGroup]:
+    blocks: Sequence[nn.Module], size: int | None, compile_kwargs: dict
+) -> list[Region]:
+    size = size or len(blocks)
     groups = []
     for start in range(0, len(blocks), size):
         members = list(blocks[start : start + size])
         if len(members) == 1:
             members[0].compile(**compile_kwargs)
             continue
-        group = BlockGroup([copy.copy(member) for member in members])
-        group.compile(**compile_kwargs)
+        region = Region([copy.copy(member) for member in members], compile_kwargs)
         state: dict[str, Any] = {
             "calls": [],
-            "compiled": group,
+            "compiled": region,
             "eager": [member.forward for member in members],
         }
         for index, member in enumerate(members):
-            member.forward = DeferredBlock(group, index, state)
-        groups.append(group)
+            member.forward = DeferredBlock(region.group, index, state)
+        groups.append(region)
     return groups
 
 
@@ -171,7 +279,7 @@ def compile_block_groups(
     compile_matching_submodules: Callable, module: nn.Module, *, compile_kwargs: dict
 ) -> int:
     size = envs.SGLANG_RBLN_BLOCKS_PER_REGION
-    if size <= 1:
+    if size == 1:
         return compile_matching_submodules(module, compile_kwargs=compile_kwargs)
     conditions = getattr(module, "_compile_conditions", ())
     matches = [

@@ -53,7 +53,7 @@ def test_values_are_parsed(monkeypatch, name, value, expected):
         ("SGLANG_RBLN_EXECUTION_MODE", "auto"),
         ("SGLANG_RBLN_PROFILE_DIR", None),
         ("SGLANG_RBLN_PROFILE_REQUEST", 3),
-        ("SGLANG_RBLN_BLOCKS_PER_REGION", 4),
+        ("SGLANG_RBLN_BLOCKS_PER_REGION", None),
         ("SGLANG_RBLN_CACHE_DIR", Path.home() / ".cache" / "sglang_rbln"),
     ],
 )

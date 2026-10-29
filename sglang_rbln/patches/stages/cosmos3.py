@@ -42,7 +42,7 @@ def compile_layers(stage, transformer: nn.Module, server_args) -> None:
     logger.info(
         "Compiling %d Cosmos3 gen_layers, %d per region: %s",
         len(layers),
-        size,
+        size or len(layers),
         compile_kwargs,
     )
     regions.group_blocks(layers, size, compile_kwargs)

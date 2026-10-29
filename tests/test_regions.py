@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -107,7 +108,7 @@ def test_grouped_blocks_match_eager(monkeypatch, graphs, size):
     assert len(captured) == count
 
 
-def test_default_groups_four_blocks(monkeypatch, graphs):
+def test_default_compiles_each_block_list_as_one_region(monkeypatch, graphs):
     monkeypatch.delenv("SGLANG_RBLN_BLOCKS_PER_REGION", raising=False)
     captured, compile_kwargs = graphs
     model = Model().eval()
@@ -117,8 +118,8 @@ def test_default_groups_four_blocks(monkeypatch, graphs):
         )
         for _ in range(2):
             model(torch.randn(2, 8))
-    assert count == 2
-    assert len(captured) == 2
+    assert count == 1
+    assert len(captured) == 1
 
 
 @pytest.mark.parametrize("size", [2, 4, 6])
@@ -188,3 +189,136 @@ def test_registers_an_around_hook():
         hook is regions.compile_block_groups
         for _, hook, _ in HookRegistry._hooks[regions.HOOK_TARGET]
     )
+
+
+BLOCK_BYTES = 100
+
+
+def _blocks_in(graph: torch.fx.GraphModule) -> int:
+    return sum(node.target is torch.tanh for node in graph.graph.nodes)
+
+
+@pytest.fixture
+def device_memory(monkeypatch):
+    import rebel
+
+    queried = []
+    free = {"bytes": 0}
+
+    def get_device_memory_info(index):
+        queried.append(index)
+        return SimpleNamespace(free=free["bytes"], granularity=BLOCK_BYTES // 10)
+
+    monkeypatch.setattr(rebel, "get_device_memory_info", get_device_memory_info)
+    return free, queried
+
+
+@pytest.fixture
+def sized_graphs(device_memory):
+    free, _ = device_memory
+    sizes = []
+
+    def backend(graph, example_inputs):
+        blocks = _blocks_in(graph)
+        sizes.append(blocks)
+        compiled = SimpleNamespace(get_alloc_per_node=lambda: [blocks * BLOCK_BYTES])
+        regions.check_fits(compiled)
+        return graph
+
+    return free, sizes, {"backend": backend, "dynamic": False}
+
+
+def _grouped_run(model, compile_kwargs):
+    x = torch.randn(2, 8)
+    with torch.no_grad():
+        expected = model(x)
+        regions.compile_block_groups(
+            _plain_compile, model, compile_kwargs=compile_kwargs
+        )
+        outputs = [model(x) for _ in range(2)]
+    for output in outputs:
+        torch.testing.assert_close(output, expected)
+
+
+@pytest.mark.parametrize(
+    ("room", "sizes", "splits"),
+    [
+        pytest.param(4, [4], 0, id="fits"),
+        pytest.param(2, [4, 2, 2], 1, id="one-halving"),
+        pytest.param(1, [4, 2, 1, 1, 2, 1, 1], 3, id="halved-to-one"),
+    ],
+)
+def test_region_halves_until_the_device_holds_it(
+    monkeypatch, sized_graphs, caplog, room, sizes, splits
+):
+    monkeypatch.delenv("SGLANG_RBLN_BLOCKS_PER_REGION", raising=False)
+    free, compiled, compile_kwargs = sized_graphs
+    free["bytes"] = room * BLOCK_BYTES + BLOCK_BYTES // 10
+    torch.manual_seed(0)
+    _grouped_run(Model(depth=4).eval(), compile_kwargs)
+    assert compiled == sizes
+    logged = [r for r in caplog.records if "does not fit" in r.getMessage()]
+    assert len(logged) == splits
+
+
+def test_load_time_out_of_memory_halves_the_region(monkeypatch):
+    monkeypatch.delenv("SGLANG_RBLN_BLOCKS_PER_REGION", raising=False)
+    sizes = []
+
+    def backend(graph, example_inputs):
+        sizes.append(_blocks_in(graph))
+        if sizes[-1] > 2:
+            raise RuntimeError("Lack of device memory, key=Kernel")
+        return graph
+
+    torch.manual_seed(0)
+    _grouped_run(Model(depth=4).eval(), {"backend": backend, "dynamic": False})
+    assert sizes == [4, 2, 2]
+
+
+def test_a_block_that_never_fits_raises(monkeypatch, sized_graphs):
+    monkeypatch.delenv("SGLANG_RBLN_BLOCKS_PER_REGION", raising=False)
+    free, compiled, compile_kwargs = sized_graphs
+    free["bytes"] = BLOCK_BYTES // 2
+    model = Model(depth=2).eval()
+    regions.compile_block_groups(_plain_compile, model, compile_kwargs=compile_kwargs)
+    with torch.no_grad():
+        model(torch.randn(2, 8))
+        with pytest.raises(Exception, match="free"):
+            model(torch.randn(2, 8))
+    assert compiled == [2, 1]
+
+
+def test_other_compile_errors_do_not_split(monkeypatch):
+    monkeypatch.delenv("SGLANG_RBLN_BLOCKS_PER_REGION", raising=False)
+    sizes = []
+
+    def backend(graph, example_inputs):
+        sizes.append(_blocks_in(graph))
+        raise RuntimeError("unsupported operator")
+
+    model = Model(depth=4).eval()
+    regions.compile_block_groups(
+        _plain_compile, model, compile_kwargs={"backend": backend, "dynamic": False}
+    )
+    with torch.no_grad():
+        model(torch.randn(2, 8))
+        with pytest.raises(Exception, match="unsupported operator"):
+            model(torch.randn(2, 8))
+    assert sizes == [4]
+
+
+def test_runtime_creation_checks_every_node_it_loads_on(device_memory):
+    import rebel
+
+    free, queried = device_memory
+    free["bytes"] = 3 * BLOCK_BYTES
+    original = rebel.RBLNCompiledModel.create_runtime
+    compiled = SimpleNamespace(
+        get_alloc_per_node=lambda: [BLOCK_BYTES, 4 * BLOCK_BYTES]
+    )
+    with regions.checking_fit(), pytest.raises(regions.RegionDoesNotFit) as error:
+        rebel.RBLNCompiledModel.create_runtime(compiled, device=2)
+    assert queried == [2, 3]
+    assert error.value.needed == [BLOCK_BYTES, 4 * BLOCK_BYTES]
+    assert rebel.RBLNCompiledModel.create_runtime is original
