@@ -53,8 +53,8 @@ class _VAE(nn.Module):
 
 
 @pytest.fixture
-def config() -> Flux3ActionPipelineConfig:
-    return Flux3ActionPipelineConfig()
+def config(request) -> Flux3ActionPipelineConfig:
+    return Flux3ActionPipelineConfig(**getattr(request, "param", {}))
 
 
 @pytest.fixture
@@ -114,6 +114,23 @@ def test_loads_the_decoder_in_float32(config):
     assert vae.model.decoder.weight.dtype == torch.float32
 
 
+@pytest.mark.parametrize(
+    "config",
+    [
+        pytest.param({}, id="droid"),
+        pytest.param({"camera_layout": "single"}, id="default-canvas"),
+        pytest.param(
+            {"camera_layout": "single", "canvas_hw": (480, 352)}, id="portrait"
+        ),
+        pytest.param(
+            {"camera_layout": "single", "canvas_hw": (352, 640)}, id="landscape"
+        ),
+        pytest.param(
+            {"camera_layout": "single", "canvas_hw": (500, 370)}, id="unaligned"
+        ),
+    ],
+    indirect=True,
+)
 def test_decodes_observed_then_denoised_latents_in_float32(config, latents):
     frames = video.decode_video(config)
     h, w = config.latent_hw
