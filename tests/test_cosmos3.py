@@ -207,6 +207,11 @@ class TestVaeRegions:
         assert compiled == cosmos3.vae_regions(tiny_wan_vae)
 
     @pytest.mark.device_mode
+    @pytest.mark.xfail(
+        strict=True,
+        reason="rebel: a Wan VAE region gets a device-memory physical view "
+        "without a device-resident addr_info",
+    )
     def test_flag_decodes_on_the_npu(self, monkeypatch, tiny_wan_vae):
         from sglang.multimodal_gen.runtime.models.vaes import wanvae as upstream
 
