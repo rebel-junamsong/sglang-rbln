@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     SGLANG_RBLN_COMPILE_STRICT: bool = True
     SGLANG_RBLN_STATIC_OUTPUT: bool = False
     SGLANG_RBLN_NUM_DEVICES: int | None = None
+    SGLANG_RBLN_COMPONENT_DEVICES: dict[str, tuple[int, ...]] = {}
     SGLANG_RBLN_COMPILE_VAE: bool = False
     SGLANG_RBLN_CHECK_GRAPHS: bool = False
     SGLANG_RBLN_LOG_GRAPHS: bool = False
@@ -40,6 +41,15 @@ def _optional(name: str, parse: Callable[[str], Any] = str) -> Callable[[], Any]
     return lambda: parse(value) if (value := os.environ.get(name)) else None
 
 
+def _component_devices(value: str) -> dict[str, tuple[int, ...]]:
+    return {
+        name.strip(): tuple(int(index) for index in devices.split(","))
+        for entry in value.split(";")
+        if entry.strip()
+        for name, devices in [entry.split("=")]
+    }
+
+
 def _int(name: str, default: int) -> Callable[[], int]:
     return lambda: int(os.environ.get(name) or default)
 
@@ -57,6 +67,9 @@ environment_variables: dict[str, Callable[[], Any]] = {
     "SGLANG_RBLN_COMPILE_STRICT": _flag("SGLANG_RBLN_COMPILE_STRICT", default=True),
     "SGLANG_RBLN_STATIC_OUTPUT": _flag("SGLANG_RBLN_STATIC_OUTPUT"),
     "SGLANG_RBLN_NUM_DEVICES": _optional("SGLANG_RBLN_NUM_DEVICES", int),
+    "SGLANG_RBLN_COMPONENT_DEVICES": lambda: _component_devices(
+        os.environ.get("SGLANG_RBLN_COMPONENT_DEVICES", "")
+    ),
     "SGLANG_RBLN_COMPILE_VAE": _flag("SGLANG_RBLN_COMPILE_VAE"),
     "SGLANG_RBLN_CHECK_GRAPHS": _flag("SGLANG_RBLN_CHECK_GRAPHS"),
     "SGLANG_RBLN_LOG_GRAPHS": _flag("SGLANG_RBLN_LOG_GRAPHS"),

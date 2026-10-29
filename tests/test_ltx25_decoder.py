@@ -9,6 +9,7 @@ from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry
 from torch import nn
 
 from sglang_rbln.compilation import backend as compilation
+from sglang_rbln.compilation import placement
 from sglang_rbln.patches.stages.ltx_2 import decoding_av
 
 pytestmark = pytest.mark.usefixtures("rbln_platform")
@@ -67,6 +68,18 @@ def test_moves_the_decoder_off_the_first_tensor_parallel_device(
     decoding_av.compile_video_decoder(decode_video, stage, batch, server_args)
     options = compiled[0][1]["options"]
     assert (options["num_devices"], options["device"]) == (1, 3)
+
+
+def test_decoder_keeps_the_devices_declared_for_its_component(
+    stage, compiled, monkeypatch
+):
+    monkeypatch.setenv("SGLANG_RBLN_NUM_DEVICES", "4")
+    placement.place(stage.vae.decoder, (7,))
+    batch = SimpleNamespace(use_diffusion_decoder=False)
+    server_args = SimpleNamespace(enable_torch_compile=True)
+    decoding_av.compile_video_decoder(decode_video, stage, batch, server_args)
+    options = compiled[0][1]["options"]
+    assert (options["num_devices"], options["device"]) == (1, [7])
 
 
 @pytest.mark.parametrize(

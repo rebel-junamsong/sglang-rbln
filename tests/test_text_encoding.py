@@ -198,3 +198,77 @@ def test_capture_hooks_stay_out_of_compiled_layers(monkeypatch, declared):
     assert len(actual) == len(expected) == len(model.layers) + 1
     for output, reference in zip(actual, expected, strict=True):
         assert torch.equal(output, reference)
+
+
+def _tokenizer():
+    from tokenizers import Tokenizer, models, pre_tokenizers
+    from transformers import PreTrainedTokenizerFast
+
+    words = ["<pad>", "<bos>", "<eos>", "<unk>", *(f"w{i}" for i in range(124))]
+    backend = Tokenizer(
+        models.WordLevel({word: i for i, word in enumerate(words)}, unk_token="<unk>")
+    )
+    backend.pre_tokenizer = pre_tokenizers.Whitespace()
+    return PreTrainedTokenizerFast(
+        tokenizer_object=backend,
+        pad_token="<pad>",
+        bos_token="<bos>",
+        eos_token="<eos>",
+        unk_token="<unk>",
+    )
+
+
+def _prompt(words: int) -> str:
+    return " ".join(f"w{i % 124}" for i in range(words))
+
+
+@pytest.mark.parametrize("caption_proj_before_connector", [False, True])
+def test_encoder_regions_match_eager_at_one_shape_for_any_prompt_length(
+    monkeypatch, caption_proj_before_connector
+):
+    from sglang.multimodal_gen.configs.pipeline_configs import ltx_2
+
+    graphs = []
+
+    def backend(graph, example_inputs):
+        graphs.append(tuple(tuple(value.shape) for value in example_inputs))
+        return graph
+
+    monkeypatch.setattr(
+        torch_compile,
+        "build_torch_compile_kwargs",
+        lambda **kwargs: {"backend": backend},
+    )
+    config = ltx_2.LTX2PipelineConfig()
+    monkeypatch.setattr(
+        config.dit_config.arch_config,
+        "caption_proj_before_connector",
+        caption_proj_before_connector,
+    )
+    tokenizer = _tokenizer()
+    torch.manual_seed(0)
+    model = _tiny_gemma().to(torch.bfloat16)
+
+    def encode(prompt: str, max_length: int) -> torch.Tensor:
+        text_inputs = config.tokenize_prompt(
+            [prompt], tokenizer, {"max_length": max_length}
+        )
+        outputs = model(
+            input_ids=text_inputs["input_ids"],
+            attention_mask=config.get_text_encoder_attention_mask(text_inputs, 0),
+            output_hidden_states=True,
+        )
+        return ltx_2._gemma_postprocess_func(outputs, text_inputs, config)
+
+    requests = [(_prompt(words), 32) for words in (0, 1, 7, 31, 40)]
+    requests.append((_prompt(11), 48))
+    with torch.no_grad():
+        expected = [encode(*request) for request in requests]
+        torch._dynamo.reset()
+        text_encoding.compile_regions(model)
+        actual = [encode(*request) for request in requests]
+    for output, reference in zip(actual, expected, strict=True):
+        assert torch.equal(output, reference)
+    unpadded = model.config.layer_types.count("full_attention")
+    assert len(graphs) == 2 * len(model.layers) + unpadded
+    assert {shape[0] for shape in graphs} == {(1, 32, 64), (1, 48, 64)}

@@ -32,8 +32,9 @@ def compile_video_decoder(forward, stage, batch, server_args, *args, **kwargs):
         compile_kwargs["options"]["compile_context"] = CompileContext(
             use_weight_sharing=True
         )
-        if num_devices := compile_kwargs["options"].get("num_devices"):
-            compile_kwargs["options"] |= {"num_devices": 1, "device": num_devices - 1}
+        options = compile_kwargs["options"]
+        if "device" not in options and (num_devices := options.get("num_devices")):
+            options |= {"num_devices": 1, "device": num_devices - 1}
         vae.decoder.compile(**compile_kwargs)
         vae.use_framewise_decoding = True
         setattr(vae, COMPILED, True)

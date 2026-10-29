@@ -17,7 +17,7 @@ from typing import Any
 import torch
 
 from sglang_rbln import envs
-from sglang_rbln.compilation import shapes
+from sglang_rbln.compilation import placement, shapes
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +48,10 @@ def compile_options(module: torch.nn.Module) -> dict[str, Any]:
         options["cache_dir"] = str(envs.SGLANG_RBLN_CACHE_DIR)
     if envs.SGLANG_RBLN_STATIC_OUTPUT:
         options["use_static_output"] = True
-    if num_devices := envs.SGLANG_RBLN_NUM_DEVICES:
+    if devices := placement.devices_of(module):
+        options["device"] = list(devices)
+        options["num_devices"] = len(devices)
+    elif num_devices := envs.SGLANG_RBLN_NUM_DEVICES:
         options["num_devices"] = num_devices
     return options
 

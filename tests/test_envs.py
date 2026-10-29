@@ -33,6 +33,11 @@ def test_compile_strict_is_on_unless_turned_off(monkeypatch, value, expected):
     ("name", "value", "expected"),
     [
         ("SGLANG_RBLN_NUM_DEVICES", "4", 4),
+        (
+            "SGLANG_RBLN_COMPONENT_DEVICES",
+            "text_encoder=4,5,6,7; vae=8;",
+            {"text_encoder": (4, 5, 6, 7), "vae": (8,)},
+        ),
         ("SGLANG_RBLN_DUMP_GRAPHS", "/tmp/graphs", Path("/tmp/graphs")),
         ("SGLANG_RBLN_EXECUTION_MODE", " Device ", "device"),
         ("SGLANG_RBLN_PROFILE_DIR", "/tmp/trace", Path("/tmp/trace")),
@@ -49,6 +54,7 @@ def test_values_are_parsed(monkeypatch, name, value, expected):
     [
         ("RBLN_FORCE_NPU_NAME", None),
         ("SGLANG_RBLN_NUM_DEVICES", None),
+        ("SGLANG_RBLN_COMPONENT_DEVICES", {}),
         ("SGLANG_RBLN_DUMP_GRAPHS", None),
         ("SGLANG_RBLN_EXECUTION_MODE", "auto"),
         ("SGLANG_RBLN_PROFILE_DIR", None),

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from sglang_rbln import device
-from sglang_rbln.compilation import regions, residency
+from sglang_rbln.compilation import placement, regions, residency
 from sglang_rbln.patches import ffmpeg_spawn
 from sglang_rbln.patches.configs import arch_config
 from sglang_rbln.patches.layers import layernorm
@@ -37,6 +37,7 @@ def register() -> None:
     if current_platform.device_name != "rbln":
         return
     arch_config.register()
+    placement.register()
     video_sparse_attn.register()
     regions.register()
     fp4_utils.register()
