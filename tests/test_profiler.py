@@ -22,7 +22,7 @@ def window(monkeypatch):
         state.active = False
 
     monkeypatch.setattr(rebel.profiler, "profile", profile)
-    monkeypatch.setattr(gpu_worker, "request_counter", itertools.count(1))
+    monkeypatch.setattr(gpu_worker, "_request_counter", itertools.count(1))
     return state
 
 

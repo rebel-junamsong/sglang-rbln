@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 HOOK_TARGET = (
     "sglang.multimodal_gen.runtime.managers.gpu_worker.GPUWorker.execute_forward"
 )
-request_counter = itertools.count(1)
+_request_counter = itertools.count(1)
 
 
 def profile_request(execute_forward, worker, batch, *args, **kwargs):
@@ -22,7 +22,7 @@ def profile_request(execute_forward, worker, batch, *args, **kwargs):
     if (
         directory is None
         or any(req.is_warmup for req in batch)
-        or next(request_counter) != envs.SGLANG_RBLN_PROFILE_REQUEST
+        or next(_request_counter) != envs.SGLANG_RBLN_PROFILE_REQUEST
     ):
         return execute_forward(worker, batch, *args, **kwargs)
     from rebel.profiler import profile
