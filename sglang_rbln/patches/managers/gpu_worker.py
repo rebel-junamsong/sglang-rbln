@@ -8,6 +8,7 @@ import logging
 from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry, HookType
 
 from sglang_rbln import envs
+from sglang_rbln.compilation import shapes
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,17 @@ def profile_request(execute_forward, worker, batch, *args, **kwargs):
     return result
 
 
+def key_request_shape(execute_forward, worker, batch, *args, **kwargs):
+    token = shapes.current_shape_key.set(
+        shapes.shape_key(worker.pipeline, worker.server_args.pipeline_config, batch[0])
+    )
+    try:
+        return execute_forward(worker, batch, *args, **kwargs)
+    finally:
+        shapes.current_shape_key.reset(token)
+
+
 def register() -> str:
+    HookRegistry.register(HOOK_TARGET, key_request_shape, HookType.AROUND)
     HookRegistry.register(HOOK_TARGET, profile_request, HookType.AROUND)
     return HOOK_TARGET

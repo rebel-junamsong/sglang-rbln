@@ -17,6 +17,7 @@ from typing import Any
 import torch
 
 from sglang_rbln import envs
+from sglang_rbln.compilation import shapes
 
 logger = logging.getLogger(__name__)
 
@@ -245,7 +246,11 @@ def _instrumented_backend(backend):
     @functools.wraps(backend)
     def wrapped(graph, example_inputs, *args, **kwargs):
         if envs.SGLANG_RBLN_LOG_GRAPHS:
-            logger.info("rbln graph: %s", describe_graph(graph, example_inputs))
+            logger.info(
+                "rbln graph for %s: %s",
+                shapes.current_shape_key.get(),
+                describe_graph(graph, example_inputs),
+            )
         if dump_dir := envs.SGLANG_RBLN_DUMP_GRAPHS:
             logger.info(
                 "rbln graph dumped to %s", dump_graph(graph, example_inputs, dump_dir)
