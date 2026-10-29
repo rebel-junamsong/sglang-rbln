@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from sglang_rbln import device
 from sglang_rbln.compilation import regions, residency
+from sglang_rbln.patches import ffmpeg_spawn
 from sglang_rbln.patches.configs import arch_config
 from sglang_rbln.patches.layers import layernorm
 from sglang_rbln.patches.layers.attention import video_sparse_attn
@@ -52,6 +53,7 @@ def register() -> None:
     ltx_2_vocoder.register()
     decoding_av.register()
     gpu_worker.register()
+    ffmpeg_spawn.register()
     wanvae.register()
     if device.torch_rbln_available():
         ops_utils.register()
