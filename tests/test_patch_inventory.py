@@ -73,6 +73,12 @@ PATCH_DEBTS = [
         upstream_fix="return the rotary cos/sin tables contiguous",
     ),
     PatchDebt(
+        patch="models/ltx_2 (fused ada values)",
+        module="sglang.multimodal_gen.runtime.models.dits.ltx_2",
+        upstream_pattern="or not current_platform.tensor_on_device(timestep)",
+        upstream_fix="gate the Triton ada-values kernel on Triton, not on the device",
+    ),
+    PatchDebt(
         patch="models/ltx_2 (connector rope)",
         module="sglang.multimodal_gen.runtime.models.adapter.ltx_2_connector",
         upstream_pattern=(

@@ -164,6 +164,15 @@ class TestLtx2RopeHook:
             for kind, hook, _ in HookRegistry._hooks[target]
         )
 
+    def test_replaces_the_triton_ada_values_kernel(self):
+        assert ltx_2.FUSED_ADA_VALUES in ltx_2.register()
+        assert any(
+            hook is ltx_2.without_triton_ada_values and kind is HookType.REPLACE
+            for kind, hook, _ in HookRegistry._hooks[ltx_2.FUSED_ADA_VALUES]
+        )
+        table = torch.zeros(9, 256, dtype=torch.bfloat16)
+        assert ltx_2.without_triton_ada_values(table, 1, table.view(1, 1, -1)) is None
+
 
 class TestTorchRblnPromotion:
     REAL_DTYPES = (
