@@ -33,11 +33,12 @@ from sglang_rbln.patches.stages import flux3_action_step as step
 
 
 @pytest.fixture
-def config():
+def config(request):
+    canvas_hw, horizon = getattr(request, "param", ((64, 96), 4))
     config = Flux3ActionPipelineConfig()
     config.camera_layout = "grid"
-    config.canvas_hw = (64, 96)
-    config.action_horizon = 4
+    config.canvas_hw = canvas_hw
+    config.action_horizon = horizon
     config.action_dim = config.state_dim = 3
     return config
 
@@ -141,6 +142,16 @@ def assert_same(actual, expected):
         torch.testing.assert_close(a, e, atol=0, rtol=0)
 
 
+@pytest.mark.parametrize(
+    "config",
+    [
+        pytest.param(((64, 96), 4), id="landscape"),
+        pytest.param(((96, 64), 4), id="portrait"),
+        pytest.param(((80, 48), 7), id="unaligned"),
+        pytest.param(((32, 64), 4), id="one-latent-row"),
+    ],
+    indirect=True,
+)
 @torch.no_grad()
 def test_backport_matches_the_installed_forwards(
     config, model, observation_stage, denoising_stage, server_args
