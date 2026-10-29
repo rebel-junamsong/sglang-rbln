@@ -1,10 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Each FLUX 3 Action DiT entry point traces as one graph.
-
-The platform compiles the text context encoder, the conditioning stream encoder
-and a whole denoise step with fullgraph=True; a graph break anywhere in the
-transformer or the stage helpers fails here before it fails a serve.
-"""
+from __future__ import annotations
 
 import functools
 from types import SimpleNamespace

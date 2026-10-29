@@ -1,5 +1,4 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Neighborhood attention as tiled, masked SDPA over static gathers."""
 
 from __future__ import annotations
 
@@ -24,7 +23,6 @@ class AxisTiles(NamedTuple):
 def axis_tiles(
     length: int, kernel: int, causal: bool, size: int, device: torch.device
 ) -> AxisTiles:
-    """Query tiles of one axis, the key halo of each tile, and the window mask."""
     kernel, size = min(kernel, length), min(size, length)
     span = min(size + kernel - 1, length)
     count = -(-length // size)
@@ -88,7 +86,6 @@ def neighborhood_attention(
     is_causal: Sequence[bool] | None = None,
     tile_size: Sequence[int] | None = None,
 ) -> torch.Tensor:
-    """NATTEN ``na2d`` / ``na3d`` on ``(B, *grid, heads, head_dim)``."""
     batch, *grid, heads, _ = q.shape
     causal = list(is_causal or [False] * len(grid))
     sizes = list(tile_size or default_tile_size(len(grid)))
