@@ -22,8 +22,6 @@ from torch import nn
 
 from sglang_rbln.patches.stages import flux3_action_video as video
 
-LATENT_FRAMES = 3
-
 
 class _Decoder(nn.Module):
     def __init__(self):
@@ -62,13 +60,19 @@ def config() -> Flux3ActionPipelineConfig:
 @pytest.fixture
 def latents(config):
     h, w = config.latent_hw
+    latent_frames = 3
     vae = _VAE()
     vae.model.decoder.float()
     observation = torch.randn(1, 96, 1, h + 1, w + 1, dtype=torch.bfloat16)
-    predicted = torch.randn(1, LATENT_FRAMES * h * w, 96)
+    predicted = torch.randn(1, latent_frames * h * w, 96)
     video.keep_observation_latent(observation, vae, None)
     video.keep_denoised_video({"video": predicted, "action": None}, None)
-    return SimpleNamespace(vae=vae, observation=observation, predicted=predicted)
+    return SimpleNamespace(
+        vae=vae,
+        observation=observation,
+        predicted=predicted,
+        num_frames=1 + 4 * latent_frames,
+    )
 
 
 def _output() -> OutputBatch:
@@ -128,11 +132,7 @@ def test_decodes_observed_then_denoised_latents_in_float32(config, latents):
     torch.testing.assert_close(decoded, normalized * std + mean, rtol=0, atol=0)
     assert not torch.equal(decoded, stats.denormalize(normalized))
     assert frames.dtype == torch.uint8
-    assert tuple(frames.shape) == (
-        1 + 4 * LATENT_FRAMES,
-        *video.content_hw(config),
-        3,
-    )
+    assert tuple(frames.shape) == (latents.num_frames, *video.content_hw(config), 3)
 
 
 def test_feeds_a_compiled_bfloat16_decoder_its_own_dtype(config, latents):
@@ -151,7 +151,7 @@ def test_attaches_an_mp4_when_requested(config, latents):
         "type": "video",
         "format": "mp4",
         "fps": config.fps,
-        "shape": [1 + 4 * LATENT_FRAMES, *video.content_hw(config), 3],
+        "shape": [latents.num_frames, *video.content_hw(config), 3],
     }
     frames = iio.imread(
         io.BytesIO(base64.b64decode(clip["b64_json"])), extension=".mp4"
