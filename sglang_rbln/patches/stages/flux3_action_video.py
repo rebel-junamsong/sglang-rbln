@@ -16,10 +16,11 @@ import torch
 from einops import rearrange
 from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry, HookType
 
+from sglang_rbln.patches.stages.flux3_action import STAGES as FLUX3_STAGES
+
 PROTOCOL = "sglang.multimodal_gen.runtime.entrypoints.action.protocol"
 API = "sglang.multimodal_gen.runtime.entrypoints.action.api"
 STAGES = "sglang.multimodal_gen.runtime.pipelines_core.stages"
-FLUX3_STAGES = f"{STAGES}.model_specific_stages.flux3_action"
 PIPELINE = "sglang.multimodal_gen.runtime.pipelines.flux3_action.Flux3ActionPipeline"
 VAE = "sglang.multimodal_gen.runtime.models.vaes.flux3_video_vae.Flux3VideoVAE"
 

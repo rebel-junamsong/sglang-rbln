@@ -75,9 +75,9 @@ def forward(stage, batch, server_args):
 def test_hooks_every_stage_that_runs_the_dit():
     targets = flux3_action.register()
     assert targets == (
-        flux3_action.HOOK_TARGET,
-        flux3_action.OBSERVATION_HOOK_TARGET,
-        flux3_action.TEXT_HOOK_TARGET,
+        flux3_action.DENOISE_TARGET,
+        flux3_action.OBSERVATION_TARGET,
+        flux3_action.TEXT_TARGET,
     )
     for target in targets:
         hooks = [hook for _, hook, _ in HookRegistry._hooks[target]]

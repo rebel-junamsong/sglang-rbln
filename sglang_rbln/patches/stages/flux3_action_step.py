@@ -11,13 +11,12 @@ from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry, HookTy
 
 from sglang_rbln import envs
 from sglang_rbln.patches.models.flux3 import Flux3SegmentState
-
-STAGES = (
-    "sglang.multimodal_gen.runtime.pipelines_core.stages.model_specific_stages"
-    ".flux3_action"
+from sglang_rbln.patches.stages.flux3_action import (
+    DENOISE_TARGET,
+    OBSERVATION_TARGET,
+    STAGES,
 )
-OBSERVATION_TARGET = f"{STAGES}.Flux3ActionObservationEncodingStage.forward"
-DENOISE_TARGET = f"{STAGES}.Flux3ActionDenoisingStage.forward"
+
 _STATE_TENSORS = 6
 
 

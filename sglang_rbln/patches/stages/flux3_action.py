@@ -16,9 +16,9 @@ STAGES = (
     "sglang.multimodal_gen.runtime.pipelines_core.stages.model_specific_stages"
     ".flux3_action"
 )
-HOOK_TARGET = f"{STAGES}.Flux3ActionDenoisingStage.forward"
-OBSERVATION_HOOK_TARGET = f"{STAGES}.Flux3ActionObservationEncodingStage.forward"
-TEXT_HOOK_TARGET = f"{STAGES}.Flux3ActionTextEncodingStage.forward"
+TEXT_TARGET = f"{STAGES}.Flux3ActionTextEncodingStage.forward"
+OBSERVATION_TARGET = f"{STAGES}.Flux3ActionObservationEncodingStage.forward"
+DENOISE_TARGET = f"{STAGES}.Flux3ActionDenoisingStage.forward"
 COMPILED = "_rbln_blocks_compiled"
 GRAPH_METHODS = {
     "Flux3ActionTextEncodingStage": ("transformer", "encode_context"),
@@ -61,7 +61,7 @@ def compile_dit(forward, stage, batch, server_args):
 
 
 def register() -> tuple[str, ...]:
-    targets = (HOOK_TARGET, OBSERVATION_HOOK_TARGET, TEXT_HOOK_TARGET)
+    targets = (DENOISE_TARGET, OBSERVATION_TARGET, TEXT_TARGET)
     for target in targets:
         HookRegistry.register(target, compile_dit, HookType.AROUND)
     return targets
