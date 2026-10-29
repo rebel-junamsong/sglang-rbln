@@ -97,6 +97,17 @@ def test_compiled_rotary_tables_stay_float32(vae, compiled):
     assert vae.model.decoder.proj.weight.dtype == torch.bfloat16
 
 
+def test_compiles_the_vae_on_the_last_tensor_parallel_npu(vae, compiled, monkeypatch):
+    monkeypatch.setenv("SGLANG_RBLN_NUM_DEVICES", "4")
+    flux3_video_vae.compile_regions(
+        vae, SimpleNamespace(enable_torch_compile=True), None
+    )
+    assert compiled
+    for _, kwargs in compiled:
+        assert kwargs["options"]["num_devices"] == 1
+        assert kwargs["options"]["device"] == 3
+
+
 def test_keeps_the_float32_decoder_without_compile(vae, compiled):
     server_args = SimpleNamespace(enable_torch_compile=False)
     flux3_video_vae.compile_regions(vae, server_args, None)

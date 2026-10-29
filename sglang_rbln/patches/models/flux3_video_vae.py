@@ -52,6 +52,8 @@ def compile_regions(vae, server_args, config):
     float32_rotary_tables(vae)
     compile_kwargs = build_torch_compile_kwargs(mode=None, module=vae)
     compile_kwargs["dynamic"] = False
+    if num_devices := compile_kwargs["options"].get("num_devices"):
+        compile_kwargs["options"] |= {"num_devices": 1, "device": num_devices - 1}
     compiled = [region for coder in coders for region in regions(coder)]
     for region in compiled:
         region.compile(**compile_kwargs)
