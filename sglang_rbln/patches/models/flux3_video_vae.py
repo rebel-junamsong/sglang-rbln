@@ -30,16 +30,6 @@ def regions(module: nn.Module) -> Iterator[nn.Module]:
             yield child
 
 
-def float32_rotary_tables(vae: nn.Module) -> None:
-    from sglang.multimodal_gen.runtime.models.vaes.flux3_video_vae import (
-        RotaryPositionEmbedding3D,
-    )
-
-    for module in vae.modules():
-        if isinstance(module, RotaryPositionEmbedding3D):
-            module.inv_freq = module.inv_freq.float()
-
-
 def decoder_region_inputs(decoder, latents):
     with torch.no_grad(), FakeTensorMode(allow_non_fake_inputs=True) as mode:
         x = mode.from_tensor(latents).permute(0, 2, 3, 4, 1).contiguous()
@@ -69,7 +59,6 @@ def compile_regions(vae, server_args, config):
         return vae
     if vae.model.decoder is not None:
         vae.model.decoder.to(torch.bfloat16)
-    float32_rotary_tables(vae)
     compile_kwargs = build_torch_compile_kwargs(mode=None, module=vae)
     compile_kwargs["dynamic"] = False
     num_devices = compile_kwargs["options"].pop("num_devices", None) or 1
