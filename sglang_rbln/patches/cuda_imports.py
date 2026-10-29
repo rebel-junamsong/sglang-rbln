@@ -4,7 +4,18 @@ from __future__ import annotations
 
 import importlib
 import sys
-from importlib.abc import MetaPathFinder
+from importlib.abc import Loader, MetaPathFinder
+from importlib.machinery import ModuleSpec
+
+
+class _BlockedLoader(Loader):
+    def create_module(self, spec):
+        raise ModuleNotFoundError(
+            f"{spec.name} needs a CUDA device; blocked on rbln", name=spec.name
+        )
+
+    def exec_module(self, module):
+        pass
 
 
 class _BlockedImportFinder(MetaPathFinder):
@@ -13,7 +24,7 @@ class _BlockedImportFinder(MetaPathFinder):
 
     def find_spec(self, fullname, path=None, target=None):
         if fullname.partition(".")[0] in self.modules:
-            raise ImportError(f"{fullname} needs a CUDA device; blocked on rbln")
+            return ModuleSpec(fullname, _BlockedLoader())
         return None
 
 

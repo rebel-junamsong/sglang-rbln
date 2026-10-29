@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 import importlib
+import importlib.util
 import itertools
 import operator
 import sys
@@ -101,6 +102,8 @@ class TestCudaImportGuard:
         assert patch.register()
         with pytest.raises(ImportError, match="blocked on rbln"):
             importlib.import_module(blocked)
+        assert importlib.util.find_spec(blocked) is not None
+        assert blocked not in sys.modules
         assert patch.register()
         finders = [
             f for f in sys.meta_path if isinstance(f, cuda_imports._BlockedImportFinder)
