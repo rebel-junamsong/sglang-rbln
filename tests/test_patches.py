@@ -4,7 +4,8 @@ import importlib.util
 import itertools
 import operator
 import sys
-from types import ModuleType
+from functools import partial
+from types import ModuleType, SimpleNamespace
 
 import pytest
 import torch
@@ -234,6 +235,90 @@ class TestCosmos3TimestepEmbedderHook:
         out = cosmos3video.embed_timesteps_on_host(self.forward, embedder, t)
         assert out.device.type == "rbln"
         assert torch.equal(out.cpu(), expected)
+
+
+@pytest.mark.usefixtures("rbln_platform")
+class TestRopePositionIds:
+    model = SimpleNamespace(
+        temporal_margin=15,
+        base_fps=24.0,
+        temporal_compression_factor=4,
+        sound_latent_fps=25.0,
+        temporal_compression_factor_sound=1,
+    )
+
+    @staticmethod
+    def upstream(model, *args, **kwargs):
+        from sglang.multimodal_gen.runtime.models.dits import cosmos3video as dit
+
+        return dit.Cosmos3OmniTransformer._compute_rope_position_ids(
+            model, *args, **kwargs
+        )
+
+    @staticmethod
+    def text_mask(lengths: list[int], width: int) -> torch.Tensor:
+        return (torch.arange(width) < torch.tensor(lengths).view(-1, 1)).long()
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            {"T": 6, "fps": None},
+            {"T": 6, "fps": 16.0},
+            {"T": 1, "fps": 16.0},
+            {"T": 4, "fps": 30.0, "control_frames": [2, 0, 3]},
+            {
+                "T": 4,
+                "fps": 24.0,
+                "control_frames": 2,
+                "share_vision_temporal_positions": False,
+            },
+            {
+                "T": 2,
+                "fps": None,
+                "Wp": 64,
+                "control_frames": 2,
+                "share_vision_temporal_positions": False,
+            },
+            {"T": 5, "fps": 10.0, "action_frames": 17, "action_fps": 10.0},
+            {"T": 5, "fps": 16.0, "sound_frames": 9},
+        ],
+        ids=[
+            "no-fps",
+            "fps",
+            "image",
+            "controls",
+            "chained",
+            "wide",
+            "action",
+            "sound",
+        ],
+    )
+    def test_matches_the_upstream_positions(self, kwargs):
+        text_mask = self.text_mask([5, 9, 1], 11)
+        args = (
+            text_mask,
+            kwargs.pop("T"),
+            3,
+            kwargs.pop("Wp", 5),
+            kwargs.pop("fps"),
+            torch.device("cpu"),
+        )
+        expected = self.upstream(self.model, *args, **kwargs)
+        actual = cosmos3video.rope_position_ids(self.model, *args, **kwargs)
+        for got, want in zip(actual, expected, strict=True):
+            assert got.dtype == want.dtype
+            torch.testing.assert_close(got, want, rtol=0, atol=0)
+
+    def test_traces_into_one_graph(self):
+        text_mask = self.text_mask([5, 9], 11)
+        kwargs = {"Hp": 3, "Wp": 5, "fps": 16.0, "device": torch.device("cpu")}
+        upstream = partial(self.upstream, self.model, T=6, **kwargs)
+        hooked = partial(cosmos3video.rope_position_ids, self.model, T=6, **kwargs)
+        torch._dynamo.reset()
+        assert torch._dynamo.explain(upstream)(text_mask).graph_break_count > 0
+        compiled = torch.compile(hooked, backend="eager", fullgraph=True)
+        for got, want in zip(compiled(text_mask), upstream(text_mask), strict=True):
+            torch.testing.assert_close(got, want, rtol=0, atol=0)
 
 
 class TestRunOnHost:

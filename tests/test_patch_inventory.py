@@ -121,6 +121,12 @@ PATCH_DEBTS = [
         upstream_fix="build the rotated halves with torch.cat, not slice assignment",
     ),
     PatchDebt(
+        patch="models/cosmos3video (position ids)",
+        module="sglang.multimodal_gen.runtime.models.dits.cosmos3video",
+        upstream_pattern="            real_len = int(text_lengths[b].item())",
+        upstream_fix="compute the mRoPE offsets as tensors instead of with .item()",
+    ),
+    PatchDebt(
         patch="stages/cosmos3 (final norm)",
         module="sglang.multimodal_gen.runtime.models.dits.cosmos3video",
         upstream_pattern="        hidden_gen = self.norm_moe_gen(hidden_gen)",
