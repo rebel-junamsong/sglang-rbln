@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from collections.abc import Callable, Sequence
 from typing import Any
 
@@ -32,7 +33,7 @@ class BlockGroup(nn.Module):
     def forward(self, leading: tuple, calls: list[tuple[tuple, dict]]) -> Any:
         output: Any = leading
         for block, (rest, kwargs) in zip(self.blocks, calls, strict=True):
-            output = type(block).forward(block, *_leading(output), *rest, **kwargs)
+            output = block(*_leading(output), *rest, **kwargs)
         return output
 
 
@@ -100,7 +101,7 @@ def group_blocks(
         if len(members) == 1:
             members[0].compile(**compile_kwargs)
             continue
-        group = BlockGroup(members)
+        group = BlockGroup([copy.copy(member) for member in members])
         group.compile(**compile_kwargs)
         state: dict[str, Any] = {
             "calls": [],

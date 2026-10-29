@@ -10,6 +10,8 @@ from torch import nn
 
 from sglang_rbln.compilation import regions
 
+pytestmark = pytest.mark.usefixtures("rbln_platform")
+
 
 class Block(nn.Module):
     def __init__(self, width: int) -> None:
