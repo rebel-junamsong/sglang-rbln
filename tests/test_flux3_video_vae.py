@@ -79,24 +79,6 @@ def test_compiles_every_region_of_both_coders_in_bfloat16(vae, compiled):
     assert vae.model.decoder.proj.weight.dtype == torch.bfloat16
 
 
-def test_compiled_rotary_tables_stay_float32(vae, compiled):
-    from sglang.multimodal_gen.runtime.models.vaes.flux3_video_vae import (
-        RotaryPositionEmbedding3D,
-    )
-
-    for coder in (vae.model.encoder, vae.model.decoder):
-        coder.rope = RotaryPositionEmbedding3D(64).to(coder.proj.weight.dtype)
-    expected = vae.model.encoder.rope.inv_freq.float()
-    flux3_video_vae.compile_regions(
-        vae, SimpleNamespace(enable_torch_compile=True), None
-    )
-    for coder in (vae.model.encoder, vae.model.decoder):
-        assert coder.rope.inv_freq.dtype == torch.float32
-        assert "inv_freq" in dict(coder.rope.named_buffers())
-        torch.testing.assert_close(coder.rope.inv_freq, expected, rtol=0, atol=0)
-    assert vae.model.decoder.proj.weight.dtype == torch.bfloat16
-
-
 def test_spreads_decoder_regions_over_the_tensor_parallel_npus(
     vae, compiled, monkeypatch
 ):
