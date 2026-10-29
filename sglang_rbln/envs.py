@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     SGLANG_RBLN_CACHE_DIR: Path = Path("~/.cache/sglang_rbln").expanduser()
     SGLANG_RBLN_DISABLE_COMPILE_CACHE: bool = False
     SGLANG_RBLN_COMPILE_ONLY: bool = False
-    SGLANG_RBLN_COMPILE_STRICT: bool = False
+    SGLANG_RBLN_COMPILE_STRICT: bool = True
     SGLANG_RBLN_STATIC_OUTPUT: bool = False
     SGLANG_RBLN_NUM_DEVICES: int | None = None
     SGLANG_RBLN_COMPILE_VAE: bool = False
@@ -28,8 +28,12 @@ if TYPE_CHECKING:
     SGLANG_RBLN_FLUX3_ONE_GRAPH: bool = False
 
 
-def _flag(name: str) -> Callable[[], bool]:
-    return lambda: os.environ.get(name, "").strip().lower() in ("1", "true", "yes")
+def _flag(name: str, default: bool = False) -> Callable[[], bool]:
+    def parse() -> bool:
+        value = os.environ.get(name, "").strip().lower()
+        return value in ("1", "true", "yes") if value else default
+
+    return parse
 
 
 def _optional(name: str, parse: Callable[[str], Any] = str) -> Callable[[], Any]:
@@ -50,7 +54,7 @@ environment_variables: dict[str, Callable[[], Any]] = {
     ).expanduser(),
     "SGLANG_RBLN_DISABLE_COMPILE_CACHE": _flag("SGLANG_RBLN_DISABLE_COMPILE_CACHE"),
     "SGLANG_RBLN_COMPILE_ONLY": _flag("SGLANG_RBLN_COMPILE_ONLY"),
-    "SGLANG_RBLN_COMPILE_STRICT": _flag("SGLANG_RBLN_COMPILE_STRICT"),
+    "SGLANG_RBLN_COMPILE_STRICT": _flag("SGLANG_RBLN_COMPILE_STRICT", default=True),
     "SGLANG_RBLN_STATIC_OUTPUT": _flag("SGLANG_RBLN_STATIC_OUTPUT"),
     "SGLANG_RBLN_NUM_DEVICES": _optional("SGLANG_RBLN_NUM_DEVICES", int),
     "SGLANG_RBLN_COMPILE_VAE": _flag("SGLANG_RBLN_COMPILE_VAE"),

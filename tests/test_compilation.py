@@ -219,7 +219,7 @@ class TestCompileOptions:
             is not compilation.compile_options(_TinyMlp())["compile_context"]
         )
         assert first["cache_dir"] == str(tmp_path)
-        assert "mode" not in first
+        assert first["mode"] == ["strict"]
 
     def test_context_shares_weights_across_graphs(self):
         context = compilation.compile_options(_TinyMlp())["compile_context"]
@@ -228,17 +228,27 @@ class TestCompileOptions:
     @pytest.mark.parametrize(
         ("env", "expected"),
         [
-            ({}, {}),
-            ({"SGLANG_RBLN_STATIC_OUTPUT": "1"}, {"use_static_output": True}),
-            ({"SGLANG_RBLN_NUM_DEVICES": "4"}, {"num_devices": 4}),
-            ({"SGLANG_RBLN_COMPILE_ONLY": "1"}, {"mode": ["compile_only"]}),
-            ({"SGLANG_RBLN_COMPILE_STRICT": "1"}, {"mode": ["strict"]}),
+            ({}, {"mode": ["strict"]}),
+            ({"SGLANG_RBLN_COMPILE_STRICT": "0"}, {}),
             (
-                {"SGLANG_RBLN_COMPILE_ONLY": "1", "SGLANG_RBLN_COMPILE_STRICT": "1"},
-                {"mode": ["compile_only", "strict"]},
+                {"SGLANG_RBLN_STATIC_OUTPUT": "1"},
+                {"mode": ["strict"], "use_static_output": True},
             ),
+            ({"SGLANG_RBLN_NUM_DEVICES": "4"}, {"mode": ["strict"], "num_devices": 4}),
+            (
+                {"SGLANG_RBLN_COMPILE_ONLY": "1", "SGLANG_RBLN_COMPILE_STRICT": "0"},
+                {"mode": ["compile_only"]},
+            ),
+            ({"SGLANG_RBLN_COMPILE_ONLY": "1"}, {"mode": ["compile_only", "strict"]}),
         ],
-        ids=["none", "static-output", "num-devices", "compile-only", "strict", "both"],
+        ids=[
+            "strict-by-default",
+            "fallback-allowed",
+            "static-output",
+            "num-devices",
+            "compile-only",
+            "both",
+        ],
     )
     def test_switches(self, monkeypatch, env, expected):
         for name, value in env.items():

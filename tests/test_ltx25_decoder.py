@@ -87,7 +87,6 @@ def test_leaves_the_decoder_eager(
 @pytest.mark.npu
 def test_video_decoder_runs_on_the_npu(caplog, monkeypatch, tmp_path):
     monkeypatch.setenv("SGLANG_RBLN_CACHE_DIR", str(tmp_path))
-    monkeypatch.setenv("SGLANG_RBLN_COMPILE_STRICT", "1")
     compilation.ensure_compile_backend()
     torch.manual_seed(0)
     decoder = (

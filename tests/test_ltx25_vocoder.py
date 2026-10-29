@@ -112,7 +112,6 @@ def small_bwe_vocoder() -> LTX2Vocoder:
 @pytest.mark.npu
 def test_vocoder_runs_on_the_npu(caplog, monkeypatch, tmp_path):
     monkeypatch.setenv("SGLANG_RBLN_CACHE_DIR", str(tmp_path))
-    monkeypatch.setenv("SGLANG_RBLN_COMPILE_STRICT", "1")
     compilation.ensure_compile_backend()
     torch.manual_seed(0)
     model = small_bwe_vocoder()

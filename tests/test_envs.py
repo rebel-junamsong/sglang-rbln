@@ -12,7 +12,20 @@ from sglang_rbln import envs
     [("1", True), ("true", True), (" YES ", True), ("0", False), ("", False)],
 )
 def test_flags_accept_truthy_spellings(monkeypatch, value, expected):
-    monkeypatch.setenv("SGLANG_RBLN_COMPILE_STRICT", value)
+    monkeypatch.setenv("SGLANG_RBLN_LOG_GRAPHS", value)
+    assert envs.SGLANG_RBLN_LOG_GRAPHS is expected
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [(None, True), ("", True), ("1", True), ("0", False), (" false ", False)],
+    ids=["unset", "empty", "on", "off", "spelled-off"],
+)
+def test_compile_strict_is_on_unless_turned_off(monkeypatch, value, expected):
+    if value is None:
+        monkeypatch.delenv("SGLANG_RBLN_COMPILE_STRICT", raising=False)
+    else:
+        monkeypatch.setenv("SGLANG_RBLN_COMPILE_STRICT", value)
     assert envs.SGLANG_RBLN_COMPILE_STRICT is expected
 
 

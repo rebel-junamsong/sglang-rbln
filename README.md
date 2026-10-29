@@ -91,7 +91,7 @@ covers the full request options for both models.
 | `SGLANG_RBLN_NUM_DEVICES=4` | compile every graph for tensor parallelism over that many NPUs (rebel `num_devices`) |
 | `SGLANG_RBLN_COMPILE_VAE=1` | also compile the video VAE for the NPU: FLUX 3 Action, and Cosmos3 with one graph per Wan VAE block, each compiled for a single NPU and spread over the tensor-parallel NPUs (needs rebel-compiler with rebellions-sw/rebel_compiler#14989); it otherwise runs on the host |
 | `SGLANG_RBLN_COMPILE_ONLY=1` | compile the graphs and stop before running them |
-| `SGLANG_RBLN_COMPILE_STRICT=1` | fail a request whose graph cannot be compiled instead of running it on the host |
+| `SGLANG_RBLN_COMPILE_STRICT=0` | let a graph that fails to compile run on the host instead of failing the request (strict is on by default, so a compile failure is never silently timed as NPU work) |
 | `SGLANG_RBLN_LOG_GRAPHS=1` | log every graph handed to the compiler |
 | `SGLANG_RBLN_DUMP_GRAPHS=<dir>` | write each graph (readable FX and example inputs) to `<dir>` |
 | `SGLANG_RBLN_RUNTIME_REPORTS=1` | log the runtime's device / host-op / buffer-prep time split every 100 graph runs |
