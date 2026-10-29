@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from sglang_rbln import device
-from sglang_rbln.compilation import residency
+from sglang_rbln.compilation import regions, residency
 from sglang_rbln.patches.layers import layernorm
 from sglang_rbln.patches.layers.attention import video_sparse_attn
 from sglang_rbln.patches.managers import gpu_worker
@@ -28,6 +28,7 @@ def register() -> None:
     if current_platform.device_name != "rbln":
         return
     video_sparse_attn.register()
+    regions.register()
     fp4_utils.register()
     layernorm.register()
     cosmos3.register()
