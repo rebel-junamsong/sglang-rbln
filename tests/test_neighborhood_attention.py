@@ -24,6 +24,12 @@ def flex_reference():
         ((1, 33, 40), [5, 5, 5], [True, False, False], None),
         ((17, 20), [5, 5], None, None),
         ((5, 7), [5, 5], None, [5, 7]),
+        ((1, 17, 23), [5, 5, 5], [True, False, False], None),
+        ((2, 34, 40), [5, 5, 5], [True, False, False], None),
+        ((4, 46, 34), [5, 5, 5], [True, False, False], None),
+        ((13, 15, 11), [5, 5, 5], [True, False, False], None),
+        ((17, 23), [5, 5], None, None),
+        ((47, 33), [5, 5], None, None),
     ],
     ids=str,
 )
