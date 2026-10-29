@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import copy
 import dataclasses
+import importlib
 import tempfile
 import threading
 import time
@@ -28,8 +29,6 @@ OBSERVATION_TARGET = f"{VAE}.encode_frame"
 SAMPLER_TARGET = f"{FLUX3_STAGES}.cosmos_unipc"
 POSTPROCESS_TARGET = f"{STAGES}.vla.VLAActionPostprocessStage.forward"
 RESPONSE_TARGET = f"{API}.action_generation_response"
-
-DROID_CONTENT_HW = (540, 640)
 
 _latents = threading.local()
 
@@ -58,7 +57,9 @@ def keep_denoised_video(samples: dict[str, torch.Tensor], *args, **kwargs):
 
 
 def content_hw(config) -> tuple[int, int]:
-    return DROID_CONTENT_HW if config.camera_layout == "droid" else config.canvas_hw
+    if config.camera_layout == "droid":
+        return importlib.import_module(FLUX3_STAGES).DROID_COMPOSITE_HW
+    return config.canvas_hw
 
 
 def decode_video(config) -> torch.Tensor:
