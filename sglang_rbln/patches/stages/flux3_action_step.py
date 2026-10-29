@@ -17,8 +17,6 @@ from sglang_rbln.patches.stages.flux3_action import (
     STAGES,
 )
 
-_STATE_TENSORS = 6
-
 
 def _state_tensors(state: Flux3SegmentState) -> tuple[torch.Tensor, ...]:
     return (state.hidden, state.rope, state.vec, *state.joint_mod)
@@ -36,10 +34,9 @@ def _state_from_tensors(
 def _states_from_tensors(
     names: list[str], tensors: tuple[torch.Tensor, ...]
 ) -> list[Flux3SegmentState]:
+    stride = len(tensors) // len(names)
     return [
-        _state_from_tensors(
-            name, tensors[i * _STATE_TENSORS : (i + 1) * _STATE_TENSORS]
-        )
+        _state_from_tensors(name, tensors[i * stride : (i + 1) * stride])
         for i, name in enumerate(names)
     ]
 
