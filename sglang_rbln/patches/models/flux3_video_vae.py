@@ -8,6 +8,7 @@ from collections.abc import Iterator
 import torch
 from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry, HookType
 from torch import nn
+from torch._subclasses.fake_tensor import FakeTensorMode
 
 from sglang_rbln import envs
 from sglang_rbln.layers.attention.neighborhood import neighborhood_attention
@@ -39,6 +40,26 @@ def float32_rotary_tables(vae: nn.Module) -> None:
             module.inv_freq = module.inv_freq.float()
 
 
+def decoder_region_inputs(decoder, latents):
+    with torch.no_grad(), FakeTensorMode(allow_non_fake_inputs=True) as mode:
+        x = mode.from_tensor(latents).permute(0, 2, 3, 4, 1).contiguous()
+        inputs = []
+        for region in [decoder.proj_in, *regions(decoder.features), decoder.proj_out]:
+            inputs.append((region, x.shape, x.dtype))
+            x = region.forward(x)
+    return inputs
+
+
+def compile_largest_first(decoder, args):
+    (latents,) = args
+    if latents.shape in decoder.compiled_shapes:
+        return
+    with torch.no_grad():
+        for region, shape, dtype in reversed(decoder_region_inputs(decoder, latents)):
+            region(torch.zeros(shape, dtype=dtype))
+    decoder.compiled_shapes.add(latents.shape)
+
+
 def compile_regions(vae, server_args, config):
     from sglang.multimodal_gen.runtime.utils.torch_compile import (
         build_torch_compile_kwargs,
@@ -46,18 +67,27 @@ def compile_regions(vae, server_args, config):
 
     if not server_args.enable_torch_compile:
         return vae
-    coders = [c for c in (vae.model.encoder, vae.model.decoder) if c is not None]
     if vae.model.decoder is not None:
         vae.model.decoder.to(torch.bfloat16)
     float32_rotary_tables(vae)
     compile_kwargs = build_torch_compile_kwargs(mode=None, module=vae)
     compile_kwargs["dynamic"] = False
-    if num_devices := compile_kwargs["options"].get("num_devices"):
-        compile_kwargs["options"] |= {"num_devices": 1, "device": num_devices - 1}
-    compiled = [region for coder in coders for region in regions(coder)]
-    for region in compiled:
-        region.compile(**compile_kwargs)
-    logger.info("Compiling %d FLUX 3 video VAE regions", len(compiled))
+    num_devices = compile_kwargs["options"].pop("num_devices", None) or 1
+    placements = [
+        (region, 0) for region in regions(vae.model.encoder or nn.Module())
+    ] + [
+        (region, index % num_devices)
+        for index, region in enumerate(regions(vae.model.decoder or nn.Module()))
+    ]
+    for region, device in placements:
+        options = compile_kwargs["options"]
+        if num_devices > 1:
+            options = options | {"num_devices": 1, "device": device}
+        region.compile(**(compile_kwargs | {"options": options}))
+    if vae.model.decoder is not None:
+        vae.model.decoder.compiled_shapes = set()
+        vae.model.decoder.register_forward_pre_hook(compile_largest_first)
+    logger.info("Compiling %d FLUX 3 video VAE regions", len(placements))
     return vae
 
 

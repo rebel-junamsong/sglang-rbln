@@ -97,15 +97,20 @@ def test_compiled_rotary_tables_stay_float32(vae, compiled):
     assert vae.model.decoder.proj.weight.dtype == torch.bfloat16
 
 
-def test_compiles_the_vae_on_the_last_tensor_parallel_npu(vae, compiled, monkeypatch):
-    monkeypatch.setenv("SGLANG_RBLN_NUM_DEVICES", "4")
+def test_spreads_decoder_regions_over_the_tensor_parallel_npus(
+    vae, compiled, monkeypatch
+):
+    monkeypatch.setenv("SGLANG_RBLN_NUM_DEVICES", "2")
     flux3_video_vae.compile_regions(
         vae, SimpleNamespace(enable_torch_compile=True), None
     )
-    assert compiled
-    for _, kwargs in compiled:
-        assert kwargs["options"]["num_devices"] == 1
-        assert kwargs["options"]["device"] == 3
+    encoder = list(flux3_video_vae.regions(vae.model.encoder))
+    devices = {id(module): kwargs["options"]["device"] for module, kwargs in compiled}
+    assert all(kwargs["options"]["num_devices"] == 1 for _, kwargs in compiled)
+    assert [devices[id(region)] for region in encoder] == [0] * len(encoder)
+    assert [
+        devices[id(region)] for region in flux3_video_vae.regions(vae.model.decoder)
+    ] == [0, 1, 0, 1]
 
 
 def test_keeps_the_float32_decoder_without_compile(vae, compiled):
@@ -113,3 +118,43 @@ def test_keeps_the_float32_decoder_without_compile(vae, compiled):
     flux3_video_vae.compile_regions(vae, server_args, None)
     assert compiled == []
     assert vae.model.decoder.proj.weight.dtype == torch.float32
+
+
+def test_compiles_the_decoder_regions_largest_first(monkeypatch):
+    from sglang.multimodal_gen.runtime.models.vaes import flux3_video_vae as upstream
+
+    monkeypatch.setattr(upstream, "neighborhood_attention", neighborhood_attention)
+
+    decoder = upstream.DecoderSwin3D(
+        z_ch=4,
+        patch_size=[1, 2, 2],
+        embed_dim=8,
+        depths=[1, 1],
+        temporal=[True, False],
+        num_heads=[1, 1],
+        window_size=[3, 3, 3],
+        max_t=3,
+    ).eval()
+    calls = []
+    order = [
+        decoder.proj_in,
+        *flux3_video_vae.regions(decoder.features),
+        decoder.proj_out,
+    ]
+    for region in order:
+        region.register_forward_pre_hook(
+            lambda module, args: calls.append((module, args[0].shape))
+        )
+    decoder.compiled_shapes = set()
+    decoder.register_forward_pre_hook(flux3_video_vae.compile_largest_first)
+    latents = torch.randn(1, 4, 4, 4, 4)
+
+    with torch.no_grad():
+        decoder(latents)
+        warmup, decode = calls[: len(order)], calls[len(order) :]
+        calls.clear()
+        decoder(latents)
+
+    assert [module for module, _ in decode] == order
+    assert warmup == decode[::-1]
+    assert calls == decode
