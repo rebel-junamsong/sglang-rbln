@@ -24,7 +24,7 @@ if TYPE_CHECKING:
     SGLANG_RBLN_PROFILE_DIR: Path | None = None
     SGLANG_RBLN_PROFILE_REQUEST: int = 3
     SGLANG_RBLN_VOCODER_ON_NPU: bool = False
-    SGLANG_RBLN_BLOCKS_PER_REGION: int = 1
+    SGLANG_RBLN_BLOCKS_PER_REGION: int = 4
     SGLANG_RBLN_FLUX3_ONE_GRAPH: bool = False
 
 
@@ -60,7 +60,7 @@ environment_variables: dict[str, Callable[[], Any]] = {
     ),
     "SGLANG_RBLN_VOCODER_ON_NPU": _flag("SGLANG_RBLN_VOCODER_ON_NPU"),
     "SGLANG_RBLN_BLOCKS_PER_REGION": lambda: int(
-        os.environ.get("SGLANG_RBLN_BLOCKS_PER_REGION") or 1
+        os.environ.get("SGLANG_RBLN_BLOCKS_PER_REGION") or 4
     ),
     "SGLANG_RBLN_FLUX3_ONE_GRAPH": _flag("SGLANG_RBLN_FLUX3_ONE_GRAPH"),
 }

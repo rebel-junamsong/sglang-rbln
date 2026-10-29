@@ -76,8 +76,22 @@ def test_grouped_blocks_match_eager(monkeypatch, graphs, size):
     assert len(captured) == count
 
 
-def test_one_block_per_region_keeps_upstream_behaviour(monkeypatch, graphs):
+def test_default_groups_four_blocks(monkeypatch, graphs):
     monkeypatch.delenv("SGLANG_RBLN_BLOCKS_PER_REGION", raising=False)
+    captured, compile_kwargs = graphs
+    model = Model().eval()
+    with torch.no_grad():
+        count = regions.compile_block_groups(
+            _plain_compile, model, compile_kwargs=compile_kwargs
+        )
+        for _ in range(2):
+            model(torch.randn(2, 8))
+    assert count == 2
+    assert len(captured) == 2
+
+
+def test_one_block_per_region_keeps_upstream_behaviour(monkeypatch, graphs):
+    monkeypatch.setenv("SGLANG_RBLN_BLOCKS_PER_REGION", "1")
     captured, compile_kwargs = graphs
     model = Model(depth=3).eval()
     with torch.no_grad():
