@@ -197,4 +197,4 @@ def test_capture_hooks_stay_out_of_compiled_layers(monkeypatch, declared):
     assert len(graphs) == len(model.layers)
     assert len(actual) == len(expected) == len(model.layers) + 1
     for output, reference in zip(actual, expected, strict=True):
-        torch.testing.assert_close(output, reference)
+        assert torch.equal(output, reference)
