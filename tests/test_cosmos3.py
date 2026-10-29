@@ -95,22 +95,27 @@ class TestGenLayerCompileHook:
         registered = HookRegistry._hooks[cosmos3.HOOK_TARGET]
         assert any(hook is cosmos3.compile_layers for _, hook, _ in registered)
 
+    @pytest.mark.parametrize(("size", "regions"), [(1, 2), (2, 1), (4, 1)])
     def test_compiles_through_the_platform_backend(
-        self, transformer, recorded_compiles
+        self, monkeypatch, transformer, recorded_compiles, size, regions
     ):
+        monkeypatch.setenv("SGLANG_RBLN_BLOCKS_PER_REGION", str(size))
         cosmos3.compile_layers(
             None, transformer, SimpleNamespace(enable_torch_compile=True)
         )
         assert transformer._gen_layers_torch_compiled is True
         assert (128, True) in upstream_layernorm._QK_NORM_ROPE_DICT
-        assert [call["backend"] for call in recorded_compiles] == ["rbln", "rbln"]
+        assert [call["backend"] for call in recorded_compiles] == ["rbln"] * regions
         assert all(call["dynamic"] is False for call in recorded_compiles)
         contexts = {
             id(call["options"]["compile_context"]) for call in recorded_compiles
         }
         assert len(contexts) == 1
 
-    def test_language_model_is_not_compiled(self, transformer, recorded_compiles):
+    def test_language_model_is_not_compiled(
+        self, monkeypatch, transformer, recorded_compiles
+    ):
+        monkeypatch.setenv("SGLANG_RBLN_BLOCKS_PER_REGION", "1")
         cosmos3.compile_layers(
             None, transformer, SimpleNamespace(enable_torch_compile=True)
         )

@@ -9,6 +9,7 @@ from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry, HookTy
 from torch import nn
 
 from sglang_rbln import envs
+from sglang_rbln.compilation import regions
 from sglang_rbln.patches.layers import layernorm
 from sglang_rbln.patches.models import cosmos3video
 
@@ -36,10 +37,15 @@ def compile_layers(stage, transformer: nn.Module, server_args) -> None:
     layernorm.prebuild_qk_norm_rope(transformer.head_dim)
     compile_kwargs = build_torch_compile_kwargs(mode=None, module=transformer)
     compile_kwargs["dynamic"] = False
-    layers = transformer.gen_layers
-    logger.info("Compiling %d Cosmos3 gen_layers: %s", len(layers), compile_kwargs)
-    for layer in layers:
-        layer.compile(**compile_kwargs)
+    layers = list(transformer.gen_layers)
+    size = envs.SGLANG_RBLN_BLOCKS_PER_REGION
+    logger.info(
+        "Compiling %d Cosmos3 gen_layers, %d per region: %s",
+        len(layers),
+        size,
+        compile_kwargs,
+    )
+    regions.group_blocks(layers, size, compile_kwargs)
     transformer._gen_layers_torch_compiled = True
 
 
