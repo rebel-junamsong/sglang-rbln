@@ -20,6 +20,7 @@ LTX2_STAGES = f"{STAGES}.model_specific_stages.ltx_2"
 HOOK_TARGET = f"{STAGES}.text_encoding.TextEncodingStage.forward"
 CONNECTOR_HOOK_TARGET = f"{LTX2_STAGES}.text_connector.LTX2TextConnectorStage.forward"
 COMPILED = "_rbln_regions_compiled"
+CAPTURE_HOOK = "install_output_capuring_hook.<locals>.output_capturing_hook"
 CONNECTOR_PROJECTIONS = (
     "text_proj_in",
     "video_aggregate_embed",
@@ -40,15 +41,14 @@ def traceable(module: nn.Module) -> nn.Module:
     return module
 
 
-CAPTURE_HOOK = "install_output_capuring_hook.<locals>.output_capturing_hook"
-
-
 def _is_capture_hook(hook) -> bool:
     return getattr(hook, "__qualname__", "") == CAPTURE_HOOK
 
 
 def _without_capture_hooks(hooks: dict) -> OrderedDict:
-    return OrderedDict((k, h) for k, h in hooks.items() if not _is_capture_hook(h))
+    return OrderedDict(
+        (name, hook) for name, hook in hooks.items() if not _is_capture_hook(hook)
+    )
 
 
 def install_capture_hooks(module: nn.Module) -> None:
@@ -60,11 +60,10 @@ def install_capture_hooks(module: nn.Module) -> None:
 
 
 def capture_outside(layer: nn.Module) -> nn.Module:
-    """Region for ``layer`` with transformers' ContextVar capture hooks kept out."""
     for submodule in layer.modules():
         if submodule is not layer:
             submodule._forward_hooks = _without_capture_hooks(submodule._forward_hooks)
-    if not any(_is_capture_hook(h) for h in layer._forward_hooks.values()):
+    if not any(map(_is_capture_hook, layer._forward_hooks.values())):
         return layer
     region = copy.copy(layer)
     region._forward_hooks = _without_capture_hooks(layer._forward_hooks)
