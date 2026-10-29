@@ -11,6 +11,13 @@ import pytest
 from sglang.multimodal_gen.runtime import platforms
 
 from sglang_rbln import device, envs
+from sglang_rbln.patches.layers.attention import video_sparse_attn
+from sglang_rbln.patches.srt.layers.quantization import fp4_utils
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    video_sparse_attn.register()
+    fp4_utils.register()
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:

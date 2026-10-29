@@ -87,7 +87,15 @@ class TestQkNormRopePrebuild:
 class TestCudaImportGuard:
     @pytest.fixture(autouse=True)
     def clean_meta_path(self, monkeypatch):
-        monkeypatch.setattr(sys, "meta_path", list(sys.meta_path))
+        monkeypatch.setattr(
+            sys,
+            "meta_path",
+            [
+                finder
+                for finder in sys.meta_path
+                if not isinstance(finder, cuda_imports._BlockedImportFinder)
+            ],
+        )
         for name in ("vsa", "flashinfer"):
             monkeypatch.delitem(sys.modules, name, raising=False)
 
