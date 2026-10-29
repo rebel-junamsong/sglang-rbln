@@ -251,6 +251,13 @@ def _instrumented_backend(backend):
                 shapes.current_shape_key.get(),
                 describe_graph(graph, example_inputs),
             )
+        if shapes.repeats_compile(graph, example_inputs):
+            logger.warning(
+                "rbln recompile at unchanged shape key %s, guarded on more than "
+                "shapes: %s",
+                shapes.current_shape_key.get(),
+                describe_graph(graph, example_inputs),
+            )
         if dump_dir := envs.SGLANG_RBLN_DUMP_GRAPHS:
             logger.info(
                 "rbln graph dumped to %s", dump_graph(graph, example_inputs, dump_dir)

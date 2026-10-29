@@ -1,15 +1,19 @@
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
+import logging
+from collections.abc import Iterator
 from types import SimpleNamespace
 
 import pytest
+import torch
 from sglang.multimodal_gen.configs.pipeline_configs.flux3_action import (
     Flux3ActionPipelineConfig,
 )
 from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry, HookType
+from torch import nn
 
-from sglang_rbln.compilation import shapes
+from sglang_rbln.compilation import backend, shapes
 from sglang_rbln.compilation.shapes import ShapeKey
 from sglang_rbln.patches.managers import gpu_worker
 
@@ -96,3 +100,82 @@ def test_registers_the_key_around_execute_forward():
         hook is gpu_worker.key_request_shape and kind is HookType.AROUND
         for kind, hook, _ in HookRegistry._hooks[gpu_worker.HOOK_TARGET]
     )
+
+
+class _Block(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.proj = nn.Linear(16, 16)
+
+    def forward(self, hidden):
+        return hidden + self.proj(hidden)
+
+
+@pytest.fixture
+def recording(monkeypatch) -> Iterator[SimpleNamespace]:
+    monkeypatch.setattr(shapes, "_compiled", set())
+    torch._dynamo.reset()
+    repeats: list[bool] = []
+
+    def compile_backend(graph, example_inputs):
+        repeats.append(shapes.repeats_compile(graph, example_inputs))
+        return graph.forward
+
+    with torch._dynamo.config.patch(automatic_dynamic_shapes=False):
+        yield SimpleNamespace(backend=compile_backend, repeats=repeats)
+
+
+def run_under(key, block, hidden):
+    token = shapes.current_shape_key.set(key)
+    try:
+        with torch.no_grad():
+            return block(hidden)
+    finally:
+        shapes.current_shape_key.reset(token)
+
+
+KEY = ShapeKey("LTX2Pipeline", (("height", 64), ("width", 96), ("num_frames", 5)))
+OTHER_KEY = ShapeKey("LTX2Pipeline", (("height", 96), ("width", 64), ("num_frames", 5)))
+
+
+def test_new_shapes_and_new_blocks_are_not_repeats(recording):
+    blocks = [_Block() for _ in range(3)]
+    for block in blocks:
+        block.compile(backend=recording.backend, dynamic=False)
+    for key, tokens in [(KEY, 8), (OTHER_KEY, 12)]:
+        hidden = torch.randn(1, tokens, 16)
+        for block in blocks:
+            hidden = run_under(key, block, hidden)
+    assert recording.repeats == [False] * 6
+
+
+def test_a_stride_recompile_at_the_same_key_is_a_repeat(recording):
+    block = _Block()
+    hidden = torch.randn(1, 8, 16)
+    with torch.no_grad():
+        expected = block(hidden)
+    block.compile(backend=recording.backend, dynamic=False)
+    contiguous = run_under(KEY, block, hidden)
+    strided = run_under(KEY, block, hidden.transpose(1, 2).contiguous().transpose(1, 2))
+    assert recording.repeats == [False, True]
+    assert torch.equal(contiguous, expected)
+    assert torch.equal(strided, expected)
+
+
+def test_backend_warns_on_a_repeat_with_the_key(monkeypatch, caplog):
+    monkeypatch.setattr(shapes, "_compiled", set())
+    for flag in ("SGLANG_RBLN_RUNTIME_REPORTS", "SGLANG_RBLN_CHECK_GRAPHS"):
+        monkeypatch.delenv(flag, raising=False)
+    instrumented = backend._instrumented_backend(lambda graph, inputs: graph.forward)
+    graph = torch.fx.symbolic_trace(_Block())
+    inputs = [torch.randn(1, 8, 16)]
+    token = shapes.current_shape_key.set(KEY)
+    try:
+        with caplog.at_level(logging.WARNING, logger=backend.__name__):
+            instrumented(graph, inputs)
+            assert not caplog.records
+            instrumented(graph, inputs)
+    finally:
+        shapes.current_shape_key.reset(token)
+    (record,) = caplog.records
+    assert str(KEY) in record.getMessage()
