@@ -7,11 +7,18 @@ from sglang_rbln.compilation import regions, residency
 from sglang_rbln.patches.layers import layernorm
 from sglang_rbln.patches.layers.attention import video_sparse_attn
 from sglang_rbln.patches.managers import gpu_worker
-from sglang_rbln.patches.models import cosmos3video, flux3_video_vae, ltx_2, wanvae
+from sglang_rbln.patches.models import (
+    cosmos3video,
+    flux3,
+    flux3_video_vae,
+    ltx_2,
+    wanvae,
+)
 from sglang_rbln.patches.srt.layers.quantization import fp4_utils
 from sglang_rbln.patches.stages import (
     cosmos3,
     flux3_action,
+    flux3_action_step,
     flux3_action_video,
     text_encoding,
 )
@@ -33,6 +40,8 @@ def register() -> None:
     layernorm.register()
     cosmos3.register()
     cosmos3video.register()
+    flux3.register()
+    flux3_action_step.register()
     flux3_action.register()
     flux3_action_video.register()
     flux3_video_vae.register()

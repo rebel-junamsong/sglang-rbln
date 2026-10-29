@@ -142,13 +142,40 @@ PATCH_DEBTS = [
         patch="stages/flux3_action",
         module=f"{STAGES}.flux3_action",
         upstream_pattern="class Flux3ActionDenoisingStage(PipelineStage):",
-        upstream_fix="compile the DiT blocks like DenoisingStage does",
+        upstream_fix="compile each denoise step as one graph",
     ),
     PatchDebt(
         patch="stages/flux3_action (observation)",
         module=f"{STAGES}.flux3_action",
         upstream_pattern="class Flux3ActionObservationEncodingStage(PipelineStage):",
-        upstream_fix="compile the DiT blocks before the first stage that runs them",
+        upstream_fix="compile the conditioning stream encoder as one graph",
+    ),
+    PatchDebt(
+        patch="stages/flux3_action_step",
+        module=f"{STAGES}.flux3_action",
+        upstream_pattern=(
+            "                def denoise(ctx: Flux3SegmentState)"
+            " -> tuple[torch.Tensor, ...]:"
+        ),
+        upstream_fix="run each denoise step as a tensor-only _denoise_step",
+    ),
+    PatchDebt(
+        patch="stages/flux3_action_step (observation)",
+        module=f"{STAGES}.flux3_action",
+        upstream_pattern='            state["flux3_conditioning"] = [',
+        upstream_fix="encode the conditioning streams in a tensor-only _encode_streams",
+    ),
+    PatchDebt(
+        patch="stages/flux3_action (text)",
+        module=f"{STAGES}.flux3_action",
+        upstream_pattern="class Flux3ActionTextEncodingStage(PipelineStage):",
+        upstream_fix="compile the text context encoder as one graph",
+    ),
+    PatchDebt(
+        patch="models/flux3 (segment state)",
+        module="sglang.multimodal_gen.runtime.models.dits.flux3",
+        upstream_pattern="class Flux3SegmentState(msgspec.Struct, frozen=True):",
+        upstream_fix="use a segment state torch.compile can build (a NamedTuple)",
     ),
     PatchDebt(
         patch="stages/text_encoding",
