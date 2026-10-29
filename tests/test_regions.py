@@ -38,6 +38,37 @@ class Model(nn.Module):
         return self.head(x) + y
 
 
+class ResidualBlock(nn.Module):
+    def __init__(self, width: int) -> None:
+        super().__init__()
+        self.linear = nn.Linear(width, width)
+
+    def forward(self, x, key, value, *, residual=None):
+        residual = x if residual is None else x + residual
+        return torch.tanh(self.linear(residual) * key + value), residual
+
+
+class ResidualModel(nn.Module):
+    _compile_conditions = [lambda name, module: isinstance(module, ResidualBlock)]
+
+    def __init__(self, depth: int = 6, width: int = 8) -> None:
+        super().__init__()
+        self.layers = nn.ModuleList(ResidualBlock(width) for _ in range(depth))
+        self.cache = [
+            (torch.full((width,), 1.0 + i / 10), torch.full((width,), i / 10))
+            for i in range(depth)
+        ]
+
+    def forward(self, x, rescale: bool = False):
+        residual = None
+        for index, layer in enumerate(self.layers):
+            key, value = self.cache[index]
+            x, residual = layer(x, key, value, residual=residual)
+            if rescale:
+                x = x * 2
+        return x + residual
+
+
 @pytest.fixture
 def graphs():
     captured = []
@@ -88,6 +119,33 @@ def test_default_groups_four_blocks(monkeypatch, graphs):
             model(torch.randn(2, 8))
     assert count == 2
     assert len(captured) == 2
+
+
+@pytest.mark.parametrize("size", [2, 4, 6])
+def test_outputs_feed_keyword_and_positional_slots(monkeypatch, graphs, size):
+    monkeypatch.setenv("SGLANG_RBLN_BLOCKS_PER_REGION", str(size))
+    captured, compile_kwargs = graphs
+    torch.manual_seed(0)
+    model = ResidualModel().eval()
+    x = torch.randn(2, 8)
+    with torch.no_grad():
+        expected = model(x)
+        count = regions.compile_block_groups(
+            _plain_compile, model, compile_kwargs=compile_kwargs
+        )
+        outputs = [model(x) for _ in range(3)]
+    for output in outputs:
+        torch.testing.assert_close(output, expected)
+    assert len(captured) == count == math.ceil(len(model.layers) / size)
+
+
+def test_outputs_changed_between_blocks_are_rejected(monkeypatch, graphs):
+    monkeypatch.setenv("SGLANG_RBLN_BLOCKS_PER_REGION", "2")
+    _, compile_kwargs = graphs
+    model = ResidualModel(depth=2).eval()
+    regions.compile_block_groups(_plain_compile, model, compile_kwargs=compile_kwargs)
+    with torch.no_grad(), pytest.raises(RuntimeError, match="not passed unchanged"):
+        model(torch.randn(2, 8), rescale=True)
 
 
 def test_one_block_per_region_keeps_upstream_behaviour(monkeypatch, graphs):

@@ -6,6 +6,7 @@ import copy
 from collections.abc import Callable, Sequence
 from typing import Any
 
+import torch
 from torch import nn
 
 from sglang_rbln import envs
@@ -15,12 +16,47 @@ HOOK_TARGET = (
 )
 
 
+Slot = int | str
+
+
 def _leading(output: Any) -> tuple:
     return output if isinstance(output, tuple) else (output,)
 
 
-def _restore(leading: tuple, arity: int) -> Any:
-    return leading if arity > 1 else leading[0]
+def _restore(values: tuple, arity: int) -> Any:
+    return values if arity > 1 else values[0]
+
+
+def _slot_values(args: tuple, kwargs: dict, slots: tuple[Slot, ...]) -> tuple:
+    return tuple(args[s] if isinstance(s, int) else kwargs.get(s) for s in slots)
+
+
+def _fill(args: tuple, kwargs: dict, slots: tuple[Slot, ...], values: tuple):
+    args, kwargs = list(args), dict(kwargs)
+    for slot, value in zip(slots, values, strict=True):
+        if isinstance(slot, int):
+            args[slot] = value
+        else:
+            kwargs[slot] = value
+    return tuple(args), kwargs
+
+
+def _find_slots(previous: tuple, args: tuple, kwargs: dict) -> tuple[Slot, ...]:
+    candidates: list[tuple[Slot, Any]] = [*enumerate(args), *kwargs.items()]
+    slots = []
+    for value in previous:
+        found = [
+            slot
+            for slot, arg in candidates
+            if isinstance(value, torch.Tensor) and arg is value
+        ]
+        if len(found) != 1:
+            raise RuntimeError(
+                "a block's outputs are not passed unchanged to the next block; "
+                "set SGLANG_RBLN_BLOCKS_PER_REGION=1 for this model"
+            )
+        slots.append(found[0])
+    return tuple(slots)
 
 
 class BlockGroup(nn.Module):
@@ -29,12 +65,13 @@ class BlockGroup(nn.Module):
     def __init__(self, blocks: Sequence[nn.Module]) -> None:
         super().__init__()
         self.blocks = nn.ModuleList(blocks)
+        self.slots: tuple[Slot, ...] = ()
 
-    def forward(self, leading: tuple, calls: list[tuple[tuple, dict]]) -> Any:
-        output: Any = leading
-        for block, (rest, kwargs) in zip(self.blocks, calls, strict=True):
-            output = block(*_leading(output), *rest, **kwargs)
-        return output
+    def forward(self, values: tuple, calls: list[tuple[tuple, dict]]) -> Any:
+        for block, (args, kwargs) in zip(self.blocks, calls, strict=True):
+            args, kwargs = _fill(args, kwargs, self.slots, values)
+            values = _leading(block(*args, **kwargs))
+        return _restore(values, len(self.slots))
 
 
 class DeferredBlock:
@@ -45,6 +82,25 @@ class DeferredBlock:
         self.index = index
         self.state = state
 
+    def _learn(self, args: tuple, kwargs: dict) -> Any:
+        state = self.state
+        if self.index:
+            slots = _find_slots(state["previous"], args, kwargs)
+            if self.group.slots and slots != self.group.slots:
+                raise RuntimeError(
+                    "blocks of one region take the previous outputs in different "
+                    "arguments; set SGLANG_RBLN_BLOCKS_PER_REGION=1 for this model"
+                )
+            self.group.slots = slots
+        output = state["eager"][self.index](*args, **kwargs)
+        state["previous"] = _leading(output)
+        state["calls"].append(None)
+        if self.index == len(self.group.blocks) - 1:
+            state["learned"] = True
+            state["calls"].clear()
+            del state["previous"]
+        return output
+
     def __call__(self, *args, **kwargs):
         state = self.state
         if len(state["calls"]) != self.index:
@@ -53,22 +109,19 @@ class DeferredBlock:
                 f"block {self.index} of a {len(self.group.blocks)}-block region ran "
                 "out of order; set SGLANG_RBLN_BLOCKS_PER_REGION=1 for this model"
             )
-        arity = state.get("arity")
-        if arity is None:
-            output = state["eager"][self.index](*args, **kwargs)
-            state["calls"].append(None)
-            if self.index == len(self.group.blocks) - 1:
-                state["arity"] = len(_leading(output))
-                state["calls"].clear()
-            return output
+        if not state.get("learned"):
+            return self._learn(args, kwargs)
+        slots = self.group.slots
+        values = _slot_values(args, kwargs, slots)
         if self.index == 0:
-            state["leading"] = args[:arity]
-        state["calls"].append((args[arity:], kwargs))
+            state["values"] = values
+        empty = (None,) * len(slots)
+        state["calls"].append(_fill(args, kwargs, slots, empty))
         if self.index < len(self.group.blocks) - 1:
-            return _restore(args[:arity], arity)
+            return _restore(values, len(slots))
         calls = list(state["calls"])
         state["calls"].clear()
-        return state["compiled"](state.pop("leading"), calls)
+        return state["compiled"](state.pop("values"), calls)
 
 
 def _consecutive_runs(
