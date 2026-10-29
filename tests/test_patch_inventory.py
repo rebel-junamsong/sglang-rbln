@@ -184,6 +184,12 @@ PATCH_DEBTS = [
         upstream_fix="compile the text encoder layer stacks like DenoisingStage does",
     ),
     PatchDebt(
+        patch="stages/text_encoding (capture hooks)",
+        module="transformers.utils.output_capturing",
+        upstream_pattern="        collected_outputs = _active_collector.get()",
+        upstream_fix="read the output collector in a way dynamo can trace",
+    ),
+    PatchDebt(
         patch="stages/text_encoding (ltx_2 connectors)",
         module=f"{STAGES}.ltx_2.text_connector",
         upstream_pattern="class LTX2TextConnectorStage(PipelineStage):",

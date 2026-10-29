@@ -137,3 +137,64 @@ def test_projections_trace_into_a_graph_that_owns_their_weights(monkeypatch):
     torch.testing.assert_close(projection(hidden_states), expected)
     assert isinstance(projection, nn.Linear)
     assert graph_inputs == [(2, 8)]
+
+
+def _tiny_gemma():
+    from transformers.models.gemma4_unified import (
+        configuration_gemma4_unified,
+        modeling_gemma4_unified,
+    )
+
+    config = configuration_gemma4_unified.Gemma4UnifiedTextConfig(
+        hidden_size=64,
+        intermediate_size=128,
+        num_hidden_layers=3,
+        num_attention_heads=4,
+        num_key_value_heads=2,
+        head_dim=16,
+        global_head_dim=32,
+        num_global_key_value_heads=1,
+        vocab_size=128,
+        layer_types=["sliding_attention", "sliding_attention", "full_attention"],
+        sliding_window=16,
+        attention_k_eq_v=True,
+        hidden_size_per_layer_input=0,
+        vocab_size_per_layer_input=128,
+    )
+    config._attn_implementation = "sdpa"
+    model = modeling_gemma4_unified.Gemma4UnifiedTextModel(config).eval()
+    model.layer_names = ["layers"]
+    return model
+
+
+@pytest.mark.parametrize("declared", [True, False], ids=["layer_names", "no_split"])
+def test_capture_hooks_stay_out_of_compiled_layers(monkeypatch, declared):
+    from torch._dynamo.utils import counters
+
+    graphs = []
+
+    def backend(graph, example_inputs):
+        graphs.append(graph)
+        return graph
+
+    monkeypatch.setattr(
+        torch_compile,
+        "build_torch_compile_kwargs",
+        lambda **kwargs: {"backend": backend},
+    )
+    torch.manual_seed(0)
+    model = _tiny_gemma()
+    if not declared:
+        del model.layer_names
+    input_ids = torch.randint(0, 128, (1, 32))
+    with torch.no_grad():
+        expected = model(input_ids=input_ids, output_hidden_states=True).hidden_states
+        torch._dynamo.reset()
+        counters.clear()
+        assert text_encoding.compile_regions(model) == len(model.layers)
+        actual = model(input_ids=input_ids, output_hidden_states=True).hidden_states
+    assert sum(counters["graph_break"].values()) == 0
+    assert len(graphs) == len(model.layers)
+    assert len(actual) == len(expected) == len(model.layers) + 1
+    for output, reference in zip(actual, expected, strict=True):
+        torch.testing.assert_close(output, reference)

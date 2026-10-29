@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import copy
 import functools
 import logging
+from collections import OrderedDict
 from collections.abc import Iterable
 
 from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry, HookType
@@ -38,14 +40,50 @@ def traceable(module: nn.Module) -> nn.Module:
     return module
 
 
+CAPTURE_HOOK = "install_output_capuring_hook.<locals>.output_capturing_hook"
+
+
+def _is_capture_hook(hook) -> bool:
+    return getattr(hook, "__qualname__", "") == CAPTURE_HOOK
+
+
+def _without_capture_hooks(hooks: dict) -> OrderedDict:
+    return OrderedDict((k, h) for k, h in hooks.items() if not _is_capture_hook(h))
+
+
+def install_capture_hooks(module: nn.Module) -> None:
+    from transformers import PreTrainedModel
+    from transformers.utils.output_capturing import maybe_install_capturing_hooks
+
+    if isinstance(module, PreTrainedModel):
+        maybe_install_capturing_hooks(module)
+
+
+def capture_outside(layer: nn.Module) -> nn.Module:
+    """Region for ``layer`` with transformers' ContextVar capture hooks kept out."""
+    for submodule in layer.modules():
+        if submodule is not layer:
+            submodule._forward_hooks = _without_capture_hooks(submodule._forward_hooks)
+    if not any(_is_capture_hook(h) for h in layer._forward_hooks.values()):
+        return layer
+    region = copy.copy(layer)
+    region._forward_hooks = _without_capture_hooks(layer._forward_hooks)
+    layer.forward = region.__call__
+    return region
+
+
+def layer_stack(module: nn.Module) -> list[nn.Module]:
+    if names := getattr(module, "layer_names", ()):
+        return [layer for name in names for layer in module.get_submodule(name)]
+    blocks = set(getattr(module, "_no_split_modules", None) or ())
+    return [m for m in module.modules() if type(m).__name__ in blocks]
+
+
 def compile_regions(module: nn.Module, projections: Iterable[str] = ()) -> int:
     if getattr(module, COMPILED, False):
         return 0
-    layers = [
-        layer
-        for name in getattr(module, "layer_names", ())
-        for layer in module.get_submodule(name)
-    ]
+    install_capture_hooks(module)
+    layers = [capture_outside(layer) for layer in layer_stack(module)]
     linears = [
         traceable(linear)
         for name in projections
