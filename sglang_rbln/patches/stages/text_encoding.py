@@ -9,6 +9,8 @@ from collections.abc import Iterable
 from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry, HookType
 from torch import nn
 
+from sglang_rbln.compilation.backend import static_compile_kwargs
+
 logger = logging.getLogger(__name__)
 
 STAGES = "sglang.multimodal_gen.runtime.pipelines_core.stages"
@@ -37,10 +39,6 @@ def traceable(module: nn.Module) -> nn.Module:
 
 
 def compile_regions(module: nn.Module, projections: Iterable[str] = ()) -> int:
-    from sglang.multimodal_gen.runtime.utils.torch_compile import (
-        build_torch_compile_kwargs,
-    )
-
     if getattr(module, COMPILED, False):
         return 0
     layers = [
@@ -54,8 +52,7 @@ def compile_regions(module: nn.Module, projections: Iterable[str] = ()) -> int:
         if (linear := getattr(module, name, None)) is not None
     ]
     if layers or linears:
-        compile_kwargs = build_torch_compile_kwargs(mode=None, module=module)
-        compile_kwargs["dynamic"] = False
+        compile_kwargs = static_compile_kwargs(module)
         for region in (*layers, *linears):
             region.compile(**compile_kwargs)
         logger.info(

@@ -52,6 +52,16 @@ def compile_options(module: torch.nn.Module) -> dict[str, Any]:
     return options
 
 
+def static_compile_kwargs(module: torch.nn.Module) -> dict[str, Any]:
+    from sglang.multimodal_gen.runtime.utils.torch_compile import (
+        build_torch_compile_kwargs,
+    )
+
+    compile_kwargs = build_torch_compile_kwargs(mode=None, module=module)
+    compile_kwargs["dynamic"] = False
+    return compile_kwargs
+
+
 def describe_graph(graph: torch.fx.GraphModule, example_inputs) -> str:
     inputs = [
         f"{'x'.join(map(str, tensor.shape))}:{str(tensor.dtype).removeprefix('torch.')}"

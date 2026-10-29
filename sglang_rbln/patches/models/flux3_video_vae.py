@@ -11,6 +11,7 @@ from torch import nn
 from torch._subclasses.fake_tensor import FakeTensorMode
 
 from sglang_rbln import envs
+from sglang_rbln.compilation.backend import static_compile_kwargs
 from sglang_rbln.layers.attention.neighborhood import neighborhood_attention
 
 logger = logging.getLogger(__name__)
@@ -51,16 +52,11 @@ def compile_largest_first(decoder, args):
 
 
 def compile_regions(vae, server_args, config):
-    from sglang.multimodal_gen.runtime.utils.torch_compile import (
-        build_torch_compile_kwargs,
-    )
-
     if not server_args.enable_torch_compile:
         return vae
     if vae.model.decoder is not None:
         vae.model.decoder.to(torch.bfloat16)
-    compile_kwargs = build_torch_compile_kwargs(mode=None, module=vae)
-    compile_kwargs["dynamic"] = False
+    compile_kwargs = static_compile_kwargs(vae)
     num_devices = compile_kwargs["options"].pop("num_devices", None) or 1
     placements = [
         (region, 0) for region in regions(vae.model.encoder or nn.Module())

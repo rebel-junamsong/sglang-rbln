@@ -8,6 +8,7 @@ import torch
 from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry, HookType
 
 from sglang_rbln import envs
+from sglang_rbln.compilation.backend import static_compile_kwargs
 
 logger = logging.getLogger(__name__)
 
@@ -26,22 +27,12 @@ GRAPH_METHODS = {
 }
 
 
-def compile_kwargs_for(transformer):
-    from sglang.multimodal_gen.runtime.utils.torch_compile import (
-        build_torch_compile_kwargs,
-    )
-
-    compile_kwargs = build_torch_compile_kwargs(mode=None, module=transformer)
-    compile_kwargs["dynamic"] = False
-    return compile_kwargs
-
-
 def compile_graph(stage):
     owner_attr, method = GRAPH_METHODS[type(stage).__name__]
     owner = getattr(stage, owner_attr) if owner_attr else stage
     if method in vars(owner):
         return
-    compile_kwargs = compile_kwargs_for(stage.transformer) | {"fullgraph": True}
+    compile_kwargs = static_compile_kwargs(stage.transformer) | {"fullgraph": True}
     setattr(owner, method, torch.compile(getattr(owner, method), **compile_kwargs))
     logger.info("Compiling FLUX 3 %s.%s as one graph", type(stage).__name__, method)
 
@@ -54,7 +45,7 @@ def compile_blocks(stage):
     transformer = stage.transformer
     if getattr(transformer, COMPILED, False):
         return
-    compile_kwargs = compile_kwargs_for(transformer)
+    compile_kwargs = static_compile_kwargs(transformer)
     count = compile_matching_submodules(transformer, compile_kwargs=compile_kwargs)
     setattr(transformer, COMPILED, True)
     logger.info("Compiling %d FLUX 3 blocks: %s", count, compile_kwargs)
