@@ -10,12 +10,12 @@ logger = logging.getLogger(__name__)
 
 HOOK_TARGET = (
     "sglang.multimodal_gen.runtime.pipelines_core.stages.model_specific_stages"
-    ".ltx_2.decoding_av.LTX2AVDecodingStage._decode_video"
+    ".ltx_2.decoding_av.LTX2AVDecodingStage.forward"
 )
 COMPILED = "_rbln_decoder_compiled"
 
 
-def compile_video_decoder(decode_video, stage, batch, server_args, *args, **kwargs):
+def compile_video_decoder(forward, stage, batch, server_args, *args, **kwargs):
     from rebel import CompileContext
     from sglang.multimodal_gen.runtime.utils.torch_compile import (
         build_torch_compile_kwargs,
@@ -38,7 +38,7 @@ def compile_video_decoder(decode_video, stage, batch, server_args, *args, **kwar
         vae.use_framewise_decoding = True
         setattr(vae, COMPILED, True)
         logger.info("Compiling the LTX-2 video decoder: %s", compile_kwargs)
-    return decode_video(stage, batch, server_args, *args, **kwargs)
+    return forward(stage, batch, server_args, *args, **kwargs)
 
 
 def register() -> str:
