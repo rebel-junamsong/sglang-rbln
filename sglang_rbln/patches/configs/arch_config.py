@@ -8,7 +8,6 @@ HOOK_TARGET = "sglang.multimodal_gen.configs.models.base.ArchConfig.__getattr__"
 
 
 def extra_attr(self, name: str):
-    """``ArchConfig.__getattr__`` without dynamo-opaque ``object.__getattribute__``."""
     extras = self.__dict__.get("extra_attrs")
     if extras is not None and name in extras:
         return extras[name]
