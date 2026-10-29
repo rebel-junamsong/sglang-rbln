@@ -52,9 +52,9 @@ def test_child_gets_its_own_process_group(patched):
         text=True,
         check=True,
         **{
-            k: v
-            for k, v in utils._popen_kwargs(prevent_sigint=True).items()
-            if k in ("preexec_fn", "process_group")
+            name: value
+            for name, value in utils._popen_kwargs(prevent_sigint=True).items()
+            if name in ("preexec_fn", "process_group")
         },
     )
     assert int(child.stdout) != os.getpgrp()
