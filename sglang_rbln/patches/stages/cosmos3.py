@@ -60,13 +60,13 @@ def vae_regions(module: nn.Module) -> list[nn.Module]:
         wanvae.WanRMS_norm,
         wanvae.DupUp3D,
     )
-    regions = []
+    found = []
     for child in module.children():
         if isinstance(child, region_types):
-            regions.append(child)
+            found.append(child)
         else:
-            regions.extend(vae_regions(child))
-    return regions
+            found.extend(vae_regions(child))
+    return found
 
 
 def compile_vae_regions(vae: nn.Module) -> None:
@@ -79,9 +79,9 @@ def compile_vae_regions(vae: nn.Module) -> None:
     compile_kwargs = build_torch_compile_kwargs(mode=None, module=vae)
     compile_kwargs["dynamic"] = False
     num_devices = compile_kwargs["options"].pop("num_devices", None) or 1
-    regions = vae_regions(vae)
-    logger.info("Compiling %d VAE regions: %s", len(regions), compile_kwargs)
-    for index, region in enumerate(regions):
+    blocks = vae_regions(vae)
+    logger.info("Compiling %d VAE regions: %s", len(blocks), compile_kwargs)
+    for index, region in enumerate(blocks):
         options = compile_kwargs["options"]
         if num_devices > 1:
             options = options | {"num_devices": 1, "device": index % num_devices}
