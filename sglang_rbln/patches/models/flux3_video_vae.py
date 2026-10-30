@@ -18,9 +18,14 @@ logger = logging.getLogger(__name__)
 
 VAE = "sglang.multimodal_gen.runtime.models.vaes.flux3_video_vae"
 ATTENTION_TARGET = f"{VAE}.neighborhood_attention"
+NATTEN_TARGET = f"{VAE}.natten_available"
 LOAD_TARGET = (
     "sglang.multimodal_gen.runtime.pipelines.flux3_action.Flux3ActionPipeline._load_vae"
 )
+
+
+def natten_available() -> bool:
+    return False
 
 
 def regions(module: nn.Module) -> Iterator[nn.Module]:
@@ -80,5 +85,6 @@ def register() -> tuple[str, ...]:
     if not envs.SGLANG_RBLN_COMPILE_VAE:
         return ()
     HookRegistry.register(ATTENTION_TARGET, neighborhood_attention, HookType.REPLACE)
+    HookRegistry.register(NATTEN_TARGET, natten_available, HookType.REPLACE)
     HookRegistry.register(LOAD_TARGET, compile_regions, HookType.AFTER)
-    return ATTENTION_TARGET, LOAD_TARGET
+    return ATTENTION_TARGET, NATTEN_TARGET, LOAD_TARGET

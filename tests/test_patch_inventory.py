@@ -285,6 +285,12 @@ PATCH_DEBTS = [
         upstream_fix="let the platform choose the neighborhood attention kernel",
     ),
     PatchDebt(
+        patch="models/flux3_video_vae (natten probe)",
+        module="sglang.multimodal_gen.runtime.models.vaes.flux3_video_vae",
+        upstream_pattern="            if not natten_available():",
+        upstream_fix="probe NATTEN once outside the traced attention call",
+    ),
+    PatchDebt(
         patch="models/flux3_video_vae (compile)",
         module="sglang.multimodal_gen.runtime.pipelines.flux3_action",
         upstream_pattern=(

@@ -56,13 +56,39 @@ def test_leaves_the_host_vae_alone_by_default(monkeypatch):
 
 def test_registers_the_attention_and_the_compile_hooks(compile_vae):
     targets = flux3_video_vae.register()
-    assert targets == (flux3_video_vae.ATTENTION_TARGET, flux3_video_vae.LOAD_TARGET)
+    assert targets == (
+        flux3_video_vae.ATTENTION_TARGET,
+        flux3_video_vae.NATTEN_TARGET,
+        flux3_video_vae.LOAD_TARGET,
+    )
     hooks = {
         target: [hook for _, hook, _ in HookRegistry._hooks[target]]
         for target in targets
     }
     assert neighborhood_attention in hooks[flux3_video_vae.ATTENTION_TARGET]
+    assert flux3_video_vae.natten_available in hooks[flux3_video_vae.NATTEN_TARGET]
     assert flux3_video_vae.compile_regions in hooks[flux3_video_vae.LOAD_TARGET]
+
+
+@pytest.mark.parametrize(("causal", "max_t"), [(False, 4), (True, 3), (False, None)])
+def test_a_looped_block_traces_as_one_graph(monkeypatch, causal, max_t):
+    from sglang.multimodal_gen.runtime.models.vaes import flux3_video_vae as upstream
+
+    monkeypatch.setattr(upstream, "neighborhood_attention", neighborhood_attention)
+    monkeypatch.setattr(upstream, "natten_available", flux3_video_vae.natten_available)
+    torch.manual_seed(0)
+    block = upstream.SwinTransformerBlock(
+        64, 2, [3, 5, 5], causal=causal, qk_norm=True, max_t=max_t
+    ).eval()
+    x = torch.randn(1, 9, 6, 8, 64)
+
+    with torch.no_grad():
+        explanation = torch._dynamo.explain(block)(x.clone())
+        expected = block(x.clone())
+        compiled = torch.compile(block, backend="eager", fullgraph=True)(x.clone())
+
+    assert (explanation.graph_count, explanation.graph_break_count) == (1, 0)
+    torch.testing.assert_close(compiled, expected, rtol=0, atol=0)
 
 
 def test_regions_flatten_sequential_stages():
