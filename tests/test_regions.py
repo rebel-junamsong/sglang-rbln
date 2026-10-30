@@ -257,7 +257,9 @@ def test_region_halves_until_the_device_holds_it(
     torch.manual_seed(0)
     _grouped_run(Model(depth=4).eval(), compile_kwargs)
     assert compiled == sizes
-    logged = [r for r in caplog.records if "does not fit" in r.getMessage()]
+    logged = [
+        record for record in caplog.records if "does not fit" in record.getMessage()
+    ]
     assert len(logged) == splits
 
 
