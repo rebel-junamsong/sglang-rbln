@@ -7,6 +7,7 @@ from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry
 from sglang.multimodal_gen.runtime.utils import torch_compile
 from torch import nn
 
+from sglang_rbln.compilation.regions import BlockGroup
 from sglang_rbln.patches.stages import text_encoding
 
 pytestmark = pytest.mark.usefixtures("rbln_platform")
@@ -50,14 +51,21 @@ def test_registers_both_text_stages():
 
 
 @pytest.mark.parametrize(
-    ("layer_names", "expected"),
+    ("layer_names", "per_region", "expected"),
     [
-        (("language_model.layers",), 2),
-        (("language_model.layers", "blocks"), 3),
-        ((), 0),
+        (("language_model.layers",), None, [BlockGroup]),
+        (("language_model.layers", "blocks"), None, [BlockGroup, _Layer]),
+        (("language_model.layers", "blocks"), 1, [_Layer] * 3),
+        ((), None, []),
     ],
 )
-def test_compiles_each_declared_layer_once(compiled, layer_names, expected):
+def test_compiles_each_declared_layer_list_once_as_one_region(
+    monkeypatch, compiled, layer_names, per_region, expected
+):
+    if per_region:
+        monkeypatch.setenv("SGLANG_RBLN_BLOCKS_PER_REGION", str(per_region))
+    else:
+        monkeypatch.delenv("SGLANG_RBLN_BLOCKS_PER_REGION", raising=False)
     stage = SimpleNamespace(text_encoders=[_encoder(*layer_names), None])
     server_args = SimpleNamespace(
         enable_torch_compile=True, text_encoder_cpu_offload=False
@@ -67,7 +75,7 @@ def test_compiles_each_declared_layer_once(compiled, layer_names, expected):
         for _ in range(2)
     ]
     assert outputs == ["encoded", "encoded"]
-    assert [type(module) for module, _ in compiled] == [_Layer] * expected
+    assert [type(module) for module, _ in compiled] == expected
     assert all(kwargs["backend"] == "rbln" for _, kwargs in compiled)
     assert all(kwargs["dynamic"] is False for _, kwargs in compiled)
 
@@ -79,8 +87,12 @@ def test_layers_of_one_module_share_its_compile_context(compiled):
     )
     text_encoding.compile_connectors(forward, stage, None, server_args)
     contexts = {id(kwargs["options"]["compile_context"]) for _, kwargs in compiled}
-    assert [module for module, _ in compiled] == [
-        *stage.connectors.language_model.layers,
+    (group, _), *rest = compiled
+    layers = stage.connectors.language_model.layers
+    assert [block.weight for block in group.blocks] == [
+        layer.weight for layer in layers
+    ]
+    assert [module for module, _ in rest] == [
         *stage.connectors.blocks,
         stage.connectors.video_aggregate_embed,
     ]
@@ -191,13 +203,17 @@ def test_capture_hooks_stay_out_of_compiled_layers(monkeypatch, declared):
         expected = model(input_ids=input_ids, output_hidden_states=True).hidden_states
         torch._dynamo.reset()
         counters.clear()
-        assert text_encoding.compile_regions(model) == len(model.layers)
-        actual = model(input_ids=input_ids, output_hidden_states=True).hidden_states
+        assert text_encoding.compile_regions(model) == 1
+        runs = [
+            model(input_ids=input_ids, output_hidden_states=True).hidden_states
+            for _ in range(2)
+        ]
     assert sum(counters["graph_break"].values()) == 0
-    assert len(graphs) == len(model.layers)
-    assert len(actual) == len(expected) == len(model.layers) + 1
-    for output, reference in zip(actual, expected, strict=True):
-        assert torch.equal(output, reference)
+    assert len(graphs) == 1
+    for actual in runs:
+        assert len(actual) == len(expected) == len(model.layers) + 1
+        for output, reference in zip(actual, expected, strict=True):
+            assert torch.equal(output, reference)
 
 
 def _tokenizer():
@@ -269,6 +285,5 @@ def test_encoder_regions_match_eager_at_one_shape_for_any_prompt_length(
         actual = [encode(*request) for request in requests]
     for output, reference in zip(actual, expected, strict=True):
         assert torch.equal(output, reference)
-    unpadded = model.config.layer_types.count("full_attention")
-    assert len(graphs) == 2 * len(model.layers) + unpadded
-    assert {shape[0] for shape in graphs} == {(1, 32, 64), (1, 48, 64)}
+    assert len(graphs) == 3
+    assert {shape for graph in graphs for shape in graph} >= {(1, 32, 64), (1, 48, 64)}

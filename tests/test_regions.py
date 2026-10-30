@@ -263,6 +263,32 @@ def test_region_halves_until_the_device_holds_it(
     assert len(logged) == splits
 
 
+class RecordingModel(Model):
+    def forward(self, x):
+        y, seen = torch.zeros(()), []
+        for index, block in enumerate(self.blocks):
+            x, y = block(x, y, 1.0, shift=index * 0.1)
+            seen.append(x)
+        return seen
+
+
+@pytest.mark.parametrize("room", [4, 2, 1], ids=["fits", "halved", "single"])
+def test_kept_outputs_reach_every_block_caller(sized_graphs, room):
+    free, compiled, compile_kwargs = sized_graphs
+    free["bytes"] = room * BLOCK_BYTES + BLOCK_BYTES // 10
+    torch.manual_seed(0)
+    model = RecordingModel(depth=4).eval()
+    x = torch.randn(2, 8)
+    with torch.no_grad():
+        expected = model(x)
+        regions.group_blocks(list(model.blocks), None, compile_kwargs, True)
+        runs = [model(x) for _ in range(2)]
+    assert compiled[0] == 4
+    for seen in runs:
+        for output, reference in zip(seen, expected, strict=True):
+            torch.testing.assert_close(output, reference)
+
+
 def test_load_time_out_of_memory_halves_the_region(monkeypatch):
     monkeypatch.delenv("SGLANG_RBLN_BLOCKS_PER_REGION", raising=False)
     sizes = []

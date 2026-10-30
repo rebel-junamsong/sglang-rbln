@@ -99,7 +99,7 @@ covers the full request options for both models.
 | `SGLANG_RBLN_PROFILE_DIR=<dir>` | write an RBLN Profiler trace (`*.pb`, Perfetto) of one request to `<dir>`; start the server with `RBLN_PROFILER=1` |
 | `SGLANG_RBLN_PROFILE_REQUEST=3` | which request (counting from 1, warmups excluded) `SGLANG_RBLN_PROFILE_DIR` captures |
 | `SGLANG_RBLN_VOCODER_ON_NPU=1` | compile the LTX-2 vocoder for one NPU (off by default: the CPU is faster below about 2 s of audio) |
-| `SGLANG_RBLN_BLOCKS_PER_REGION=7` | cap the DiT blocks compiled as one regional graph (default: a whole block list per graph, halved while the NPU cannot hold it; 1 compiles each block alone) |
+| `SGLANG_RBLN_BLOCKS_PER_REGION=7` | cap the DiT blocks and text-encoder layers compiled as one regional graph (default: a whole block list per graph, halved while the NPU cannot hold it; 1 compiles each block alone) |
 | `SGLANG_RBLN_FLUX3_ONE_GRAPH=1` | compile each FLUX 3 Action DiT entry point (text context, conditioning streams, a whole denoise step) as one graph instead of per-block regions |
 
 `--enable-torch-compile` and `--regional-compile` are on by default; pass either

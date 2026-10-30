@@ -11,6 +11,8 @@ from collections.abc import Iterable
 from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry, HookType
 from torch import nn
 
+from sglang_rbln import envs
+from sglang_rbln.compilation import regions
 from sglang_rbln.compilation.backend import static_compile_kwargs
 
 logger = logging.getLogger(__name__)
@@ -59,11 +61,15 @@ def install_capture_hooks(module: nn.Module) -> None:
         maybe_install_capturing_hooks(module)
 
 
+def is_captured(layer: nn.Module) -> bool:
+    return any(map(_is_capture_hook, layer._forward_hooks.values()))
+
+
 def capture_outside(layer: nn.Module) -> nn.Module:
     for submodule in layer.modules():
         if submodule is not layer:
             submodule._forward_hooks = _without_capture_hooks(submodule._forward_hooks)
-    if not any(map(_is_capture_hook, layer._forward_hooks.values())):
+    if not is_captured(layer):
         return layer
     region = copy.copy(layer)
     region._forward_hooks = _without_capture_hooks(layer._forward_hooks)
@@ -78,28 +84,43 @@ def layer_stack(module: nn.Module) -> list[nn.Module]:
     return [m for m in module.modules() if type(m).__name__ in blocks]
 
 
+def layer_lists(module: nn.Module) -> list[list[nn.Module]]:
+    stack = {id(layer) for layer in layer_stack(module)}
+    named = [(name, m) for name, m in module.named_modules() if id(m) in stack]
+    return regions._consecutive_runs(module, named)
+
+
 def compile_regions(module: nn.Module, projections: Iterable[str] = ()) -> int:
     if getattr(module, COMPILED, False):
         return 0
     install_capture_hooks(module)
-    layers = [capture_outside(layer) for layer in layer_stack(module)]
+    lists = layer_lists(module)
     linears = [
         traceable(linear)
         for name in projections
         if (linear := getattr(module, name, None)) is not None
     ]
-    if layers or linears:
+    graphs = 0
+    if lists or linears:
         compile_kwargs = static_compile_kwargs(module)
-        for region in (*layers, *linears):
-            region.compile(**compile_kwargs)
+        size = envs.SGLANG_RBLN_BLOCKS_PER_REGION
+        for layers in lists:
+            captured = any(map(is_captured, layers))
+            layers = [capture_outside(layer) for layer in layers]
+            groups = regions.group_blocks(layers, size, compile_kwargs, captured)
+            graphs += len(groups) + len(layers) - sum(len(g.blocks) for g in groups)
+        for linear in linears:
+            linear.compile(**compile_kwargs)
+        graphs += len(linears)
         logger.info(
-            "Compiling %d layers and %d projections of %s",
-            len(layers),
+            "Compiling %d layers and %d projections of %s as %d regions",
+            sum(map(len, lists)),
             len(linears),
             type(module).__name__,
+            graphs,
         )
     setattr(module, COMPILED, True)
-    return len(layers) + len(linears)
+    return graphs
 
 
 def compile_text_encoders(forward, stage, batch, server_args):

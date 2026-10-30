@@ -64,16 +64,19 @@ def _find_slots(previous: tuple, args: tuple, kwargs: dict) -> tuple[Slot, ...]:
 
 
 class BlockGroup(nn.Module):
-    def __init__(self, blocks: Sequence[nn.Module]) -> None:
+    def __init__(self, blocks: Sequence[nn.Module], keep_outputs: bool = False) -> None:
         super().__init__()
         self.blocks = nn.ModuleList(blocks)
+        self.keep_outputs = keep_outputs
         self.slots: tuple[Slot, ...] = ()
 
     def forward(self, values: tuple, calls: list[tuple[tuple, dict]]) -> Any:
+        kept: tuple = ()
         for block, (args, kwargs) in zip(self.blocks, calls, strict=True):
             args, kwargs = _fill(args, kwargs, self.slots, values)
             values = _leading(block(*args, **kwargs))
-        return _restore(values, len(self.slots))
+            kept += values
+        return kept if self.keep_outputs else _restore(values, len(self.slots))
 
 
 class RegionDoesNotFit(RuntimeError):
@@ -131,10 +134,16 @@ def _does_not_fit(error: BaseException | None) -> bool:
 
 
 class Region:
-    def __init__(self, blocks: Sequence[nn.Module], compile_kwargs: dict) -> None:
+    def __init__(
+        self,
+        blocks: Sequence[nn.Module],
+        compile_kwargs: dict,
+        keep_outputs: bool = False,
+    ) -> None:
         self.blocks = list(blocks)
         self.compile_kwargs = compile_kwargs
-        self.group: BlockGroup | None = BlockGroup(self.blocks)
+        self.keep_outputs = keep_outputs
+        self.group: BlockGroup | None = BlockGroup(self.blocks, keep_outputs)
         self.group.compile(**compile_kwargs)
         self.parts: list[Region] = []
         self.loaded = False
@@ -150,8 +159,8 @@ class Region:
         )
         slots = self.group.slots
         self.parts = [
-            Region(self.blocks[:half], self.compile_kwargs),
-            Region(self.blocks[half:], self.compile_kwargs),
+            Region(self.blocks[:half], self.compile_kwargs, self.keep_outputs),
+            Region(self.blocks[half:], self.compile_kwargs, self.keep_outputs),
         ]
         for part in self.parts:
             part.group.slots = slots
@@ -159,11 +168,16 @@ class Region:
 
     def __call__(self, values: tuple, calls: list[tuple[tuple, dict]]) -> Any:
         if self.parts:
-            output = None
+            output, kept = None, ()
             for part in self.parts:
                 output = part(values, calls[: len(part.blocks)])
-                values, calls = _leading(output), calls[len(part.blocks) :]
-            return output
+                calls = calls[len(part.blocks) :]
+                if self.keep_outputs:
+                    kept += output
+                    values = output[-len(values) :]
+                else:
+                    values = _leading(output)
+            return kept if self.keep_outputs else output
         if self.loaded:
             return self.group(values, calls)
         try:
@@ -220,10 +234,21 @@ class DeferredBlock:
         empty = (None,) * len(slots)
         state["calls"].append(_fill(args, kwargs, slots, empty))
         if self.index < len(self.group.blocks) - 1:
+            if self.group.keep_outputs:
+                values = tuple(map(torch.empty_like, values))
+                state.setdefault("pending", []).append(values)
             return _restore(values, len(slots))
         calls = list(state["calls"])
         state["calls"].clear()
-        return state["compiled"](state.pop("values"), calls)
+        output = state["compiled"](state.pop("values"), calls)
+        if not self.group.keep_outputs:
+            return output
+        arity = len(slots)
+        for index, pending in enumerate(state.pop("pending", [])):
+            outputs = output[index * arity : (index + 1) * arity]
+            for placeholder, value in zip(pending, outputs, strict=True):
+                placeholder.copy_(value)
+        return _restore(output[-arity:], arity)
 
 
 def _consecutive_runs(
@@ -248,7 +273,10 @@ def _consecutive_runs(
 
 
 def group_blocks(
-    blocks: Sequence[nn.Module], size: int | None, compile_kwargs: dict
+    blocks: Sequence[nn.Module],
+    size: int | None,
+    compile_kwargs: dict,
+    keep_outputs: bool = False,
 ) -> list[Region]:
     size = size or len(blocks)
     groups = []
@@ -257,7 +285,9 @@ def group_blocks(
         if len(members) == 1:
             members[0].compile(**compile_kwargs)
             continue
-        region = Region([copy.copy(member) for member in members], compile_kwargs)
+        region = Region(
+            [copy.copy(member) for member in members], compile_kwargs, keep_outputs
+        )
         state: dict[str, Any] = {
             "calls": [],
             "compiled": region,
