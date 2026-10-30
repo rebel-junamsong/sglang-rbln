@@ -64,8 +64,6 @@ def _find_slots(previous: tuple, args: tuple, kwargs: dict) -> tuple[Slot, ...]:
 
 
 class BlockGroup(nn.Module):
-    """Runs consecutive blocks as one region, each fed the previous one's outputs."""
-
     def __init__(self, blocks: Sequence[nn.Module]) -> None:
         super().__init__()
         self.blocks = nn.ModuleList(blocks)
@@ -133,8 +131,6 @@ def _does_not_fit(error: BaseException | None) -> bool:
 
 
 class Region:
-    """A compiled group that halves itself when the device cannot hold it."""
-
     def __init__(self, blocks: Sequence[nn.Module], compile_kwargs: dict) -> None:
         self.blocks = list(blocks)
         self.compile_kwargs = compile_kwargs
@@ -183,8 +179,6 @@ class Region:
 
 
 class DeferredBlock:
-    """Forward of one block in a group: record the call, run the group at its end."""
-
     def __init__(self, group: BlockGroup, index: int, state: dict) -> None:
         self.group = group
         self.index = index
