@@ -87,7 +87,7 @@ def layer_stack(module: nn.Module) -> list[nn.Module]:
 def layer_lists(module: nn.Module) -> list[list[nn.Module]]:
     stack = {id(layer) for layer in layer_stack(module)}
     named = [(name, m) for name, m in module.named_modules() if id(m) in stack]
-    return regions._consecutive_runs(module, named)
+    return regions.consecutive_runs(named)
 
 
 def compile_regions(module: nn.Module, projections: Iterable[str] = ()) -> int:
@@ -107,8 +107,8 @@ def compile_regions(module: nn.Module, projections: Iterable[str] = ()) -> int:
         for layers in lists:
             captured = any(map(is_captured, layers))
             layers = [capture_outside(layer) for layer in layers]
-            groups = regions.group_blocks(layers, size, compile_kwargs, captured)
-            graphs += len(groups) + len(layers) - sum(len(g.blocks) for g in groups)
+            regions.group_blocks(layers, size, compile_kwargs, captured)
+            graphs += regions.graph_count(layers, size)
         for linear in linears:
             linear.compile(**compile_kwargs)
         graphs += len(linears)

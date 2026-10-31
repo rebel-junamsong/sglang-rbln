@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import contextlib
 import copy
+import itertools
 import logging
+import math
 from collections.abc import Callable, Iterator, Sequence
 from typing import Any
 
@@ -243,16 +245,17 @@ class DeferredBlock:
         output = state["compiled"](state.pop("values"), calls)
         if not self.group.keep_outputs:
             return output
-        arity = len(slots)
-        for index, pending in enumerate(state.pop("pending", [])):
-            outputs = output[index * arity : (index + 1) * arity]
-            for placeholder, value in zip(pending, outputs, strict=True):
-                placeholder.copy_(value)
-        return _restore(output[-arity:], arity)
+        *kept, last = itertools.batched(output, len(slots))
+        pending = state.pop("pending", [])
+        for placeholder, value in zip(
+            itertools.chain(*pending), itertools.chain(*kept), strict=True
+        ):
+            placeholder.copy_(value)
+        return _restore(last, len(slots))
 
 
-def _consecutive_runs(
-    module: nn.Module, matches: Sequence[tuple[str, nn.Module]]
+def consecutive_runs(
+    matches: Sequence[tuple[str, nn.Module]],
 ) -> list[list[nn.Module]]:
     runs: list[list[nn.Module]] = []
     previous: tuple[str, int] | None = None
@@ -270,6 +273,10 @@ def _consecutive_runs(
         runs[-1].append(submodule)
         previous = current
     return runs
+
+
+def graph_count(blocks: Sequence[nn.Module], size: int | None) -> int:
+    return math.ceil(len(blocks) / (size or len(blocks)))
 
 
 def group_blocks(
@@ -313,11 +320,10 @@ def compile_block_groups(
     ]
     if not matches:
         return compile_matching_submodules(module, compile_kwargs=compile_kwargs)
-    regions = 0
-    for run in _consecutive_runs(module, matches):
-        groups = group_blocks(run, size, compile_kwargs)
-        regions += len(groups) + len(run) - sum(len(g.blocks) for g in groups)
-    return regions
+    runs = consecutive_runs(matches)
+    for run in runs:
+        group_blocks(run, size, compile_kwargs)
+    return sum(graph_count(run, size) for run in runs)
 
 
 def register() -> str:
