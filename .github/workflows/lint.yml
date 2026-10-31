@@ -21,3 +21,10 @@ jobs:
         with:
           version: "0.15.22"
           args: format --check sglang_rbln tests
+
+  minimum-python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uvx --python 3.12 vermin@1.6.0 --target=3.11- --violations --no-tips --eval-annotations sglang_rbln tests
