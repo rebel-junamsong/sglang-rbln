@@ -12,6 +12,7 @@ from sglang.multimodal_gen.runtime.pipelines.cosmos3_pipeline import Cosmos3Pipe
 from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry
 from torch import nn
 
+from sglang_rbln.compilation import regions
 from sglang_rbln.device import ExecutionMode
 from sglang_rbln.patches.stages import cosmos3
 
@@ -161,23 +162,21 @@ class TestVaeDecodePlacement:
 
     @pytest.mark.parametrize("shape", [(3, 4, 6), (2, 5, 7), (1, 3, 9)], ids=str)
     def test_flag_compiles_the_vae_regions_for_host_latents(
-        self, monkeypatch, tiny_wan_vae, shape
+        self, monkeypatch, tiny_wan_vae, eager_compile_kwargs, shape
     ):
-        compiled = []
-        monkeypatch.setattr(
-            nn.Module, "compile", lambda module, **kwargs: compiled.append(module)
-        )
         monkeypatch.setenv("SGLANG_RBLN_COMPILE_VAE", "1")
         latents = torch.randn(1, 4, *shape, generator=torch.Generator().manual_seed(0))
         with torch.no_grad():
             expected = tiny_wan_vae.decode(latents)
-            out = cosmos3.place_vae_decode(
-                lambda stage, z: stage.vae.decode(z),
-                SimpleNamespace(vae=tiny_wan_vae),
-                latents,
-            )
-        assert compiled == cosmos3.vae_regions(tiny_wan_vae)
-        assert torch.equal(out, expected)
+            outputs = [
+                cosmos3.place_vae_decode(
+                    lambda stage, z: stage.vae.decode(z),
+                    SimpleNamespace(vae=tiny_wan_vae),
+                    latents,
+                )
+                for _ in range(2)
+            ]
+        assert all(torch.equal(out, expected) for out in outputs)
 
     @pytest.mark.device_mode
     def test_device_latents_decode_on_the_cpu_and_return_to_the_device(self, stage):
@@ -191,38 +190,62 @@ class TestVaeDecodePlacement:
         assert torch.equal(out.cpu(), stage.vae(latents.cpu()))
 
 
+@pytest.fixture
+def eager_compile_kwargs(monkeypatch):
+    group_blocks = regions.group_blocks
+
+    def eager(blocks, size, compile_kwargs):
+        return group_blocks(blocks, size, {"backend": "eager", "dynamic": False})
+
+    monkeypatch.setattr(regions, "group_blocks", eager)
+
+
+@pytest.fixture
+def grouped(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        regions,
+        "group_blocks",
+        lambda blocks, size, compile_kwargs: calls.append(
+            (blocks, compile_kwargs["options"])
+        ),
+    )
+    return calls
+
+
 class TestVaeRegions:
     def test_every_causal_conv_belongs_to_one_region(self, tiny_wan_vae):
         from sglang.multimodal_gen.runtime.models.vaes.wanvae import WanCausalConv3d
 
-        regions = cosmos3.vae_regions(tiny_wan_vae)
+        groups = cosmos3.vae_regions(tiny_wan_vae)
         owners = {
-            id(conv): [r for r in regions if any(m is conv for m in r.modules())]
+            id(conv): [
+                g for g in groups if any(m is conv for b in g for m in b.modules())
+            ]
             for conv in tiny_wan_vae.modules()
             if isinstance(conv, WanCausalConv3d)
         }
         assert all(len(owner) == 1 for owner in owners.values())
 
-    def test_compiles_each_region_once(self, monkeypatch, tiny_wan_vae):
-        compiled = []
-        monkeypatch.setattr(
-            nn.Module, "compile", lambda module, **kwargs: compiled.append(module)
+    def test_each_up_block_resnets_list_is_one_region(self, tiny_wan_vae):
+        groups = cosmos3.vae_regions(tiny_wan_vae)
+        up_blocks = tiny_wan_vae.decoder.up_blocks
+        assert all(list(block.resnets) in groups for block in up_blocks)
+        assert all(
+            len(g) == 1 for g in groups if g not in [list(b.resnets) for b in up_blocks]
         )
+
+    def test_compiles_each_region_once(self, tiny_wan_vae, grouped):
         cosmos3.compile_vae_regions(tiny_wan_vae)
         cosmos3.compile_vae_regions(tiny_wan_vae)
-        assert compiled == cosmos3.vae_regions(tiny_wan_vae)
+        assert [blocks for blocks, _ in grouped] == cosmos3.vae_regions(tiny_wan_vae)
 
     def test_spreads_the_vae_regions_over_the_tensor_parallel_npus(
-        self, monkeypatch, tiny_wan_vae
+        self, monkeypatch, tiny_wan_vae, grouped
     ):
-        options = []
-        monkeypatch.setattr(
-            nn.Module,
-            "compile",
-            lambda module, **kwargs: options.append(kwargs["options"]),
-        )
         monkeypatch.setenv("SGLANG_RBLN_NUM_DEVICES", "4")
         cosmos3.compile_vae_regions(tiny_wan_vae)
+        options = [o for _, o in grouped]
         assert len(options) == len(cosmos3.vae_regions(tiny_wan_vae)) > 4
         assert all(o["num_devices"] == 1 for o in options)
         assert [o["device"] for o in options] == [i % 4 for i in range(len(options))]

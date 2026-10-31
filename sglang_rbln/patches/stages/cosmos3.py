@@ -49,7 +49,7 @@ def compile_layers(stage, transformer: nn.Module, server_args) -> None:
     transformer._gen_layers_torch_compiled = True
 
 
-def vae_regions(module: nn.Module) -> list[nn.Module]:
+def vae_regions(module: nn.Module) -> list[list[nn.Module]]:
     from sglang.multimodal_gen.runtime.models.vaes import wanvae
 
     region_types = (
@@ -62,8 +62,12 @@ def vae_regions(module: nn.Module) -> list[nn.Module]:
     )
     found = []
     for child in module.children():
-        if isinstance(child, region_types):
-            found.append(child)
+        if isinstance(child, (wanvae.WanUpBlock, wanvae.WanResidualUpBlock)):
+            found.append(list(child.resnets))
+            others = [m for name, m in child.named_children() if name != "resnets"]
+            found.extend(vae_regions(nn.ModuleList(others)))
+        elif isinstance(child, region_types):
+            found.append([child])
         else:
             found.extend(vae_regions(child))
     return found
@@ -79,13 +83,13 @@ def compile_vae_regions(vae: nn.Module) -> None:
     compile_kwargs = build_torch_compile_kwargs(mode=None, module=vae)
     compile_kwargs["dynamic"] = False
     num_devices = compile_kwargs["options"].pop("num_devices", None) or 1
-    blocks = vae_regions(vae)
-    logger.info("Compiling %d VAE regions: %s", len(blocks), compile_kwargs)
-    for index, region in enumerate(blocks):
+    groups = vae_regions(vae)
+    logger.info("Compiling %d VAE regions: %s", len(groups), compile_kwargs)
+    for index, members in enumerate(groups):
         options = compile_kwargs["options"]
         if num_devices > 1:
             options = options | {"num_devices": 1, "device": index % num_devices}
-        region.compile(**(compile_kwargs | {"options": options}))
+        regions.group_blocks(members, None, compile_kwargs | {"options": options})
     vae._rbln_regions_compiled = True
 
 
