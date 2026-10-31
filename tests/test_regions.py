@@ -104,7 +104,7 @@ def test_grouped_blocks_match_eager(monkeypatch, graphs, size):
         outputs = [model(x) for _ in range(3)]
     assert count == math.ceil(len(model.blocks) / size)
     for output in outputs:
-        torch.testing.assert_close(output, expected)
+        assert torch.equal(output, expected)
     assert len(captured) == count
 
 
@@ -136,7 +136,7 @@ def test_outputs_feed_keyword_and_positional_slots(monkeypatch, graphs, size):
         )
         outputs = [model(x) for _ in range(3)]
     for output in outputs:
-        torch.testing.assert_close(output, expected)
+        assert torch.equal(output, expected)
     assert len(captured) == count == math.ceil(len(model.layers) / size)
 
 
@@ -237,7 +237,7 @@ def _grouped_run(model, compile_kwargs):
         )
         outputs = [model(x) for _ in range(2)]
     for output in outputs:
-        torch.testing.assert_close(output, expected)
+        assert torch.equal(output, expected)
 
 
 @pytest.mark.parametrize(
