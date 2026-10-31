@@ -272,21 +272,22 @@ class RecordingModel(Model):
         return seen
 
 
+@pytest.mark.parametrize("shape", [(2, 8), (3, 16)], ids=str)
 @pytest.mark.parametrize("room", [4, 2, 1], ids=["fits", "halved", "single"])
-def test_kept_outputs_reach_every_block_caller(sized_graphs, room):
+def test_kept_outputs_reach_every_block_caller(sized_graphs, room, shape):
     free, compiled, compile_kwargs = sized_graphs
     free["bytes"] = room * BLOCK_BYTES + BLOCK_BYTES // 10
     torch.manual_seed(0)
-    model = RecordingModel(depth=4).eval()
-    x = torch.randn(2, 8)
+    model = RecordingModel(depth=4, width=shape[-1]).eval()
+    x = torch.randn(shape)
     with torch.no_grad():
         expected = model(x)
         regions.group_blocks(list(model.blocks), None, compile_kwargs, True)
         runs = [model(x) for _ in range(2)]
     assert compiled[0] == 4
     for seen in runs:
-        for output, reference in zip(seen, expected, strict=True):
-            torch.testing.assert_close(output, reference)
+        assert len(seen) == len(expected)
+        assert all(map(torch.equal, seen, expected))
 
 
 def test_load_time_out_of_memory_halves_the_region(monkeypatch):
