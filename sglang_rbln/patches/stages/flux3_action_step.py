@@ -245,7 +245,7 @@ FORWARDS = {OBSERVATION_TARGET: encode_observation, DENOISE_TARGET: denoise}
 
 
 def register() -> tuple[str, ...]:
-    if not envs.SGLANG_RBLN_FLUX3_ONE_GRAPH:
+    if envs.SGLANG_RBLN_BLOCKS_PER_REGION is not None:
         return ()
     stages = importlib.import_module(STAGES)
     for stage, methods in BACKPORTED.items():

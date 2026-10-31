@@ -53,7 +53,7 @@ def compile_blocks(stage):
 
 def compile_dit(forward, stage, batch, server_args):
     if server_args.enable_torch_compile:
-        if envs.SGLANG_RBLN_FLUX3_ONE_GRAPH:
+        if envs.SGLANG_RBLN_BLOCKS_PER_REGION is None:
             compile_graph(stage)
         else:
             compile_blocks(stage)

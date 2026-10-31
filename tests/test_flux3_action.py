@@ -86,7 +86,7 @@ def test_hooks_every_stage_that_runs_the_dit():
 
 @pytest.mark.parametrize("one_graph", [True, False])
 def test_backports_the_tensor_only_step_with_one_graph(monkeypatch, one_graph):
-    monkeypatch.setenv("SGLANG_RBLN_FLUX3_ONE_GRAPH", "1" if one_graph else "")
+    monkeypatch.setenv("SGLANG_RBLN_BLOCKS_PER_REGION", "" if one_graph else "4")
     stages = importlib.import_module(flux3_action_step.STAGES)
     methods = [
         (getattr(stages, stage), method)
@@ -120,7 +120,7 @@ def test_backports_the_tensor_only_step_with_one_graph(monkeypatch, one_graph):
 def test_compiles_each_entry_point_once_as_one_graph(
     monkeypatch, stage_type, transformer, compiled
 ):
-    monkeypatch.setenv("SGLANG_RBLN_FLUX3_ONE_GRAPH", "1")
+    monkeypatch.delenv("SGLANG_RBLN_BLOCKS_PER_REGION", raising=False)
     stage = stage_type(transformer=transformer)
     server_args = SimpleNamespace(enable_torch_compile=True)
     outputs = [
@@ -135,7 +135,8 @@ def test_compiles_each_entry_point_once_as_one_graph(
     assert kwargs["backend"] == "rbln"
 
 
-def test_regions_compile_each_block_once(transformer, compiled):
+def test_regions_compile_each_block_once(monkeypatch, transformer, compiled):
+    monkeypatch.setenv("SGLANG_RBLN_BLOCKS_PER_REGION", "4")
     server_args = SimpleNamespace(enable_torch_compile=True)
     for stage_type in STAGES:
         flux3_action.compile_dit(

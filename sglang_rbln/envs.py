@@ -26,7 +26,6 @@ if TYPE_CHECKING:
     SGLANG_RBLN_PROFILE_REQUEST: int = 3
     SGLANG_RBLN_VOCODER_ON_NPU: bool = False
     SGLANG_RBLN_BLOCKS_PER_REGION: int | None = None
-    SGLANG_RBLN_FLUX3_ONE_GRAPH: bool = False
 
 
 def _flag(name: str, default: bool = False) -> Callable[[], bool]:
@@ -79,7 +78,6 @@ environment_variables: dict[str, Callable[[], Any]] = {
     "SGLANG_RBLN_PROFILE_REQUEST": _int("SGLANG_RBLN_PROFILE_REQUEST", 3),
     "SGLANG_RBLN_VOCODER_ON_NPU": _flag("SGLANG_RBLN_VOCODER_ON_NPU"),
     "SGLANG_RBLN_BLOCKS_PER_REGION": _optional("SGLANG_RBLN_BLOCKS_PER_REGION", int),
-    "SGLANG_RBLN_FLUX3_ONE_GRAPH": _flag("SGLANG_RBLN_FLUX3_ONE_GRAPH"),
 }
 
 
