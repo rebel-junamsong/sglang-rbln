@@ -59,15 +59,14 @@ def test_compiles_the_decoder_once(stage, compiled):
     assert compiled[0][1]["options"]["compile_context"].state.use_weight_sharing
 
 
-def test_moves_the_decoder_off_the_first_tensor_parallel_device(
-    stage, compiled, monkeypatch
-):
+def test_decoder_spans_the_tensor_parallel_devices(stage, compiled, monkeypatch):
     monkeypatch.setenv("SGLANG_RBLN_NUM_DEVICES", "4")
     batch = SimpleNamespace(use_diffusion_decoder=False)
     server_args = SimpleNamespace(enable_torch_compile=True)
     decoding_av.compile_video_decoder(decode_video, stage, batch, server_args)
     options = compiled[0][1]["options"]
-    assert (options["num_devices"], options["device"]) == (1, 3)
+    assert options["num_devices"] == 4
+    assert "device" not in options
 
 
 def test_decoder_keeps_the_devices_declared_for_its_component(
