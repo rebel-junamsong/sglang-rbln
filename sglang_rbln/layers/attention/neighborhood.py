@@ -10,6 +10,8 @@ import torch.nn.functional as F
 
 __all__ = ["neighborhood_attention"]
 
+SINGLE_TILE_KERNELS = 3
+
 
 class AxisTiles(NamedTuple):
     queries: torch.Tensor
@@ -77,6 +79,15 @@ def default_tile_size(rank: int) -> list[int]:
     return [1, 4, 8] if rank == 3 else [8] * rank
 
 
+def default_tile_lengths(grid: Sequence[int], kernel_size: Sequence[int]) -> list[int]:
+    return [
+        length if length <= SINGLE_TILE_KERNELS * kernel else size
+        for length, kernel, size in zip(
+            grid, kernel_size, default_tile_size(len(grid)), strict=True
+        )
+    ]
+
+
 def neighborhood_attention(
     q: torch.Tensor,
     k: torch.Tensor,
@@ -88,7 +99,7 @@ def neighborhood_attention(
 ) -> torch.Tensor:
     batch, *grid, heads, _ = q.shape
     causal = list(is_causal or [False] * len(grid))
-    sizes = list(tile_size or default_tile_size(len(grid)))
+    sizes = list(tile_size or default_tile_lengths(grid, kernel_size))
     axes = [
         axis_tiles(length, kernel, axis_causal, size, q.device)
         for length, kernel, axis_causal, size in zip(

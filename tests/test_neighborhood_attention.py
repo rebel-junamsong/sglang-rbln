@@ -30,6 +30,8 @@ def flex_reference():
         ((13, 15, 11), [5, 5, 5], [True, False, False], None),
         ((17, 23), [5, 5], None, None),
         ((47, 33), [5, 5], None, None),
+        ((12, 17, 20), [5, 5, 5], None, None),
+        ((12, 34, 40), [5, 5, 5], [True, False, False], None),
     ],
     ids=str,
 )
@@ -58,6 +60,20 @@ def test_every_window_lies_in_its_halo(length, kernel, size, causal):
             keys = halo[tile][tiles.mask[tile, row]].tolist()
             assert len(keys) == (min(query + 1, window) if causal else window)
             assert query in keys
+
+
+@pytest.mark.parametrize(
+    ("grid", "kernel", "expected"),
+    [
+        ((12, 136, 160), [5, 5, 5], [12, 4, 8]),
+        ((16, 15, 16), [5, 5, 5], [1, 15, 8]),
+        ((9, 17, 20), [3, 5, 5], [9, 4, 8]),
+        ((17, 20), [5, 5], [8, 8]),
+        ((14, 9), [5, 3], [14, 9]),
+    ],
+)
+def test_axes_up_to_three_windows_long_are_one_tile(grid, kernel, expected):
+    assert neighborhood.default_tile_lengths(grid, kernel) == expected
 
 
 def test_index_tables_are_runs_of_consecutive_positions():
