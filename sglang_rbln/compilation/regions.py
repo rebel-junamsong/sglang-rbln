@@ -127,9 +127,14 @@ def checking_fit() -> Iterator[None]:
         RBLNCompiledModel.create_runtime = create_runtime
 
 
+OUT_OF_DEVICE_MEMORY = ("Lack of device memory", "SYS_ENOMEM")
+
+
 def _does_not_fit(error: BaseException | None) -> bool:
     while error is not None:
-        if isinstance(error, RegionDoesNotFit) or "Lack of device memory" in str(error):
+        if isinstance(error, RegionDoesNotFit) or any(
+            message in str(error) for message in OUT_OF_DEVICE_MEMORY
+        ):
             return True
         error = getattr(error, "inner_exception", None) or error.__cause__
     return False

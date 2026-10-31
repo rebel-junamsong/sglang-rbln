@@ -290,14 +290,22 @@ def test_kept_outputs_reach_every_block_caller(sized_graphs, room, shape):
         assert all(map(torch.equal, seen, expected))
 
 
-def test_load_time_out_of_memory_halves_the_region(monkeypatch):
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Lack of device memory, key=Kernel",
+        "(System) code=510 SYS_ENOMEM: Out of memory. (Failed to allocate device "
+        "memory, key=Input, size=12478054400, node_id=0)",
+    ],
+)
+def test_load_time_out_of_memory_halves_the_region(monkeypatch, message):
     monkeypatch.delenv("SGLANG_RBLN_BLOCKS_PER_REGION", raising=False)
     sizes = []
 
     def backend(graph, example_inputs):
         sizes.append(_blocks_in(graph))
         if sizes[-1] > 2:
-            raise RuntimeError("Lack of device memory, key=Kernel")
+            raise RuntimeError(message)
         return graph
 
     torch.manual_seed(0)
