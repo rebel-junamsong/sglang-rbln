@@ -5,3 +5,13 @@ __pycache__/
 .ruff_cache/
 build/
 dist/
+outputs/
+*.png
+*.jpg
+rank_*/
+runtime.log
+inputs/
+!assets/*.png
+*.mp4
+*.log
+runtime_dump/

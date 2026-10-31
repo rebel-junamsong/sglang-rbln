@@ -1,0 +1,64 @@
+[build-system]
+requires = ["setuptools>=77", "setuptools-scm>=8"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sglang-rbln"
+dynamic = ["version"]
+description = "Out-of-tree RBLN NPU platform plugin for SGLang Diffusion."
+readme = "README.md"
+requires-python = ">=3.11,<3.15"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Rebellions Inc.", email = "support@rebellions.ai" }]
+keywords = ["sglang", "diffusion", "rbln", "npu", "torch.compile"]
+classifiers = [
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Operating System :: POSIX :: Linux",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "sglang[diffusion]==0.5.21",
+    "rebel-compiler==0.12.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/rebel-junamsong/sglang-rbln"
+Repository = "https://github.com/rebel-junamsong/sglang-rbln"
+Issues = "https://github.com/rebel-junamsong/sglang-rbln/issues"
+
+[project.optional-dependencies]
+device = ["torch-rbln"]
+test = ["pytest>=8", "requests"]
+
+[project.entry-points."sglang.multimodal_gen.platforms"]
+rbln = "sglang_rbln:activate"
+
+[project.entry-points."sglang.multimodal_gen.plugins"]
+rbln_patches = "sglang_rbln.patches:register"
+
+[tool.setuptools.packages.find]
+include = ["sglang_rbln*"]
+
+[tool.setuptools_scm]
+fallback_version = "0.0.0.dev0"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+xfail_strict = true
+addopts = "-m 'not e2e' --strict-markers --strict-config"
+markers = [
+    "e2e: launches sglang serve and generates through the HTTP API",
+    "npu: needs an RBLN NPU on the host; xfails strictly without one",
+    "device_mode: needs execution mode 'device' (torch-rbln); xfails strictly in host mode",
+]
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
