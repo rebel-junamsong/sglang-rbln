@@ -245,13 +245,13 @@ class DeferredBlock:
         output = state["compiled"](state.pop("values"), calls)
         if not self.group.keep_outputs:
             return output
-        *kept, last = itertools.batched(output, len(slots))
+        width = len(slots)
         pending = state.pop("pending", [])
         for placeholder, value in zip(
-            itertools.chain(*pending), itertools.chain(*kept), strict=True
+            itertools.chain(*pending), output[:-width], strict=True
         ):
             placeholder.copy_(value)
-        return _restore(last, len(slots))
+        return _restore(output[-width:], width)
 
 
 def consecutive_runs(
