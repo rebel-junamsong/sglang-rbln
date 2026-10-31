@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import functools
 import logging
 
 from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry, HookType
+
+from sglang_rbln.patches.stages.ltx_2 import vocoder
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +42,12 @@ def compile_video_decoder(forward, stage, batch, server_args, *args, **kwargs):
     return forward(stage, batch, server_args, *args, **kwargs)
 
 
+def compile_decoders(forward, stage, batch, server_args):
+    return compile_video_decoder(
+        functools.partial(vocoder.compile_vocoder, forward), stage, batch, server_args
+    )
+
+
 def register() -> str:
-    HookRegistry.register(HOOK_TARGET, compile_video_decoder, HookType.AROUND)
+    HookRegistry.register(HOOK_TARGET, compile_decoders, HookType.AROUND)
     return HOOK_TARGET

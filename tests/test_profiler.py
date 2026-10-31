@@ -5,7 +5,6 @@ from types import SimpleNamespace
 
 import pytest
 import rebel.profiler
-from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry, HookType
 
 from sglang_rbln.patches.managers import gpu_worker
 
@@ -38,14 +37,6 @@ def serve(window, *warmups):
         )
         for i, w in enumerate(warmups)
     ]
-
-
-def test_registers_an_around_hook():
-    assert gpu_worker.register() == gpu_worker.HOOK_TARGET
-    assert any(
-        hook is gpu_worker.profile_request and kind is HookType.AROUND
-        for kind, hook, _ in HookRegistry._hooks[gpu_worker.HOOK_TARGET]
-    )
 
 
 def test_does_nothing_without_a_profile_dir(monkeypatch, window):

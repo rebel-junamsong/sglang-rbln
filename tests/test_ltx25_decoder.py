@@ -39,7 +39,17 @@ def test_registers_around_the_video_decode():
     target = decoding_av.register()
     assert target == decoding_av.HOOK_TARGET
     hooks = [hook for _, hook, _ in HookRegistry._hooks[target]]
-    assert decoding_av.compile_video_decoder in hooks
+    assert decoding_av.compile_decoders in hooks
+
+
+def test_one_hook_compiles_the_decoder_and_the_vocoder(stage, compiled, monkeypatch):
+    monkeypatch.setenv("SGLANG_RBLN_VOCODER_ON_NPU", "1")
+    stage.vocoder = nn.Linear(4, 4)
+    batch = SimpleNamespace(use_diffusion_decoder=False)
+    server_args = SimpleNamespace(enable_torch_compile=True)
+    output = decoding_av.compile_decoders(decode_video, stage, batch, server_args)
+    assert output == ("video", None)
+    assert [module for module, _ in compiled] == [stage.vae.decoder, stage.vocoder]
 
 
 def test_compiles_the_decoder_once(stage, compiled):

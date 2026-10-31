@@ -9,7 +9,6 @@ from sglang.multimodal_gen.configs.models.vocoder.ltx_vocoder import (
     LTXVocoderConfig,
 )
 from sglang.multimodal_gen.runtime.models.vocoder.ltx_2_vocoder import LTX2Vocoder
-from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry
 from torch import nn
 
 from sglang_rbln.compilation import backend as compilation
@@ -35,13 +34,6 @@ def compiled(monkeypatch):
 
 def forward(stage, batch, server_args):
     return "output"
-
-
-def test_registers_around_the_decoding_stage():
-    target = vocoder.register()
-    assert target == vocoder.HOOK_TARGET
-    hooks = [hook for _, hook, _ in HookRegistry._hooks[target]]
-    assert vocoder.compile_vocoder in hooks
 
 
 def test_compiles_the_vocoder_once(stage, compiled):

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import itertools
 import logging
 
@@ -47,7 +48,16 @@ def key_request_shape(execute_forward, worker, batch, *args, **kwargs):
         shapes.current_shape_key.reset(token)
 
 
+def run_request(execute_forward, worker, batch, *args, **kwargs):
+    return key_request_shape(
+        functools.partial(profile_request, execute_forward),
+        worker,
+        batch,
+        *args,
+        **kwargs,
+    )
+
+
 def register() -> str:
-    HookRegistry.register(HOOK_TARGET, key_request_shape, HookType.AROUND)
-    HookRegistry.register(HOOK_TARGET, profile_request, HookType.AROUND)
+    HookRegistry.register(HOOK_TARGET, run_request, HookType.AROUND)
     return HOOK_TARGET

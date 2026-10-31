@@ -71,14 +71,14 @@ def worker() -> SimpleNamespace:
 
 
 def test_request_runs_under_its_key(worker):
-    request = SimpleNamespace(height=64, width=96, num_frames=5)
+    request = SimpleNamespace(height=64, width=96, num_frames=5, is_warmup=False)
     output = object()
 
     def execute_forward(worker, batch):
         execute_forward.key = shapes.current_shape_key.get()
         return output
 
-    assert gpu_worker.key_request_shape(execute_forward, worker, [request]) is output
+    assert gpu_worker.run_request(execute_forward, worker, [request]) is output
     assert execute_forward.key == shapes.shape_key(worker.pipeline, None, request)
     assert shapes.current_shape_key.get() is None
 
@@ -94,12 +94,11 @@ def test_key_is_cleared_when_the_request_fails(worker):
     assert shapes.current_shape_key.get() is None
 
 
-def test_registers_the_key_around_execute_forward():
-    gpu_worker.register()
-    assert any(
-        hook is gpu_worker.key_request_shape and kind is HookType.AROUND
-        for kind, hook, _ in HookRegistry._hooks[gpu_worker.HOOK_TARGET]
-    )
+def test_registers_the_request_hook_around_execute_forward():
+    assert gpu_worker.register() == gpu_worker.HOOK_TARGET
+    assert (HookType.AROUND, gpu_worker.run_request) in [
+        (kind, hook) for kind, hook, _ in HookRegistry._hooks[gpu_worker.HOOK_TARGET]
+    ]
 
 
 class _Block(nn.Module):

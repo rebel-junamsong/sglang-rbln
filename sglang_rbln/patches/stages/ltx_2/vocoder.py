@@ -4,16 +4,10 @@ from __future__ import annotations
 
 import logging
 
-from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry, HookType
-
 from sglang_rbln import envs
 
 logger = logging.getLogger(__name__)
 
-HOOK_TARGET = (
-    "sglang.multimodal_gen.runtime.pipelines_core.stages.model_specific_stages"
-    ".ltx_2.decoding_av.LTX2AVDecodingStage.forward"
-)
 COMPILED = "_rbln_vocoder_compiled"
 
 
@@ -36,8 +30,3 @@ def compile_vocoder(forward, stage, batch, server_args):
         setattr(vocoder, COMPILED, True)
         logger.info("Compiling the LTX-2 vocoder: %s", compile_kwargs)
     return forward(stage, batch, server_args)
-
-
-def register() -> str:
-    HookRegistry.register(HOOK_TARGET, compile_vocoder, HookType.AROUND)
-    return HOOK_TARGET
