@@ -11,6 +11,8 @@ import pytest
 from sglang_rbln import device
 
 STAGES = "sglang.multimodal_gen.runtime.pipelines_core.stages.model_specific_stages"
+SEGMENT_STATE_BRANCH = "rebel-junamsong/sglang:diffusion/flux3-segment-state-namedtuple"
+RETURN_VIDEO_BRANCH = "rebel-junamsong/sglang:diffusion/flux3-action-return-video"
 
 
 @dataclass(frozen=True, slots=True)
@@ -19,6 +21,7 @@ class PatchDebt:
     module: str
     upstream_pattern: str
     upstream_fix: str
+    upstream_branch: str | None = None
 
 
 PATCH_DEBTS = [
@@ -188,6 +191,7 @@ PATCH_DEBTS = [
         module="sglang.multimodal_gen.runtime.models.dits.flux3",
         upstream_pattern="class Flux3SegmentState(msgspec.Struct, frozen=True):",
         upstream_fix="use a segment state torch.compile can build (a NamedTuple)",
+        upstream_branch=SEGMENT_STATE_BRANCH,
     ),
     PatchDebt(
         patch="stages/text_encoding",
@@ -214,6 +218,7 @@ PATCH_DEBTS = [
             '    for name in ("seed", "guidance_scale", "guidance_scale_action"):'
         ),
         upstream_fix="forward parameters.return_video to the sampling params",
+        upstream_branch=RETURN_VIDEO_BRANCH,
     ),
     PatchDebt(
         patch="stages/flux3_action_video (decoder)",
@@ -222,6 +227,7 @@ PATCH_DEBTS = [
             "default_factory=lambda: Flux3VideoVAEConfig(load_decoder=False)"
         ),
         upstream_fix="load the video VAE decoder when the pipeline returns video",
+        upstream_branch=RETURN_VIDEO_BRANCH,
     ),
     PatchDebt(
         patch="stages/flux3_action_video (observation latent)",
@@ -231,6 +237,7 @@ PATCH_DEBTS = [
             "        video, video_ids = pack_video("
         ),
         upstream_fix="keep the observation latent in the VLA state",
+        upstream_branch=RETURN_VIDEO_BRANCH,
     ),
     PatchDebt(
         patch="stages/flux3_action_video (denoised video)",
@@ -239,12 +246,14 @@ PATCH_DEBTS = [
             "targets = result[cfg.action_modality][0].float() / cfg.action_scale"
         ),
         upstream_fix="keep the denoised video latent in the VLA state",
+        upstream_branch=RETURN_VIDEO_BRANCH,
     ),
     PatchDebt(
         patch="stages/flux3_action_video (content region)",
         module="sglang.multimodal_gen.configs.pipeline_configs.flux3_action",
         upstream_pattern="            content = (540, 640)",
         upstream_fix="expose the canvas content region on the pipeline config",
+        upstream_branch=RETURN_VIDEO_BRANCH,
     ),
     PatchDebt(
         patch="stages/flux3_action_video (decode)",
@@ -256,6 +265,7 @@ PATCH_DEBTS = [
             "        }"
         ),
         upstream_fix="decode the predicted video in a stage when the request asks",
+        upstream_branch=RETURN_VIDEO_BRANCH,
     ),
     PatchDebt(
         patch="stages/flux3_action_video (response)",
@@ -264,6 +274,7 @@ PATCH_DEBTS = [
             '        for name in ("action_mode", "domain_id", "raw_action_dim"):'
         ),
         upstream_fix="return the predicted video in the action envelope",
+        upstream_branch=RETURN_VIDEO_BRANCH,
     ),
     PatchDebt(
         patch="models/flux3_video_vae (attention)",
@@ -317,7 +328,10 @@ def _upstream_source(module: str) -> str:
     ids=lambda debt: debt.patch if isinstance(debt, PatchDebt) else None,
 )
 def test_upstream_still_needs_the_patch(debt: PatchDebt):
+    fix = debt.upstream_fix
+    if debt.upstream_branch:
+        fix += f", drafted on {debt.upstream_branch}"
     assert debt.upstream_pattern in _upstream_source(debt.module), (
         f"sglang no longer has the code patches/{debt.patch} works around "
-        f"({debt.upstream_fix}); delete the patch"
+        f"({fix}); delete the patch"
     )
