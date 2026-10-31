@@ -127,7 +127,7 @@ the NPU. A compile error fails the request unless `SGLANG_RBLN_COMPILE_STRICT=0`
 | `SGLANG_RBLN_CHECK_GRAPHS=1` | rerun each compiled graph once on the CPU and log the deviation of the NPU output (precision triage) |
 | `SGLANG_RBLN_NUM_DEVICES=4` | compile every graph for tensor parallelism over that many NPUs (rebel `num_devices`) |
 | `SGLANG_RBLN_COMPONENT_DEVICES=text_encoder=4,5,6,7` | run the named pipeline components (`;`-separated, e.g. `text_encoder=4,5,6,7;vae=8`) on their own NPUs, given as indices into `RBLN_VISIBLE_DEVICES`; each is tensor-parallel over its list, in place of `SGLANG_RBLN_NUM_DEVICES`, so a component that does not fit next to the DiT gets NPUs of its own |
-| `SGLANG_RBLN_COMPILE_VAE=1` | also compile the FLUX 3 Action and Cosmos3 video VAEs for the NPU (Cosmos3: one region per Wan VAE up-block, each on a single NPU, spread over the tensor-parallel NPUs); they otherwise decode on the host. The LTX-2 video decoder is always compiled |
+| `SGLANG_RBLN_COMPILE_VAE=1` | also compile the video VAE for the NPU: FLUX 3 Action with one graph per encoder and decoder on the last tensor-parallel NPU, and Cosmos3 with one graph per Wan VAE block, each compiled for a single NPU and spread over the tensor-parallel NPUs (needs rebel-compiler with rebellions-sw/rebel_compiler#14989); it otherwise runs on the host |
 | `SGLANG_RBLN_COMPILE_ONLY=1` | compile the graphs and stop before running them |
 | `SGLANG_RBLN_COMPILE_STRICT=0` | let a graph that fails to compile run on the host instead of failing the request (strict is on by default, so a compile failure is never silently timed as NPU work) |
 | `SGLANG_RBLN_LOG_GRAPHS=1` | log every graph handed to the compiler |
@@ -155,7 +155,8 @@ It denoises the future video jointly with the actions; send
 `"parameters": {"return_video": true}` to also get that video, decoded by the
 video VAE, as `data[0].video` (`format` `mp4`, `fps`, `shape` `[frames, height,
 width, 3]`, `b64_json`). The video VAE decodes on the host unless
-`SGLANG_RBLN_COMPILE_VAE=1`; compiled, it needs an NPU's memory to itself.
+`SGLANG_RBLN_COMPILE_VAE=1`; compiled, its decoder runs as one graph on the last
+tensor-parallel NPU.
 
 ## Limits
 
