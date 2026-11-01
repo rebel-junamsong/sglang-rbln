@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+import functools
 import logging
 from types import SimpleNamespace
 
@@ -18,7 +19,8 @@ pytestmark = pytest.mark.usefixtures("rbln_platform")
 @pytest.fixture
 def stage():
     return SimpleNamespace(
-        vae=SimpleNamespace(decoder=nn.Linear(4, 4), use_framewise_decoding=False)
+        vae=SimpleNamespace(decoder=nn.Linear(4, 4), use_framewise_decoding=False),
+        diffusion_decoder=None,
     )
 
 
@@ -112,6 +114,51 @@ def test_leaves_the_decoder_eager(
     batch = SimpleNamespace(use_diffusion_decoder=use_diffusion_decoder)
     server_args = SimpleNamespace(enable_torch_compile=enable_torch_compile)
     decoding_av.compile_video_decoder(decode_video, stage, batch, server_args)
+    assert compiled == []
+    assert not stage.vae.use_framewise_decoding
+
+
+@pytest.fixture
+def diffusion_decoder():
+    phases = {
+        name: functools.partial(str, name)
+        for name in decoding_av.DIFFUSION_DECODER_GRAPHS
+    }
+    model = nn.Linear(4, 4)
+    model.decoder = SimpleNamespace(**phases)
+    return model
+
+
+@pytest.fixture
+def torch_compiled(monkeypatch):
+    calls = []
+
+    def fake_compile(fn, **kwargs):
+        calls.append((fn, kwargs))
+        return lambda *args, **inner: ("compiled", fn(*args, **inner))
+
+    monkeypatch.setattr(decoding_av.torch, "compile", fake_compile)
+    return calls
+
+
+def test_compiles_each_diffusion_decoder_phase_once(
+    stage, compiled, torch_compiled, diffusion_decoder
+):
+    stage.diffusion_decoder = diffusion_decoder
+    batch = SimpleNamespace(use_diffusion_decoder=True)
+    server_args = SimpleNamespace(enable_torch_compile=True)
+    for _ in range(2):
+        decoding_av.compile_video_decoder(decode_video, stage, batch, server_args)
+    assert len(torch_compiled) == len(decoding_av.DIFFUSION_DECODER_GRAPHS)
+    assert all(kwargs["dynamic"] is False for _, kwargs in torch_compiled)
+    contexts = {
+        id(kwargs["options"]["compile_context"]) for _, kwargs in torch_compiled
+    }
+    assert len(contexts) == 1
+    decoder = diffusion_decoder.decoder
+    assert [
+        getattr(decoder, name)() for name in decoding_av.DIFFUSION_DECODER_GRAPHS
+    ] == [("compiled", name) for name in decoding_av.DIFFUSION_DECODER_GRAPHS]
     assert compiled == []
     assert not stage.vae.use_framewise_decoding
 

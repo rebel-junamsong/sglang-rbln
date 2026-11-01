@@ -8,6 +8,8 @@ from collections import OrderedDict
 import torch
 from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry, HookType
 
+from sglang_rbln.layers.attention.neighborhood import neighborhood_attention
+
 MODELS = "sglang.multimodal_gen.runtime.models"
 HOOK_TARGETS = (
     f"{MODELS}.dits.ltx_2.LTX2AudioVideoRotaryPosEmbed.forward",
@@ -15,6 +17,7 @@ HOOK_TARGETS = (
 )
 FUSED_ADA_VALUES = f"{MODELS}.dits.ltx_2._ltx2_try_fused_ada_values9"
 VAE = f"{MODELS}.vaes.ltx_2_vae.AutoencoderKLLTX2Video"
+DIFFUSION_DECODER_NA3D = f"{MODELS}.decoders.ltx_2_5_diffusion_decoder._na3d"
 
 
 ROTARY_TABLES = "_rbln_rotary_tables"
@@ -65,6 +68,10 @@ def without_triton_ada_values(*args, **kwargs) -> None:
     return None
 
 
+def na3d():
+    return neighborhood_attention
+
+
 def _blend(a: torch.Tensor, b: torch.Tensor, extent: int, dim: int) -> torch.Tensor:
     """Upstream's per-slice blend as whole-slab ops, rounding at the same steps."""
     extent = min(a.shape[dim], b.shape[dim], extent)
@@ -106,6 +113,7 @@ def register() -> tuple[str, ...]:
     for target in HOOK_TARGETS:
         HookRegistry.register(target, cached_rotary_tables, HookType.AROUND)
     HookRegistry.register(FUSED_ADA_VALUES, without_triton_ada_values, HookType.REPLACE)
+    HookRegistry.register(DIFFUSION_DECODER_NA3D, na3d, HookType.REPLACE)
     for target, blend in BLENDS.items():
         HookRegistry.register(target, blend, HookType.REPLACE)
-    return (*HOOK_TARGETS, FUSED_ADA_VALUES, *BLENDS)
+    return (*HOOK_TARGETS, FUSED_ADA_VALUES, DIFFUSION_DECODER_NA3D, *BLENDS)

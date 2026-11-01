@@ -94,6 +94,14 @@ def static_compile_kwargs(module: torch.nn.Module) -> dict[str, Any]:
     return compile_kwargs
 
 
+def single_device_compile_kwargs(module: torch.nn.Module) -> dict[str, Any]:
+    compile_kwargs = static_compile_kwargs(module)
+    options = compile_kwargs["options"]
+    if "device" not in options and (num_devices := options.get("num_devices", 1)) > 1:
+        compile_kwargs["options"] = on_one_device(options, num_devices - 1, module)
+    return compile_kwargs
+
+
 def describe_graph(graph: torch.fx.GraphModule, example_inputs) -> str:
     inputs = [
         f"{'x'.join(map(str, tensor.shape))}:{str(tensor.dtype).removeprefix('torch.')}"

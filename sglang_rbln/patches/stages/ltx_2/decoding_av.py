@@ -5,9 +5,14 @@ from __future__ import annotations
 import functools
 import logging
 
+import torch
 from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry, HookType
 
 from sglang_rbln.compilation import tiling
+from sglang_rbln.compilation.backend import (
+    single_device_compile_kwargs,
+    static_compile_kwargs,
+)
 from sglang_rbln.patches.stages.ltx_2 import vocoder
 
 logger = logging.getLogger(__name__)
@@ -17,25 +22,36 @@ HOOK_TARGET = (
     ".ltx_2.decoding_av.LTX2AVDecodingStage.forward"
 )
 COMPILED = "_rbln_decoder_compiled"
+DIFFUSION_DECODER_GRAPHS = (
+    "forward_stages_1_to_3",
+    "forward_stage_4",
+    "forward_diffusion_step",
+)
+
+
+def compile_diffusion_decoder(model) -> None:
+    compile_kwargs = single_device_compile_kwargs(model)
+    decoder = model.decoder
+    for name in DIFFUSION_DECODER_GRAPHS:
+        setattr(decoder, name, torch.compile(getattr(decoder, name), **compile_kwargs))
+    logger.info("Compiling the LTX-2.5 diffusion decoder: %s", compile_kwargs)
 
 
 def compile_video_decoder(forward, stage, batch, server_args, *args, **kwargs):
-    from sglang.multimodal_gen.runtime.utils.torch_compile import (
-        build_torch_compile_kwargs,
-    )
-
-    vae = stage.vae
+    module = stage.diffusion_decoder if batch.use_diffusion_decoder else stage.vae
     if (
         server_args.enable_torch_compile
-        and not batch.use_diffusion_decoder
-        and not getattr(vae, COMPILED, False)
+        and module is not None
+        and not getattr(module, COMPILED, False)
     ):
-        compile_kwargs = build_torch_compile_kwargs(mode=None, module=vae.decoder)
-        compile_kwargs["dynamic"] = False
-        vae.decoder.compile(**compile_kwargs)
-        vae.use_framewise_decoding = True
-        setattr(vae, COMPILED, True)
-        logger.info("Compiling the LTX-2 video decoder: %s", compile_kwargs)
+        if batch.use_diffusion_decoder:
+            compile_diffusion_decoder(module)
+        else:
+            compile_kwargs = static_compile_kwargs(module.decoder)
+            module.decoder.compile(**compile_kwargs)
+            module.use_framewise_decoding = True
+            logger.info("Compiling the LTX-2 video decoder: %s", compile_kwargs)
+        setattr(module, COMPILED, True)
     return forward(stage, batch, server_args, *args, **kwargs)
 
 

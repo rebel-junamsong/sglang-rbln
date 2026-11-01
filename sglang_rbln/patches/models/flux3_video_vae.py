@@ -8,7 +8,7 @@ import torch
 from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry, HookType
 
 from sglang_rbln import envs
-from sglang_rbln.compilation.backend import on_one_device, static_compile_kwargs
+from sglang_rbln.compilation.backend import single_device_compile_kwargs
 from sglang_rbln.layers.attention.neighborhood import neighborhood_attention
 
 logger = logging.getLogger(__name__)
@@ -31,10 +31,7 @@ def compile_coders(vae, server_args, config):
     model = vae.model
     if model.decoder is not None:
         model.decoder.to(torch.bfloat16)
-    compile_kwargs = static_compile_kwargs(vae)
-    options = compile_kwargs["options"]
-    if "device" not in options and (num_devices := options.get("num_devices", 1)) > 1:
-        compile_kwargs["options"] = on_one_device(options, num_devices - 1, vae)
+    compile_kwargs = single_device_compile_kwargs(vae)
     for coder in (model.encoder, model.decoder):
         if coder is not None:
             coder.compile(**compile_kwargs)
