@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import functools
+import itertools
 import logging
 
 import torch
 from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry, HookType
 
-from sglang_rbln.compilation import tiling
+from sglang_rbln.compilation import regions, tiling
 from sglang_rbln.compilation.backend import (
     single_device_compile_kwargs,
     static_compile_kwargs,
@@ -22,16 +23,38 @@ HOOK_TARGET = (
     ".ltx_2.decoding_av.LTX2AVDecodingStage.forward"
 )
 COMPILED = "_rbln_decoder_compiled"
-DIFFUSION_DECODER_GRAPHS = (
-    "forward_stages_1_to_3",
-    "forward_stage_4",
-    "forward_diffusion_step",
-)
+DIFFUSION_DECODER_GRAPHS = ("forward_stage_4", "forward_diffusion_step")
+DIFFUSION_DECODER_TILE_TOKENS = 1 << 18
+
+
+def diffusion_decoder_tile_tokens(model) -> int:
+    patch = model.decoder.patch_size
+    return (
+        model.tile_sample_min_num_frames
+        * (model.tile_sample_min_height // patch)
+        * (model.tile_sample_min_width // patch)
+    )
+
+
+def fit_diffusion_decoder_tiles(model) -> None:
+    axes = itertools.cycle((("height", "width"), ("num_frames",)))
+    while diffusion_decoder_tile_tokens(model) > DIFFUSION_DECODER_TILE_TOKENS:
+        for axis in next(axes):
+            for kind in ("min", "stride"):
+                name = f"tile_sample_{kind}_{axis}"
+                setattr(model, name, getattr(model, name) // 2)
 
 
 def compile_diffusion_decoder(model) -> None:
     compile_kwargs = single_device_compile_kwargs(model)
     decoder = model.decoder
+    fit_diffusion_decoder_tiles(model)
+    decoder.conv_in.compile(**compile_kwargs)
+    for blocks, upsample in zip(
+        decoder.det_stages[:-1], decoder.upsamples[:-1], strict=True
+    ):
+        regions.group_blocks(list(blocks), None, compile_kwargs)
+        upsample.compile(**compile_kwargs)
     for name in DIFFUSION_DECODER_GRAPHS:
         setattr(decoder, name, torch.compile(getattr(decoder, name), **compile_kwargs))
     logger.info("Compiling the LTX-2.5 diffusion decoder: %s", compile_kwargs)
