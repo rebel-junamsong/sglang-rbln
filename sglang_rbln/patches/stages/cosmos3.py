@@ -62,9 +62,14 @@ def vae_regions(module: nn.Module) -> list[list[nn.Module]]:
         wanvae.WanRMS_norm,
         wanvae.DupUp3D,
     )
+    chained_types = (
+        wanvae.WanUpBlock,
+        wanvae.WanResidualUpBlock,
+        wanvae.WanResidualDownBlock,
+    )
     found = []
     for child in module.children():
-        if isinstance(child, (wanvae.WanUpBlock, wanvae.WanResidualUpBlock)):
+        if isinstance(child, chained_types):
             found.append(list(child.resnets))
             others = [m for name, m in child.named_children() if name != "resnets"]
             found.extend(vae_regions(nn.ModuleList(others)))

@@ -301,6 +301,13 @@ class TestVaeRegions:
             len(g) == 1 for g in groups if g not in [list(b.resnets) for b in up_blocks]
         )
 
+    def test_each_down_block_resnets_list_is_one_region(self, tiny_wan_codec):
+        groups = cosmos3.vae_regions(tiny_wan_codec)
+        down_blocks = tiny_wan_codec.encoder.down_blocks
+        assert len(down_blocks) > 1
+        assert all(len(block.resnets) > 1 for block in down_blocks)
+        assert all(list(block.resnets) in groups for block in down_blocks)
+
     def test_compiles_each_region_once(self, tiny_wan_vae, grouped):
         cosmos3.compile_vae_regions(tiny_wan_vae)
         cosmos3.compile_vae_regions(tiny_wan_vae)
