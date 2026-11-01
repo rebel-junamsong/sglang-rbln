@@ -24,16 +24,44 @@ logger = logging.getLogger(__name__)
 COMPILE_BACKEND_NAME = "rbln"
 RUNTIME_REPORT_EVERY = 100
 
-_compile_contexts: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+_device_set_contexts: dict[tuple[int, ...] | int | None, Any] = {}
+_module_contexts: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+
+
+def _new_context():
+    from rebel import CompileContext
+
+    return CompileContext(use_weight_sharing=True)
+
+
+def device_set_context(device_set: tuple[int, ...] | int | None):
+    context = _device_set_contexts.get(device_set)
+    if context is None:
+        context = _device_set_contexts[device_set] = _new_context()
+    return context
+
+
+def module_context(module: torch.nn.Module):
+    context = _module_contexts.get(module)
+    if context is None:
+        context = _module_contexts[module] = _new_context()
+    return context
+
+
+def on_one_device(options: dict[str, Any], device: int, module: torch.nn.Module):
+    return options | {
+        "num_devices": 1,
+        "device": device,
+        "compile_context": module_context(module),
+    }
 
 
 def compile_options(module: torch.nn.Module) -> dict[str, Any]:
-    from rebel import CompileContext
-
-    context = _compile_contexts.get(module)
-    if context is None:
-        context = _compile_contexts[module] = CompileContext(use_weight_sharing=True)
-    options: dict[str, Any] = {"compile_context": context}
+    devices = placement.devices_of(module)
+    num_devices = envs.SGLANG_RBLN_NUM_DEVICES
+    options: dict[str, Any] = {
+        "compile_context": device_set_context(devices or num_devices)
+    }
     modes = [
         mode
         for mode, enabled in (
@@ -48,10 +76,10 @@ def compile_options(module: torch.nn.Module) -> dict[str, Any]:
         options["cache_dir"] = str(envs.SGLANG_RBLN_CACHE_DIR)
     if envs.SGLANG_RBLN_STATIC_OUTPUT:
         options["use_static_output"] = True
-    if devices := placement.devices_of(module):
+    if devices:
         options["device"] = list(devices)
         options["num_devices"] = len(devices)
-    elif num_devices := envs.SGLANG_RBLN_NUM_DEVICES:
+    elif num_devices:
         options["num_devices"] = num_devices
     return options
 

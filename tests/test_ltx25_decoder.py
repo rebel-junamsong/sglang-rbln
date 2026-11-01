@@ -79,6 +79,16 @@ def test_decoder_spans_the_tensor_parallel_devices(stage, compiled, monkeypatch)
     assert "device" not in options
 
 
+def test_decoder_shares_the_transformer_context(stage, compiled, monkeypatch):
+    monkeypatch.setenv("SGLANG_RBLN_NUM_DEVICES", "4")
+    monkeypatch.setattr(compilation, "_device_set_contexts", {})
+    transformer = compilation.compile_options(nn.Linear(4, 4))["compile_context"]
+    batch = SimpleNamespace(use_diffusion_decoder=False)
+    server_args = SimpleNamespace(enable_torch_compile=True)
+    decoding_av.compile_video_decoder(decode_video, stage, batch, server_args)
+    assert compiled[0][1]["options"]["compile_context"] is transformer
+
+
 def test_decoder_keeps_the_devices_declared_for_its_component(
     stage, compiled, monkeypatch
 ):

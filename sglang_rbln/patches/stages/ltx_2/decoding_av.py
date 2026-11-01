@@ -19,7 +19,6 @@ COMPILED = "_rbln_decoder_compiled"
 
 
 def compile_video_decoder(forward, stage, batch, server_args, *args, **kwargs):
-    from rebel import CompileContext
     from sglang.multimodal_gen.runtime.utils.torch_compile import (
         build_torch_compile_kwargs,
     )
@@ -32,9 +31,6 @@ def compile_video_decoder(forward, stage, batch, server_args, *args, **kwargs):
     ):
         compile_kwargs = build_torch_compile_kwargs(mode=None, module=vae.decoder)
         compile_kwargs["dynamic"] = False
-        compile_kwargs["options"]["compile_context"] = CompileContext(
-            use_weight_sharing=True
-        )
         vae.decoder.compile(**compile_kwargs)
         vae.use_framewise_decoding = True
         setattr(vae, COMPILED, True)

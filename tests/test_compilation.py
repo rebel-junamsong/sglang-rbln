@@ -10,6 +10,7 @@ from torch._dynamo.testing import CompileCounter
 
 from sglang_rbln import envs
 from sglang_rbln.compilation import backend as compilation
+from sglang_rbln.compilation import placement
 
 
 class _TinyMlp(nn.Module):
@@ -207,19 +208,38 @@ class TestCompileOptions:
         del options["compile_context"]
         return options
 
-    def test_context_is_per_module(self, monkeypatch, tmp_path):
+    def test_modules_on_one_device_set_share_a_context(self, monkeypatch, tmp_path):
         monkeypatch.delenv("SGLANG_RBLN_DISABLE_COMPILE_CACHE")
         monkeypatch.setenv("SGLANG_RBLN_CACHE_DIR", str(tmp_path))
-        module = _TinyMlp()
-        first = compilation.compile_options(module)
-        second = compilation.compile_options(module)
+        monkeypatch.setenv("SGLANG_RBLN_NUM_DEVICES", "4")
+        monkeypatch.setattr(compilation, "_device_set_contexts", {})
+        first = compilation.compile_options(_TinyMlp())
+        second = compilation.compile_options(_TinyMlp())
         assert first["compile_context"] is second["compile_context"]
-        assert (
-            first["compile_context"]
-            is not compilation.compile_options(_TinyMlp())["compile_context"]
-        )
         assert first["cache_dir"] == str(tmp_path)
         assert first["mode"] == ["strict"]
+
+    def test_device_sets_keep_their_own_context(self, monkeypatch):
+        monkeypatch.setenv("SGLANG_RBLN_NUM_DEVICES", "4")
+        monkeypatch.setattr(compilation, "_device_set_contexts", {})
+        default = compilation.compile_options(_TinyMlp())["compile_context"]
+        placed = _TinyMlp()
+        placement.place(placed, (4, 5, 6, 7))
+        assert compilation.compile_options(placed)["compile_context"] is not default
+
+    def test_one_device_compile_keeps_a_context_per_module(self, monkeypatch):
+        monkeypatch.setenv("SGLANG_RBLN_NUM_DEVICES", "4")
+        monkeypatch.setattr(compilation, "_device_set_contexts", {})
+        module = _TinyMlp()
+        shared = compilation.compile_options(module)
+        options = compilation.on_one_device(shared, 3, module)
+        assert options["num_devices"] == 1
+        assert options["device"] == 3
+        assert options["compile_context"] is not shared["compile_context"]
+        again = compilation.on_one_device(shared, 3, module)
+        assert again["compile_context"] is options["compile_context"]
+        other = compilation.on_one_device(shared, 3, _TinyMlp())
+        assert other["compile_context"] is not options["compile_context"]
 
     def test_context_shares_weights_across_graphs(self):
         context = compilation.compile_options(_TinyMlp())["compile_context"]

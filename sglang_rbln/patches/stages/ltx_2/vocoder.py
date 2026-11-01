@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 
 from sglang_rbln import envs
+from sglang_rbln.compilation.backend import on_one_device
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +26,9 @@ def compile_vocoder(forward, stage, batch, server_args):
         compile_kwargs = build_torch_compile_kwargs(mode=None, module=vocoder)
         compile_kwargs["dynamic"] = False
         if num_devices := compile_kwargs["options"].get("num_devices"):
-            compile_kwargs["options"] |= {"num_devices": 1, "device": num_devices - 1}
+            compile_kwargs["options"] = on_one_device(
+                compile_kwargs["options"], num_devices - 1, vocoder
+            )
         vocoder.compile(**compile_kwargs)
         setattr(vocoder, COMPILED, True)
         logger.info("Compiling the LTX-2 vocoder: %s", compile_kwargs)

@@ -10,6 +10,7 @@ from torch import nn
 
 from sglang_rbln import envs
 from sglang_rbln.compilation import regions
+from sglang_rbln.compilation.backend import on_one_device
 from sglang_rbln.patches.layers import layernorm
 from sglang_rbln.patches.models import cosmos3video
 
@@ -88,7 +89,7 @@ def compile_vae_regions(vae: nn.Module) -> None:
     for index, members in enumerate(groups):
         options = compile_kwargs["options"]
         if num_devices > 1:
-            options = options | {"num_devices": 1, "device": index % num_devices}
+            options = on_one_device(options, index % num_devices, vae)
         regions.group_blocks(members, None, compile_kwargs | {"options": options})
     vae._rbln_regions_compiled = True
 
