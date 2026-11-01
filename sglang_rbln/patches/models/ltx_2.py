@@ -17,7 +17,9 @@ HOOK_TARGETS = (
 )
 FUSED_ADA_VALUES = f"{MODELS}.dits.ltx_2._ltx2_try_fused_ada_values9"
 VAE = f"{MODELS}.vaes.ltx_2_vae.AutoencoderKLLTX2Video"
-DIFFUSION_DECODER_NA3D = f"{MODELS}.decoders.ltx_2_5_diffusion_decoder._na3d"
+DIFFUSION_DECODER = f"{MODELS}.decoders.ltx_2_5_diffusion_decoder"
+DIFFUSION_DECODER_NA3D = f"{DIFFUSION_DECODER}._na3d"
+DIFFUSION_DECODER_INIT = f"{DIFFUSION_DECODER}.LTX2VideoDiffusionDecoder3d.__init__"
 
 
 ROTARY_TABLES = "_rbln_rotary_tables"
@@ -72,6 +74,14 @@ def na3d():
     return neighborhood_attention
 
 
+def keyframe_tag(result, decoder, config, *args, **kwargs):
+    if not hasattr(decoder, "type_emb"):
+        decoder.type_emb = torch.nn.Parameter(
+            torch.zeros(config.arch_config.latent_channels)
+        )
+    return result
+
+
 def _blend(a: torch.Tensor, b: torch.Tensor, extent: int, dim: int) -> torch.Tensor:
     """Upstream's per-slice blend as whole-slab ops, rounding at the same steps."""
     extent = min(a.shape[dim], b.shape[dim], extent)
@@ -114,6 +124,13 @@ def register() -> tuple[str, ...]:
         HookRegistry.register(target, cached_rotary_tables, HookType.AROUND)
     HookRegistry.register(FUSED_ADA_VALUES, without_triton_ada_values, HookType.REPLACE)
     HookRegistry.register(DIFFUSION_DECODER_NA3D, na3d, HookType.REPLACE)
+    HookRegistry.register(DIFFUSION_DECODER_INIT, keyframe_tag, HookType.AFTER)
     for target, blend in BLENDS.items():
         HookRegistry.register(target, blend, HookType.REPLACE)
-    return (*HOOK_TARGETS, FUSED_ADA_VALUES, DIFFUSION_DECODER_NA3D, *BLENDS)
+    return (
+        *HOOK_TARGETS,
+        FUSED_ADA_VALUES,
+        DIFFUSION_DECODER_NA3D,
+        DIFFUSION_DECODER_INIT,
+        *BLENDS,
+    )

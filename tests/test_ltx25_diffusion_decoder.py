@@ -18,10 +18,27 @@ from sglang_rbln.patches.stages.ltx_2 import decoding_av
 
 
 def test_hands_the_decoder_the_tiled_neighborhood_attention():
-    assert ltx_2.DIFFUSION_DECODER_NA3D in ltx_2.register()
+    targets = ltx_2.register()
+    assert {ltx_2.DIFFUSION_DECODER_NA3D, ltx_2.DIFFUSION_DECODER_INIT} <= set(targets)
     hooks = [hook for _, hook, _ in HookRegistry._hooks[ltx_2.DIFFUSION_DECODER_NA3D]]
     assert ltx_2.na3d in hooks
+    hooks = [hook for _, hook, _ in HookRegistry._hooks[ltx_2.DIFFUSION_DECODER_INIT]]
+    assert ltx_2.keyframe_tag in hooks
     assert ltx_2.na3d() is neighborhood_attention
+
+
+def test_decoder_loads_the_checkpoint_keyframe_tag():
+    config = LTX25DiffusionDecoderConfig()
+    arch = config.arch_config
+    arch.decoder_stage_channels = [64, 32, 16, 16, 8]
+    arch.decoder_head_dim = 8
+    decoder = ltx_2_5_diffusion_decoder.LTX2VideoDiffusionDecoder3d(config)
+    ltx_2.keyframe_tag(None, decoder, config)
+    state = decoder.state_dict()
+    assert torch.equal(state["type_emb"], torch.zeros(arch.latent_channels))
+    tag = torch.randn(arch.latent_channels)
+    decoder.load_state_dict({**state, "type_emb": tag})
+    assert torch.equal(decoder.type_emb.detach(), tag)
 
 
 @pytest.mark.parametrize(

@@ -299,6 +299,15 @@ PATCH_DEBTS = [
         upstream_fix="compile the video VAE blocks like DenoisingStage does",
     ),
     PatchDebt(
+        patch="models/ltx_2 (diffusion decoder keyframe tag)",
+        module="sglang.multimodal_gen.runtime.models.decoders.ltx_2_5_diffusion_decoder",
+        upstream_pattern=(
+            "self.conv_in = nn.Linear(arch.latent_channels, stage_channels[0], "
+            "bias=True)\n\n        self.det_stages = nn.ModuleList()"
+        ),
+        upstream_fix="declare the checkpoint's type_emb (sglang 0.5.22)",
+    ),
+    PatchDebt(
         patch="stages/ltx_2/decoding_av",
         module=f"{STAGES}.ltx_2.decoding_av",
         upstream_pattern="decode_output = vae.decode(latents",
