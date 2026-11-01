@@ -5,6 +5,8 @@ from __future__ import annotations
 import contextvars
 from types import ModuleType
 
+from sglang_rbln.compilation import regions
+
 CONTEXT_VARS = ("is_first_frame", "feat_cache", "feat_idx", "first_chunk")
 
 
@@ -12,6 +14,7 @@ class TraceableContextVar:
     def __init__(self, name: str, value=None) -> None:
         self.name = name
         self.value = value
+        regions.register_state(self)
 
     def get(self, *default):
         return self.value

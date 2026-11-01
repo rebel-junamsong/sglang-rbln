@@ -160,10 +160,21 @@ class TestVaeDecodePlacement:
         out = cosmos3.place_vae_decode(self.decode_latents, stage, latents)
         assert torch.equal(out, stage.vae(latents))
 
+    @pytest.mark.parametrize(
+        "traceable", [False, True], ids=["contextvar", "traceable"]
+    )
     @pytest.mark.parametrize("shape", [(3, 4, 6), (2, 5, 7), (1, 3, 9)], ids=str)
     def test_flag_compiles_the_vae_regions_for_host_latents(
-        self, monkeypatch, tiny_wan_vae, eager_compile_kwargs, shape
+        self, monkeypatch, tiny_wan_vae, eager_compile_kwargs, shape, traceable
     ):
+        if traceable:
+            from sglang.multimodal_gen.runtime.models.vaes import wanvae as upstream
+
+            from sglang_rbln.patches.models import wanvae
+
+            for name in wanvae.CONTEXT_VARS:
+                monkeypatch.setattr(upstream, name, getattr(upstream, name))
+            wanvae.register()
         monkeypatch.setenv("SGLANG_RBLN_COMPILE_VAE", "1")
         latents = torch.randn(1, 4, *shape, generator=torch.Generator().manual_seed(0))
         with torch.no_grad():

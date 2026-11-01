@@ -3,15 +3,19 @@
 from __future__ import annotations
 
 import contextlib
+import contextvars
 import copy
 import itertools
 import logging
 import math
+import pickle
+import weakref
 from collections.abc import Callable, Iterator, Sequence
 from typing import Any
 
 import torch
 from torch import nn
+from torch.utils._pytree import tree_map
 
 from sglang_rbln import envs
 
@@ -63,6 +67,49 @@ def _find_slots(previous: tuple, args: tuple, kwargs: dict) -> tuple[Slot, ...]:
             )
         slots.append(found[0])
     return tuple(slots)
+
+
+_state_vars: weakref.WeakSet = weakref.WeakSet()
+
+
+def register_state(var: Any) -> None:
+    _state_vars.add(var)
+
+
+def _copied_leaf(leaf: Any) -> Any:
+    if isinstance(leaf, torch.Tensor):
+        return leaf.clone()
+    if isinstance(leaf, nn.Module):
+        return leaf
+    try:
+        return copy.deepcopy(leaf)
+    except (TypeError, RuntimeError, pickle.PicklingError):
+        return leaf
+
+
+def _copied_state(value: Any) -> Any:
+    return tree_map(
+        lambda leaf: leaf.clone() if isinstance(leaf, torch.Tensor) else leaf, value
+    )
+
+
+def call_sandboxed(function: Callable, args: tuple, kwargs: dict) -> Any:
+    """Run `function` on copies, so its side effects reach no caller state."""
+
+    def run() -> Any:
+        for var, value in contextvars.copy_context().items():
+            var.set(_copied_state(value))
+        originals = [(var, var.value) for var in _state_vars]
+        for var, value in originals:
+            var.value = _copied_state(value)
+        try:
+            copied_args, copied_kwargs = tree_map(_copied_leaf, (args, kwargs))
+            return function(*copied_args, **copied_kwargs)
+        finally:
+            for var, value in originals:
+                var.value = value
+
+    return contextvars.copy_context().run(run)
 
 
 class BlockGroup(nn.Module):
@@ -207,22 +254,21 @@ class DeferredBlock:
 
     def _learn(self, args: tuple, kwargs: dict) -> Any:
         state = self.state
-        if self.index:
-            slots = _find_slots(state["previous"], args, kwargs)
-            if self.group.slots and slots != self.group.slots:
-                raise RuntimeError(
-                    "blocks of one region take the previous outputs in different "
-                    "arguments; set SGLANG_RBLN_BLOCKS_PER_REGION=1 for this model"
-                )
-            self.group.slots = slots
-        output = state["eager"][self.index](*args, **kwargs)
-        state["previous"] = _leading(output)
-        state["calls"].append(None)
-        if self.index == len(self.group.blocks) - 1:
-            state["learned"] = True
-            state["calls"].clear()
-            del state["previous"]
-        return output
+        if self.index == 0:
+            state["first"] = (args, kwargs)
+            state["calls"].append(None)
+            output = call_sandboxed(state["eager"][0], args, kwargs)
+            state["returned"] = _leading(output)
+            return output
+        slots = _find_slots(state["returned"], args, kwargs)
+        self.group.slots = slots
+        state["learned"] = True
+        first_args, first_kwargs = state.pop("first")
+        state["values"] = _slot_values(first_args, first_kwargs, slots)
+        state["calls"] = [_fill(first_args, first_kwargs, slots, (None,) * len(slots))]
+        if self.group.keep_outputs:
+            state["pending"] = [state["returned"]]
+        return None
 
     def __call__(self, *args, **kwargs):
         state = self.state
@@ -233,17 +279,29 @@ class DeferredBlock:
                 "out of order; set SGLANG_RBLN_BLOCKS_PER_REGION=1 for this model"
             )
         if not state.get("learned"):
-            return self._learn(args, kwargs)
+            if self.index == 0:
+                return self._learn(args, kwargs)
+            self._learn(args, kwargs)
         slots = self.group.slots
         values = _slot_values(args, kwargs, slots)
         if self.index == 0:
             state["values"] = values
+        elif any(
+            value is not returned
+            for value, returned in zip(values, state["returned"], strict=True)
+        ):
+            state["calls"].clear()
+            raise RuntimeError(
+                "a block's outputs are not passed unchanged to the next block; "
+                "set SGLANG_RBLN_BLOCKS_PER_REGION=1 for this model"
+            )
         empty = (None,) * len(slots)
         state["calls"].append(_fill(args, kwargs, slots, empty))
         if self.index < len(self.group.blocks) - 1:
             if self.group.keep_outputs:
                 values = tuple(map(torch.empty_like, values))
                 state.setdefault("pending", []).append(values)
+            state["returned"] = values
             return _restore(values, len(slots))
         calls = list(state["calls"])
         state["calls"].clear()

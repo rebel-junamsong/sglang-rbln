@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
+import contextvars
 import math
 from types import SimpleNamespace
 
@@ -12,6 +13,11 @@ from torch import nn
 from sglang_rbln.compilation import regions
 
 pytestmark = pytest.mark.usefixtures("rbln_platform")
+
+
+@pytest.fixture(autouse=True)
+def fresh_dynamo():
+    torch._dynamo.reset()
 
 
 class Block(nn.Module):
@@ -106,6 +112,78 @@ def test_grouped_blocks_match_eager(monkeypatch, graphs, size):
     for output in outputs:
         assert torch.equal(output, expected)
     assert len(captured) == count
+
+
+@pytest.mark.parametrize("keep_outputs", [False, True], ids=["last", "kept"])
+def test_first_call_returns_the_compiled_region_output(keep_outputs):
+    runs = []
+
+    def backend(graph, example_inputs):
+        def run(*args):
+            runs.append(len(runs))
+            return [output + 1 for output in graph(*args)]
+
+        return run
+
+    torch.manual_seed(0)
+    model = (RecordingModel if keep_outputs else Model)(depth=4).eval()
+    x = torch.randn(2, 8)
+    regions.group_blocks(
+        list(model.blocks), None, {"backend": backend, "dynamic": False}, keep_outputs
+    )
+    with torch.no_grad():
+        first, second = model(x), model(x)
+    assert runs == [0, 1]
+    if keep_outputs:
+        assert all(map(torch.equal, first, second))
+    else:
+        assert torch.equal(first, second)
+
+
+_steps: contextvars.ContextVar[list] = contextvars.ContextVar("steps")
+
+
+class StatefulBlock(nn.Module):
+    def __init__(self, width: int) -> None:
+        super().__init__()
+        self.linear = nn.Linear(width, width)
+
+    def forward(self, x, *, history):
+        steps = _steps.get()
+        history.append(x.sum())
+        steps.append(len(history))
+        return torch.tanh(self.linear(x) * len(steps))
+
+
+class StatefulModel(nn.Module):
+    def __init__(self, depth: int = 3, width: int = 8) -> None:
+        super().__init__()
+        self.blocks = nn.ModuleList(StatefulBlock(width) for _ in range(depth))
+
+    def forward(self, x):
+        token = _steps.set([])
+        try:
+            history = []
+            for block in self.blocks:
+                x = block(x, history=history)
+            return x, len(history), len(_steps.get())
+        finally:
+            _steps.reset(token)
+
+
+def test_first_call_leaves_block_state_to_the_compiled_region():
+    torch.manual_seed(0)
+    model = StatefulModel().eval()
+    x = torch.randn(2, 8)
+    with torch.no_grad():
+        expected = model(x)
+        regions.group_blocks(
+            list(model.blocks), None, {"backend": "eager", "dynamic": False}
+        )
+        first, second = model(x), model(x)
+    for output in (first, second):
+        assert torch.equal(output[0], expected[0])
+        assert output[1:] == expected[1:] == (3, 3)
 
 
 def test_default_compiles_each_block_list_as_one_region(monkeypatch, graphs):
@@ -319,10 +397,8 @@ def test_a_block_that_never_fits_raises(monkeypatch, sized_graphs):
     free["bytes"] = BLOCK_BYTES // 2
     model = Model(depth=2).eval()
     regions.compile_block_groups(_plain_compile, model, compile_kwargs=compile_kwargs)
-    with torch.no_grad():
+    with torch.no_grad(), pytest.raises(Exception, match="free"):
         model(torch.randn(2, 8))
-        with pytest.raises(Exception, match="free"):
-            model(torch.randn(2, 8))
     assert compiled == [2, 1]
 
 
@@ -338,10 +414,8 @@ def test_other_compile_errors_do_not_split(monkeypatch):
     regions.compile_block_groups(
         _plain_compile, model, compile_kwargs={"backend": backend, "dynamic": False}
     )
-    with torch.no_grad():
+    with torch.no_grad(), pytest.raises(Exception, match="unsupported operator"):
         model(torch.randn(2, 8))
-        with pytest.raises(Exception, match="unsupported operator"):
-            model(torch.randn(2, 8))
     assert sizes == [4]
 
 
