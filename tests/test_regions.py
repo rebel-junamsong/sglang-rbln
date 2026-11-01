@@ -143,47 +143,78 @@ def test_first_call_returns_the_compiled_region_output(keep_outputs):
 _steps: contextvars.ContextVar[list] = contextvars.ContextVar("steps")
 
 
-class StatefulBlock(nn.Module):
-    def __init__(self, width: int) -> None:
+class KeyCache:
+    def __init__(self) -> None:
+        self.keys: dict[int, torch.Tensor] = {}
+
+    def update(self, layer: int, key: torch.Tensor) -> torch.Tensor:
+        if layer in self.keys:
+            key = torch.cat([self.keys[layer], key], dim=0)
+        self.keys[layer] = key
+        return key
+
+
+class KeyCarryingBlock(nn.Module):
+    def __init__(self, layer: int, width: int) -> None:
         super().__init__()
-        self.linear = nn.Linear(width, width)
+        self.layer = layer
+        self.query = nn.Linear(width, width)
+        self.key = nn.Linear(width, width)
 
-    def forward(self, x, *, history):
+    def forward(self, x, *, cache):
+        keys = cache.update(self.layer, self.key(x))
         steps = _steps.get()
-        history.append(x.sum())
-        steps.append(len(history))
-        return torch.tanh(self.linear(x) * len(steps))
+        steps.append(keys.shape[0])
+        scores = torch.softmax(self.query(x) @ keys.T, dim=-1)
+        return x + scores @ keys * len(steps)
 
 
-class StatefulModel(nn.Module):
+class KeyCarryingModel(nn.Module):
     def __init__(self, depth: int = 3, width: int = 8) -> None:
         super().__init__()
-        self.blocks = nn.ModuleList(StatefulBlock(width) for _ in range(depth))
+        self.blocks = nn.ModuleList(KeyCarryingBlock(i, width) for i in range(depth))
 
     def forward(self, x):
         token = _steps.set([])
         try:
-            history = []
+            cache = KeyCache()
             for block in self.blocks:
-                x = block(x, history=history)
-            return x, len(history), len(_steps.get())
+                x = block(x, cache=cache)
+            return (
+                x,
+                {layer: key.shape for layer, key in cache.keys.items()},
+                _steps.get(),
+            )
         finally:
             _steps.reset(token)
 
 
-def test_first_call_leaves_block_state_to_the_compiled_region():
+def test_first_call_of_key_carrying_blocks_runs_compiled_and_matches_eager():
+    runs = []
+
+    def backend(graph, example_inputs):
+        def run(*args):
+            runs.append(len(runs))
+            return graph(*args)
+
+        return run
+
     torch.manual_seed(0)
-    model = StatefulModel().eval()
+    model = KeyCarryingModel().eval()
     x = torch.randn(2, 8)
     with torch.no_grad():
         expected = model(x)
         regions.group_blocks(
-            list(model.blocks), None, {"backend": "eager", "dynamic": False}
+            list(model.blocks), None, {"backend": backend, "dynamic": False}
         )
-        first, second = model(x), model(x)
+        first = model(x)
+        compiled_runs = len(runs)
+        second = model(x)
+    assert compiled_runs > 0
     for output in (first, second):
         assert torch.equal(output[0], expected[0])
-        assert output[1:] == expected[1:] == (3, 3)
+        assert output[1:] == expected[1:]
+    assert expected[1] == {layer: torch.Size([2, 8]) for layer in range(3)}
 
 
 def test_default_compiles_each_block_list_as_one_region(monkeypatch, graphs):
