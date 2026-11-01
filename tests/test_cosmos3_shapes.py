@@ -51,6 +51,43 @@ def test_rope_positions_match_upstream(transformer, frames, height, width, fps):
         assert torch.equal(got, want)
 
 
+@pytest.mark.parametrize(
+    "modalities",
+    [
+        pytest.param({"action_frames": 17, "action_fps": 20.0}, id="action-fd"),
+        pytest.param(
+            {"action_frames": 61, "action_fps": 10.0, "action_start_frame_offset": 0},
+            id="action-id",
+        ),
+        pytest.param({"action_frames": 16}, id="action-default-fps"),
+        pytest.param({"sound_frames": 25}, id="sound"),
+        pytest.param({"control_frames": 6}, id="control"),
+        pytest.param(
+            {"control_frames": [6, 6], "share_vision_temporal_positions": False},
+            id="two-controls-consecutive",
+        ),
+        pytest.param(
+            {"control_frames": 6, "action_frames": 9, "sound_frames": 7}, id="all"
+        ),
+    ],
+)
+@pytest.mark.parametrize(("frames", "fps"), [(1, None), (5, 20.0), (16, 10.0)])
+def test_rope_positions_with_extra_modalities_match_upstream(
+    transformer, frames, fps, modalities
+):
+    from sglang.multimodal_gen.runtime.models.dits import cosmos3video as dit
+
+    text_mask = (torch.arange(11) < torch.tensor([[11], [4]])).long()
+    args = (text_mask, frames, 15, 26, fps, torch.device("cpu"))
+    expected = dit.Cosmos3OmniTransformer._compute_rope_position_ids(
+        transformer, *args, **modalities
+    )
+    actual = cosmos3video.rope_position_ids(transformer, *args, **modalities)
+    for got, want in zip(actual, expected, strict=True):
+        assert got.dtype == want.dtype
+        assert torch.equal(got, want)
+
+
 @GRIDS
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 def test_rope_from_cache_matches_upstream(frames, height, width, dtype):
