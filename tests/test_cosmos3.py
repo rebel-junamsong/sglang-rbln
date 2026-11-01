@@ -92,7 +92,11 @@ def recorded_compiles(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
 
 class TestGenLayerCompileHook:
     def test_registers_a_replace_hook(self):
-        assert cosmos3.register() == (cosmos3.HOOK_TARGET, cosmos3.DECODE_HOOK_TARGET)
+        assert cosmos3.register() == (
+            cosmos3.HOOK_TARGET,
+            cosmos3.DECODE_HOOK_TARGET,
+            cosmos3.ENCODE_HOOK_TARGET,
+        )
         registered = HookRegistry._hooks[cosmos3.HOOK_TARGET]
         assert any(hook is cosmos3.compile_layers for _, hook, _ in registered)
 
@@ -199,6 +203,57 @@ class TestVaeDecodePlacement:
         assert next(stage.vae.parameters()).device.type == "cpu"
         assert stage._latents_mean is None
         assert torch.equal(out.cpu(), stage.vae(latents.cpu()))
+
+
+class TestVaeEncodePlacement:
+    @staticmethod
+    def encode(stage, video):
+        return stage.vae.encode(video).mode()
+
+    def test_registers_an_around_hook(self):
+        cosmos3.register()
+        assert any(
+            hook is cosmos3.place_vae_encode
+            for _, hook, _ in HookRegistry._hooks[cosmos3.ENCODE_HOOK_TARGET]
+        )
+
+    @pytest.mark.parametrize(
+        "shape", [(1, 32, 48), (5, 32, 48), (9, 48, 32), (13, 16, 80)], ids=str
+    )
+    def test_flag_encodes_through_the_vae_regions(
+        self, monkeypatch, tiny_wan_codec, eager_compile_kwargs, shape
+    ):
+        monkeypatch.setenv("SGLANG_RBLN_COMPILE_VAE", "1")
+        video = torch.randn(1, 3, *shape, generator=torch.Generator().manual_seed(0))
+        stage = SimpleNamespace(vae=tiny_wan_codec)
+        with torch.no_grad():
+            expected = self.encode(stage, video)
+            outputs = [
+                cosmos3.place_vae_encode(self.encode, stage, video) for _ in range(2)
+            ]
+        assert tiny_wan_codec._rbln_regions_compiled
+        assert all(torch.equal(out, expected) for out in outputs)
+
+    def test_host_video_passes_straight_through(self, tiny_wan_codec):
+        video = torch.randn(1, 3, 5, 32, 48, generator=torch.Generator().manual_seed(0))
+        stage = SimpleNamespace(vae=tiny_wan_codec)
+        with torch.no_grad():
+            out = cosmos3.place_vae_encode(self.encode, stage, video)
+            assert torch.equal(out, self.encode(stage, video))
+        assert not getattr(tiny_wan_codec, "_rbln_regions_compiled", False)
+
+    @pytest.mark.device_mode
+    def test_device_video_encodes_on_the_cpu_and_returns_to_the_device(
+        self, tiny_wan_codec
+    ):
+        video = torch.randn(1, 3, 5, 32, 48, generator=torch.Generator().manual_seed(0))
+        with torch.no_grad():
+            expected = self.encode(SimpleNamespace(vae=tiny_wan_codec), video)
+            stage = SimpleNamespace(vae=tiny_wan_codec.to("rbln:0"))
+            out = cosmos3.place_vae_encode(self.encode, stage, video.to("rbln:0"))
+        assert out.device.type == "rbln"
+        assert next(tiny_wan_codec.parameters()).device.type == "cpu"
+        assert torch.equal(out.cpu(), expected)
 
 
 @pytest.fixture

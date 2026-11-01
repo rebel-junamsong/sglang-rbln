@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 STAGES = "sglang.multimodal_gen.runtime.pipelines_core.stages.model_specific_stages"
 HOOK_TARGET = f"{STAGES}.cosmos3.Cosmos3DenoisingStage._maybe_enable_torch_compile"
 DECODE_HOOK_TARGET = f"{STAGES}.cosmos3.Cosmos3DecodingStage._decode_latents"
+ENCODE_HOOK_TARGET = f"{STAGES}.cosmos3.Cosmos3LatentPreparationStage._vae_encode"
 
 
 HOST_MODULES = ("language_model", "norm_moe_gen")
@@ -106,7 +107,19 @@ def place_vae_decode(decode_latents, stage, latents: torch.Tensor, *args):
     return decode_latents(stage, latents.cpu(), *args).to(latents.device)
 
 
-def register() -> tuple[str, str]:
+def place_vae_encode(vae_encode, stage, video: torch.Tensor):
+    if envs.SGLANG_RBLN_COMPILE_VAE:
+        compile_vae_regions(stage.vae)
+        return vae_encode(stage, video)
+    if video.device.type != "rbln":
+        return vae_encode(stage, video)
+    if next(stage.vae.parameters()).device.type == "rbln":
+        stage.vae.to("cpu")
+    return vae_encode(stage, video.cpu()).to(video.device)
+
+
+def register() -> tuple[str, str, str]:
     HookRegistry.register(HOOK_TARGET, compile_layers, HookType.REPLACE)
     HookRegistry.register(DECODE_HOOK_TARGET, place_vae_decode, HookType.AROUND)
-    return HOOK_TARGET, DECODE_HOOK_TARGET
+    HookRegistry.register(ENCODE_HOOK_TARGET, place_vae_encode, HookType.AROUND)
+    return HOOK_TARGET, DECODE_HOOK_TARGET, ENCODE_HOOK_TARGET

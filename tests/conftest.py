@@ -93,12 +93,13 @@ def run_probe(rbln_override: dict[str, str]) -> Callable[[str, str], dict]:
     return run
 
 
-@pytest.fixture
-def tiny_wan_vae():
+def build_tiny_wan_vae(load_encoder: bool):
     from sglang.multimodal_gen.configs.models.vaes import WanVAEConfig
     from sglang.multimodal_gen.runtime.models.vaes.wanvae import AutoencoderKLWan
 
-    config = WanVAEConfig(load_encoder=False, use_parallel_decode=False)
+    config = WanVAEConfig(
+        load_encoder=load_encoder, use_parallel_encode=False, use_parallel_decode=False
+    )
     arch = config.arch_config
     arch.base_dim = arch.decoder_base_dim = 16
     arch.z_dim, arch.is_residual, arch.patch_size = 4, True, 2
@@ -106,3 +107,13 @@ def tiny_wan_vae():
     arch.latents_mean, arch.latents_std = arch.latents_mean[:4], arch.latents_std[:4]
     arch.__post_init__()
     return AutoencoderKLWan(config).eval()
+
+
+@pytest.fixture
+def tiny_wan_vae():
+    return build_tiny_wan_vae(load_encoder=False)
+
+
+@pytest.fixture
+def tiny_wan_codec():
+    return build_tiny_wan_vae(load_encoder=True)
