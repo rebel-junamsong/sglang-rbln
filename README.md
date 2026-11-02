@@ -135,7 +135,8 @@ the NPU. A compile error fails the request unless `SGLANG_RBLN_COMPILE_STRICT=0`
 | `SGLANG_RBLN_RUNTIME_REPORTS=1` | log the runtime's device / host-op / buffer-prep time split every 100 graph runs |
 | `SGLANG_RBLN_PROFILE_DIR=<dir>` | write an RBLN Profiler trace (`*.pb`, Perfetto) of one request to `<dir>`; start the server with `RBLN_PROFILER=1` |
 | `SGLANG_RBLN_PROFILE_REQUEST=3` | which request (counting from 1, warmups excluded) `SGLANG_RBLN_PROFILE_DIR` captures |
-| `SGLANG_RBLN_VOCODER_ON_NPU=1` | compile the LTX-2 vocoder for one NPU (off by default: the CPU is faster below about 2 s of audio) |
+| `SGLANG_RBLN_VOCODER_ON_NPU=1` | compile the LTX-2 vocoder for one NPU, the last tensor-parallel one. Off by default: the NPU's convolutions accumulate with an upward gain that compounds through the vocoder's ~100 convs, so its waveform lands below CPU bf16 (12.9 vs 16.6 dB SNR against float32 at 5 s of audio) |
+| `SGLANG_RBLN_COMPILE_AUDIO_VAE=1` | compile the LTX-2 audio VAE decoder (latent to mel) for the same NPU as the vocoder. It is one device graph and matches the CPU at about 48 dB |
 | `SGLANG_RBLN_BLOCKS_PER_REGION=7` | cap the blocks compiled as one region graph (see [Compiled graphs](#compiled-graphs); 1 compiles each block alone, and for FLUX 3 Action any value replaces the one-graph step with block regions). Set it only when one graph does not fit or does not compile |
 
 `--enable-torch-compile` and `--regional-compile` are on by default; pass either

@@ -12,7 +12,7 @@ from sglang.multimodal_gen.runtime.models.vocoder.ltx_2_vocoder import LTX2Vocod
 from torch import nn
 
 from sglang_rbln.compilation import backend as compilation
-from sglang_rbln.patches.stages.ltx_2 import vocoder
+from sglang_rbln.patches.stages.ltx_2 import decoding_av, vocoder
 
 pytestmark = pytest.mark.usefixtures("rbln_platform")
 
@@ -70,6 +70,59 @@ def test_leaves_the_vocoder_eager(
     server_args = SimpleNamespace(enable_torch_compile=enable_torch_compile)
     vocoder.compile_vocoder(forward, stage, None, server_args)
     assert compiled == []
+
+
+@pytest.fixture(name="audio_stage")
+def audio_stage_fixture():
+    return SimpleNamespace(audio_vae=SimpleNamespace(decoder=nn.Linear(4, 4)))
+
+
+def test_compiles_the_audio_vae_decoder_once(audio_stage, compiled, monkeypatch):
+    monkeypatch.setenv("SGLANG_RBLN_COMPILE_AUDIO_VAE", "1")
+    monkeypatch.setenv("SGLANG_RBLN_NUM_DEVICES", "4")
+    server_args = SimpleNamespace(enable_torch_compile=True)
+    outputs = [
+        vocoder.compile_audio_vae(forward, audio_stage, None, server_args)
+        for _ in range(2)
+    ]
+    assert outputs == ["output", "output"]
+    assert [module for module, _ in compiled] == [audio_stage.audio_vae.decoder]
+    kwargs = compiled[0][1]
+    assert (kwargs["backend"], kwargs["dynamic"]) == ("rbln", False)
+    assert (kwargs["options"]["num_devices"], kwargs["options"]["device"]) == (1, 3)
+
+
+@pytest.mark.parametrize(
+    ("requested", "enable_torch_compile"),
+    [("", True), ("1", False)],
+    ids=["not-requested", "compile-disabled"],
+)
+def test_leaves_the_audio_vae_eager(
+    audio_stage, compiled, monkeypatch, requested, enable_torch_compile
+):
+    monkeypatch.setenv("SGLANG_RBLN_COMPILE_AUDIO_VAE", requested)
+    server_args = SimpleNamespace(enable_torch_compile=enable_torch_compile)
+    vocoder.compile_audio_vae(forward, audio_stage, None, server_args)
+    assert compiled == []
+
+
+def test_decode_hook_compiles_every_audio_module(compiled, monkeypatch):
+    monkeypatch.setenv("SGLANG_RBLN_COMPILE_AUDIO_VAE", "1")
+    av_stage = SimpleNamespace(
+        vae=SimpleNamespace(decoder=nn.Linear(4, 4)),
+        audio_vae=SimpleNamespace(decoder=nn.Linear(4, 4)),
+        vocoder=nn.Linear(4, 4),
+    )
+    batch = SimpleNamespace(use_diffusion_decoder=False)
+    server_args = SimpleNamespace(enable_torch_compile=True)
+    assert (
+        decoding_av.compile_decoders(forward, av_stage, batch, server_args) == "output"
+    )
+    assert [module for module, _ in compiled] == [
+        av_stage.vae.decoder,
+        av_stage.audio_vae.decoder,
+        av_stage.vocoder,
+    ]
 
 
 def small_bwe_vocoder() -> LTX2Vocoder:
