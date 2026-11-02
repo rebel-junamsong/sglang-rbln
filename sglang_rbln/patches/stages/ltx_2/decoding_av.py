@@ -40,7 +40,7 @@ def compile_video_decoder(forward, stage, batch, server_args, *args, **kwargs):
 
 def compile_decoders(forward, stage, batch, server_args):
     audio = functools.partial(
-        vocoder.compile_audio_vae,
+        vocoder.compile_audio,
         functools.partial(vocoder.compile_vocoder, forward),
     )
     return compile_video_decoder(audio, stage, batch, server_args)

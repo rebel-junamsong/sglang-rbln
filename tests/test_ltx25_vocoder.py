@@ -12,6 +12,7 @@ from sglang.multimodal_gen.runtime.models.vocoder.ltx_2_vocoder import LTX2Vocod
 from torch import nn
 
 from sglang_rbln.compilation import backend as compilation
+from sglang_rbln.compilation import placement
 from sglang_rbln.patches.stages.ltx_2 import decoding_av, vocoder
 
 pytestmark = pytest.mark.usefixtures("rbln_platform")
@@ -72,24 +73,67 @@ def test_leaves_the_vocoder_eager(
     assert compiled == []
 
 
+class Decoder(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.scale = nn.Parameter(torch.full((), 2.0, dtype=torch.bfloat16))
+
+    def forward(self, latents):
+        return latents * self.scale
+
+
+class Vocoder(nn.Module):
+    def forward(self, spectrogram):
+        return spectrogram.float() + 1
+
+
 @pytest.fixture(name="audio_stage")
 def audio_stage_fixture():
-    return SimpleNamespace(audio_vae=SimpleNamespace(decoder=nn.Linear(4, 4)))
+    decoder = Decoder()
+    return SimpleNamespace(
+        audio_vae=SimpleNamespace(decoder=decoder, decode=None), vocoder=Vocoder()
+    )
 
 
-def test_compiles_the_audio_vae_decoder_once(audio_stage, compiled, monkeypatch):
-    monkeypatch.setenv("SGLANG_RBLN_COMPILE_AUDIO_VAE", "1")
+@pytest.fixture(name="chained")
+def chained_fixture(monkeypatch):
+    monkeypatch.setenv("SGLANG_RBLN_COMPILE_AUDIO", "1")
+    calls = []
+    monkeypatch.setattr(
+        nn.Module, "compile", lambda module, **kwargs: calls.append((module, kwargs))
+    )
+    return calls
+
+
+def audio_forward(stage, batch, server_args):
+    latents = torch.ones(1, 2)
+    spectrogram = stage.audio_vae.decode(latents, return_dict=False)[0]
+    return stage.vocoder(spectrogram)
+
+
+def test_compiles_the_audio_chain_once(audio_stage, chained, monkeypatch):
     monkeypatch.setenv("SGLANG_RBLN_NUM_DEVICES", "4")
     server_args = SimpleNamespace(enable_torch_compile=True)
-    outputs = [
-        vocoder.compile_audio_vae(forward, audio_stage, None, server_args)
+    waveforms = [
+        vocoder.compile_audio(audio_forward, audio_stage, None, server_args)
         for _ in range(2)
     ]
-    assert outputs == ["output", "output"]
-    assert [module for module, _ in compiled] == [audio_stage.audio_vae.decoder]
-    kwargs = compiled[0][1]
+    assert len(chained) == 1
+    chain, kwargs = chained[0]
+    assert isinstance(chain, vocoder.AudioChain)
     assert (kwargs["backend"], kwargs["dynamic"]) == ("rbln", False)
     assert (kwargs["options"]["num_devices"], kwargs["options"]["device"]) == (1, 3)
+    # The stage's decode-then-vocoder runs the chain: decoder, then vocoder.
+    for waveform in waveforms:
+        assert torch.equal(waveform, torch.full((1, 2), 3.0))
+
+
+def test_chain_runs_on_the_vocoders_placed_npu(audio_stage, chained):
+    placement.place(audio_stage.vocoder, (8,))
+    server_args = SimpleNamespace(enable_torch_compile=True)
+    vocoder.compile_audio(audio_forward, audio_stage, None, server_args)
+    options = chained[0][1]["options"]
+    assert (options["num_devices"], options["device"]) == (1, [8])
 
 
 @pytest.mark.parametrize(
@@ -97,32 +141,31 @@ def test_compiles_the_audio_vae_decoder_once(audio_stage, compiled, monkeypatch)
     [("", True), ("1", False)],
     ids=["not-requested", "compile-disabled"],
 )
-def test_leaves_the_audio_vae_eager(
-    audio_stage, compiled, monkeypatch, requested, enable_torch_compile
+def test_leaves_the_audio_modules_eager(
+    audio_stage, chained, monkeypatch, requested, enable_torch_compile
 ):
-    monkeypatch.setenv("SGLANG_RBLN_COMPILE_AUDIO_VAE", requested)
+    monkeypatch.setenv("SGLANG_RBLN_COMPILE_AUDIO", requested)
     server_args = SimpleNamespace(enable_torch_compile=enable_torch_compile)
-    vocoder.compile_audio_vae(forward, audio_stage, None, server_args)
-    assert compiled == []
+    vocoder.compile_audio(forward, audio_stage, None, server_args)
+    assert chained == []
+    assert audio_stage.audio_vae.decode is None
 
 
-def test_decode_hook_compiles_every_audio_module(compiled, monkeypatch):
-    monkeypatch.setenv("SGLANG_RBLN_COMPILE_AUDIO_VAE", "1")
+def test_decode_hook_compiles_video_decoder_and_audio_chain(chained):
     av_stage = SimpleNamespace(
         vae=SimpleNamespace(decoder=nn.Linear(4, 4)),
-        audio_vae=SimpleNamespace(decoder=nn.Linear(4, 4)),
-        vocoder=nn.Linear(4, 4),
+        audio_vae=SimpleNamespace(decoder=Decoder()),
+        vocoder=Vocoder(),
     )
     batch = SimpleNamespace(use_diffusion_decoder=False)
     server_args = SimpleNamespace(enable_torch_compile=True)
     assert (
         decoding_av.compile_decoders(forward, av_stage, batch, server_args) == "output"
     )
-    assert [module for module, _ in compiled] == [
-        av_stage.vae.decoder,
-        av_stage.audio_vae.decoder,
-        av_stage.vocoder,
-    ]
+    modules = [module for module, _ in chained]
+    assert modules[0] is av_stage.vae.decoder
+    assert isinstance(modules[1], vocoder.AudioChain)
+    assert len(modules) == 2
 
 
 def small_bwe_vocoder() -> LTX2Vocoder:
