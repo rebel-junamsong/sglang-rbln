@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
+import contextlib
 import contextvars
 import math
 from types import SimpleNamespace
@@ -10,7 +11,7 @@ import torch
 from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry
 from torch import nn
 
-from sglang_rbln.compilation import regions
+from sglang_rbln.compilation import regions, shapes
 
 pytestmark = pytest.mark.usefixtures("rbln_platform")
 
@@ -370,6 +371,76 @@ def test_region_halves_until_the_device_holds_it(
         record for record in caplog.records if "does not fit" in record.getMessage()
     ]
     assert len(logged) == splits
+
+
+@contextlib.contextmanager
+def request_shape(height: int):
+    dims = (("height", height), ("width", height), ("num_frames", 1))
+    token = shapes.current_shape_key.set(shapes.ShapeKey("Pipeline", dims))
+    try:
+        yield
+    finally:
+        shapes.current_shape_key.reset(token)
+
+
+def _room(blocks: int) -> int:
+    return blocks * BLOCK_BYTES + BLOCK_BYTES // 10
+
+
+@pytest.fixture
+def two_shape_model(sized_graphs):
+    free, compiled, compile_kwargs = sized_graphs
+    torch.manual_seed(0)
+    model = Model(depth=4).eval()
+    inputs = {2: torch.randn(2, 8), 6: torch.randn(6, 8)}
+    with torch.no_grad():
+        expected = {rows: model(x) for rows, x in inputs.items()}
+    regions.compile_block_groups(_plain_compile, model, compile_kwargs=compile_kwargs)
+    return model, inputs, expected, free, compiled
+
+
+def test_a_later_shape_that_does_not_fit_splits_only_itself(two_shape_model, caplog):
+    model, inputs, expected, free, compiled = two_shape_model
+    free["bytes"] = _room(4)
+    with torch.no_grad(), request_shape(2):
+        first = model(inputs[2])
+    free["bytes"] = _room(2)
+    with torch.no_grad(), request_shape(6):
+        second = [model(inputs[6]) for _ in range(2)]
+    with torch.no_grad(), request_shape(2):
+        first_again = model(inputs[2])
+    assert compiled == [4, 4, 2, 2]
+    assert all(torch.equal(output, expected[2]) for output in (first, first_again))
+    assert all(torch.equal(output, expected[6]) for output in second)
+    splits = [r for r in caplog.records if "does not fit" in r.getMessage()]
+    assert len(splits) == 1
+    assert "height=6" in splits[0].getMessage()
+
+
+def test_a_later_shape_that_fits_keeps_the_whole_region(two_shape_model):
+    model, inputs, expected, free, compiled = two_shape_model
+    free["bytes"] = _room(4)
+    with torch.no_grad():
+        for rows in (2, 6, 2, 6):
+            with request_shape(rows):
+                assert torch.equal(model(inputs[rows]), expected[rows])
+    assert compiled == [4, 4]
+
+
+@pytest.mark.xfail(
+    reason="fit is checked once per ShapeKey; a second tensor shape under the "
+    "same key loads unchecked",
+    strict=True,
+    raises=torch._dynamo.exc.BackendCompilerFailed,
+)
+def test_a_second_tensor_shape_under_one_shape_key_is_fit_checked(two_shape_model):
+    model, inputs, expected, free, compiled = two_shape_model
+    free["bytes"] = _room(4)
+    with torch.no_grad(), request_shape(2):
+        model(inputs[2])
+        free["bytes"] = _room(2)
+        assert torch.equal(model(inputs[6]), expected[6])
+    assert compiled == [4, 4, 2, 2]
 
 
 class RecordingModel(Model):

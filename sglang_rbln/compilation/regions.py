@@ -18,6 +18,7 @@ from torch import nn
 from torch.utils._pytree import tree_map
 
 from sglang_rbln import envs
+from sglang_rbln.compilation import shapes
 
 logger = logging.getLogger(__name__)
 
@@ -199,31 +200,32 @@ class Region:
         self.keep_outputs = keep_outputs
         self.group: BlockGroup | None = BlockGroup(self.blocks, keep_outputs)
         self.group.compile(**compile_kwargs)
-        self.parts: list[Region] = []
-        self.loaded = False
+        self.parts: dict[shapes.ShapeKey | None, list[Region]] = {}
+        self.loaded: set[shapes.ShapeKey | None] = set()
 
-    def _split(self, error: BaseException) -> None:
+    def _split(self, key: shapes.ShapeKey | None, error: BaseException) -> None:
         half = (len(self.blocks) + 1) // 2
         logger.warning(
-            "A %d-block region does not fit (%s); splitting it into %d + %d blocks",
+            "A %d-block region does not fit at shape %s (%s); "
+            "splitting it into %d + %d blocks",
             len(self.blocks),
+            key,
             error,
             half,
             len(self.blocks) - half,
         )
-        slots = self.group.slots
-        self.parts = [
+        self.parts[key] = [
             Region(self.blocks[:half], self.compile_kwargs, self.keep_outputs),
             Region(self.blocks[half:], self.compile_kwargs, self.keep_outputs),
         ]
-        for part in self.parts:
-            part.group.slots = slots
-        self.group = None
+        for part in self.parts[key]:
+            part.group.slots = self.group.slots
 
     def __call__(self, values: tuple, calls: list[tuple[tuple, dict]]) -> Any:
-        if self.parts:
+        key = shapes.current_shape_key.get()
+        if parts := self.parts.get(key):
             output, kept = None, ()
-            for part in self.parts:
+            for part in parts:
                 output = part(values, calls[: len(part.blocks)])
                 calls = calls[len(part.blocks) :]
                 if self.keep_outputs:
@@ -232,7 +234,7 @@ class Region:
                 else:
                     values = _leading(output)
             return kept if self.keep_outputs else output
-        if self.loaded:
+        if key in self.loaded:
             return self.group(values, calls)
         try:
             with checking_fit():
@@ -240,9 +242,9 @@ class Region:
         except Exception as error:
             if len(self.blocks) == 1 or not _does_not_fit(error):
                 raise
-            self._split(error)
+            self._split(key, error)
             return self(values, calls)
-        self.loaded = True
+        self.loaded.add(key)
         return output
 
 
