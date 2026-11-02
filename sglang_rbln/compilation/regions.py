@@ -15,7 +15,7 @@ from typing import Any
 
 import torch
 from torch import nn
-from torch.utils._pytree import tree_map
+from torch.utils._pytree import tree_leaves, tree_map
 
 from sglang_rbln import envs
 from sglang_rbln.compilation import shapes
@@ -201,16 +201,27 @@ class Region:
         self.keep_outputs = keep_outputs
         self.group: BlockGroup | None = BlockGroup(self.blocks, keep_outputs)
         self.group.compile(**compile_kwargs)
-        self.parts: dict[shapes.ShapeKey | None, list[Region]] = {}
-        self.loaded: set[shapes.ShapeKey | None] = set()
+        self.parts: dict[tuple, list[Region]] = {}
+        self.loaded: set[tuple] = set()
 
-    def _split(self, key: shapes.ShapeKey | None, error: BaseException) -> None:
+    @staticmethod
+    def _key(values: tuple, calls: list[tuple[tuple, dict]]) -> tuple:
+        """The request's shape key and the tensor shapes this call compiles for:
+        the stages of one request (two-stage refinement) call one region at
+        different shapes."""
+        return shapes.current_shape_key.get(), tuple(
+            (tuple(leaf.shape), leaf.dtype)
+            for leaf in tree_leaves((values, calls))
+            if isinstance(leaf, torch.Tensor)
+        )
+
+    def _split(self, key: tuple, error: BaseException) -> None:
         half = (len(self.blocks) + 1) // 2
         logger.warning(
             "A %d-block region does not fit at shape %s (%s); "
             "splitting it into %d + %d blocks",
             len(self.blocks),
-            key,
+            key[0],
             error,
             half,
             len(self.blocks) - half,
@@ -223,7 +234,7 @@ class Region:
             part.group.slots = self.group.slots
 
     def __call__(self, values: tuple, calls: list[tuple[tuple, dict]]) -> Any:
-        key = shapes.current_shape_key.get()
+        key = self._key(values, calls)
         if parts := self.parts.get(key):
             output, kept = None, ()
             for part in parts:

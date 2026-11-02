@@ -449,12 +449,6 @@ def test_a_later_shape_that_fits_keeps_the_whole_region(two_shape_model):
     assert compiled == [4, 4]
 
 
-@pytest.mark.xfail(
-    reason="fit is checked once per ShapeKey; a second tensor shape under the "
-    "same key loads unchecked",
-    strict=True,
-    raises=torch._dynamo.exc.BackendCompilerFailed,
-)
 def test_a_second_tensor_shape_under_one_shape_key_is_fit_checked(two_shape_model):
     model, inputs, expected, free, compiled = two_shape_model
     free["bytes"] = _room(4)
