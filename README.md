@@ -51,14 +51,15 @@ The examples serve each model over four NPUs with compiler tensor parallelism.
 ```bash
 RBLN_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
 SGLANG_RBLN_NUM_DEVICES=4 \
-SGLANG_RBLN_COMPONENT_DEVICES=text_encoder=4,5,6,7 \
 sglang serve \
   --model-path Lightricks/LTX-2.5-Diffusers \
   --pipeline-class-name LTX2Pipeline
 ```
 
-The Gemma text encoder does not fit next to the DiT, so it gets NPUs 4–7 of
-its own. The video decoder is compiled across the DiT's four NPUs.
+The DiT and the video decoder run tensor-parallel on NPUs 0–3. The Gemma text
+encoder does not fit next to the DiT, so it runs on the visible NPUs beyond
+them, here 4–7. With only four NPUs visible, pass
+`--text-encoder-cpu-offload` to keep it on the CPU.
 
 ```python
 from openai import OpenAI
@@ -126,7 +127,7 @@ the NPU. A compile error fails the request unless `SGLANG_RBLN_COMPILE_STRICT=0`
 | `SGLANG_RBLN_STATIC_OUTPUT=1` | reuse one device output buffer per graph output instead of allocating per run |
 | `SGLANG_RBLN_CHECK_GRAPHS=1` | rerun each compiled graph once on the CPU and log the deviation of the NPU output (precision triage) |
 | `SGLANG_RBLN_NUM_DEVICES=4` | compile every graph for tensor parallelism over that many NPUs (rebel `num_devices`) |
-| `SGLANG_RBLN_COMPONENT_DEVICES=text_encoder=4,5,6,7` | run the named pipeline components (`;`-separated, e.g. `text_encoder=4,5,6,7;vae=8`) on their own NPUs, given as indices into `RBLN_VISIBLE_DEVICES`; each is tensor-parallel over its list, in place of `SGLANG_RBLN_NUM_DEVICES`, so a component that does not fit next to the DiT gets NPUs of its own |
+| `SGLANG_RBLN_COMPONENT_DEVICES=text_encoder=4,5,6,7` | run the named pipeline components (`;`-separated, e.g. `text_encoder=4,5,6,7;vae=8`) on their own NPUs, given as indices into `RBLN_VISIBLE_DEVICES`; each is tensor-parallel over its list, in place of `SGLANG_RBLN_NUM_DEVICES`, so a component that does not fit next to the DiT gets NPUs of its own. Without an entry, a text encoder takes the visible NPUs beyond the DiT's (up to as many as the DiT uses) when each can hold its share of the weights |
 | `SGLANG_RBLN_COMPILE_VAE=1` | also compile the video VAE for the NPU: FLUX 3 Action with one graph per encoder and decoder on the last tensor-parallel NPU, and Cosmos3 with one graph per Wan VAE block, each compiled for a single NPU and spread over the tensor-parallel NPUs (needs rebel-compiler with rebellions-sw/rebel_compiler#14989); it otherwise runs on the host |
 | `SGLANG_RBLN_COMPILE_ONLY=1` | compile the graphs and stop before running them |
 | `SGLANG_RBLN_COMPILE_STRICT=0` | let a graph that fails to compile run on the host instead of failing the request (strict is on by default, so a compile failure is never silently timed as NPU work) |

@@ -2,7 +2,7 @@
 import pytest
 from torch import nn
 
-from sglang_rbln import envs
+from sglang_rbln import device, envs
 from sglang_rbln.compilation import placement
 from sglang_rbln.compilation.backend import compile_options
 
@@ -66,3 +66,55 @@ def test_registers_on_the_component_loader(monkeypatch):
     target = placement.register()
     assert calls == [(target, placement.place_component, HookType.AROUND)]
     assert target.endswith("PipelineComponentLoader.load_component")
+
+
+GiB = 1 << 30
+
+
+@pytest.fixture
+def npus(monkeypatch):
+    """Visible NPUs with `free` GiB each; the encoder weighs 8 GiB."""
+    monkeypatch.delenv("SGLANG_RBLN_COMPONENT_DEVICES")
+    monkeypatch.setattr(placement, "weight_bytes", lambda module: 8 * GiB)
+
+    def visible(count: int, free: float = 15.0) -> None:
+        monkeypatch.setenv("RBLN_VISIBLE_DEVICES", ",".join(map(str, range(count))))
+        info = device.MemoryInfo(16 * GiB, 0, int(free * GiB))
+        monkeypatch.setattr(device, "npu_memory_info", lambda index: info)
+
+    return visible
+
+
+@pytest.mark.parametrize(
+    ("count", "expected"),
+    [
+        (8, ((4, 5, 6, 7), 4)),
+        (6, ((4, 5), 2)),
+        (12, ((4, 5, 6, 7), 4)),
+        (4, (None, 4)),
+    ],
+    ids=["eight", "six", "twelve", "dit-only"],
+)
+def test_text_encoder_takes_the_npus_beyond_the_dit(npus, count, expected):
+    npus(count)
+    encoder, _ = placement.place_component(_load, "text_encoder", "path")
+    assert {_placement(module) for module in encoder.modules()} == {expected}
+
+
+def test_text_encoder_stays_with_the_dit_when_spare_npus_cannot_hold_it(npus):
+    npus(5, free=8.0)  # one spare NPU: 8 GiB of weights plus the reserve
+    encoder, _ = placement.place_component(_load, "text_encoder", "path")
+    assert {_placement(module) for module in encoder.modules()} == {(None, 4)}
+
+
+def test_explicit_placement_wins_over_spare_npus(npus, monkeypatch):
+    npus(8)
+    monkeypatch.setenv("SGLANG_RBLN_COMPONENT_DEVICES", "text_encoder=6,7")
+    encoder, _ = placement.place_component(_load, "text_encoder", "path")
+    assert {_placement(module) for module in encoder.modules()} == {((6, 7), 2)}
+
+
+def test_only_text_encoders_move_to_spare_npus(npus):
+    npus(8)
+    vae, _ = placement.place_component(_load, "vae", "path")
+    assert {_placement(module) for module in vae.modules()} == {(None, 4)}
