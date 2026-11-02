@@ -27,6 +27,7 @@ from sglang_rbln.patches.stages import (
 )
 from sglang_rbln.patches.stages.ltx_2 import (
     decoding_av,
+    detailing,
     duration,
     image_encoding,
     upsampling,
@@ -61,6 +62,7 @@ def register() -> None:
     image_encoding.register()
     duration.register()
     upsampling.register()
+    detailing.register()
     gpu_worker.register()
     prompt_enhancement.register()
     ffmpeg_spawn.register()
