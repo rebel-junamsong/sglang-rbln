@@ -45,12 +45,19 @@ def weight_bytes(module: nn.Module) -> int:
     return sum(t.numel() * t.element_size() for t in tensors.values())
 
 
-def spare_devices(module: nn.Module) -> tuple[int, ...] | None:
-    """As many NPUs after the DiT's as it has, if they can hold `module` together."""
+def spare_set() -> tuple[int, ...] | None:
+    """The NPUs after the DiT's, as many as it has, when that many are visible."""
     width = envs.SGLANG_RBLN_NUM_DEVICES or 1
     if visible_npus() < 2 * width:
         return None
-    spare = tuple(range(width, 2 * width))
+    return tuple(range(width, 2 * width))
+
+
+def spare_devices(module: nn.Module) -> tuple[int, ...] | None:
+    """As many NPUs after the DiT's as it has, if they can hold `module` together."""
+    spare = spare_set()
+    if spare is None:
+        return None
     share = weight_bytes(module) // len(spare) + RUNTIME_RESERVE
     free = min(device.npu_memory_info(index).free for index in spare)
     if share > free:
