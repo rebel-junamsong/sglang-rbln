@@ -198,3 +198,59 @@ def test_a_value_crosses_npu_sets_on_the_device():
     copied = residency._Transfers().to(value.t(), torch.device("rbln", 1))
     assert copied.device == torch.device("rbln", 1)
     assert torch.equal(copied.cpu(), value.t().cpu())
+
+
+@pytest.fixture
+def meta_is_resident(monkeypatch):
+    monkeypatch.setattr(
+        residency,
+        "_is_resident",
+        lambda value: isinstance(value, torch.Tensor) and value.device.type == "meta",
+    )
+
+
+@pytest.mark.parametrize("resident", [True, False], ids=["on-device", "on-host"])
+def test_the_component_manager_leaves_resident_components_in_place(
+    meta_is_resident, resident
+):
+    module = nn.Linear(2, 2, device="meta" if resident else "cpu")
+    moved = []
+    residency.keep_resident_placement(
+        lambda m, **kwargs: moved.append(kwargs), module, dtype=torch.float32
+    )
+    assert moved == ([] if resident else [{"dtype": torch.float32}])
+    assert residency.resident_is_ready(lambda m, **kwargs: False, module) is resident
+
+
+def test_registers_the_placement_hooks():
+    from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry, HookType
+
+    targets = residency.register()
+    for target, hook in [
+        (residency.MOVE_TARGET, residency.keep_resident_placement),
+        (residency.READY_TARGET, residency.resident_is_ready),
+    ]:
+        assert target in targets
+        assert any(
+            registered is hook and kind is HookType.AROUND
+            for kind, registered, _ in HookRegistry._hooks[target]
+        )
+
+
+@pytest.mark.device_mode
+@pytest.mark.parametrize("hooked", [True, False], ids=["hooked", "upstream"])
+def test_a_resident_component_survives_the_manager_move(monkeypatch, hooked):
+    from sglang.multimodal_gen.runtime.managers.memory_managers import (
+        component_residency_strategies as strategies,
+    )
+
+    # With resident regions the platform's local device is the host.
+    monkeypatch.setattr(
+        strategies, "get_local_torch_device", lambda: torch.device("cpu")
+    )
+    module = nn.Linear(4, 4).to("rbln:0")
+    if hooked:
+        residency.keep_resident_placement(strategies._module_to_local_device, module)
+    else:
+        strategies._module_to_local_device(module)
+    assert (module.weight.device.type == "rbln") is hooked

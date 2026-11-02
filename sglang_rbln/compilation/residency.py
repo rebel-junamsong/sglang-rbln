@@ -188,6 +188,33 @@ def install(module: torch.nn.Module) -> None:
         module._compiled_call_impl._rbln_resident = True
 
 
+STRATEGIES = (
+    "sglang.multimodal_gen.runtime.managers.memory_managers."
+    "component_residency_strategies"
+)
+MOVE_TARGET = f"{STRATEGIES}._module_to_local_device"
+READY_TARGET = f"{STRATEGIES}._module_ready_on_local_device"
+
+
+def _on_device(module: torch.nn.Module) -> bool:
+    return any(map(_is_resident, (*module.parameters(), *module.buffers())))
+
+
+def keep_resident_placement(move, module: torch.nn.Module, *args, **kwargs) -> None:
+    """Leave a component whose regions hold it on their NPUs where they put it.
+
+    The component manager moves each component to the platform's local device before
+    a use, and that device is the host here: it would take the weights off the NPUs
+    every request, and the next call would run against host weights.
+    """
+    if not _on_device(module):
+        move(module, *args, **kwargs)
+
+
+def resident_is_ready(ready, module: torch.nn.Module, *args, **kwargs) -> bool:
+    return _on_device(module) or ready(module, *args, **kwargs)
+
+
 COMPILE_TARGET = "torch.nn.modules.module.Module.compile"
 STAGE_TARGET = (
     "sglang.multimodal_gen.runtime.pipelines_core.stages.base.PipelineStage.__call__"
@@ -205,9 +232,11 @@ def stage_on_host_boundary(call, stage, *args, **kwargs):
         return call(stage, *args, **kwargs)
 
 
-def register() -> tuple[str, str]:
+def register() -> tuple[str, ...]:
     from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry, HookType
 
     HookRegistry.register(COMPILE_TARGET, install_after_compile, HookType.AFTER)
     HookRegistry.register(STAGE_TARGET, stage_on_host_boundary, HookType.AROUND)
-    return COMPILE_TARGET, STAGE_TARGET
+    HookRegistry.register(MOVE_TARGET, keep_resident_placement, HookType.AROUND)
+    HookRegistry.register(READY_TARGET, resident_is_ready, HookType.AROUND)
+    return COMPILE_TARGET, STAGE_TARGET, MOVE_TARGET, READY_TARGET
