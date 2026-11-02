@@ -87,12 +87,21 @@ class Vocoder(nn.Module):
         return spectrogram.float() + 1
 
 
+class AudioVae(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.decoder = Decoder()
+        # 2 channels x 4 mel bins: std 3, mean 1 everywhere
+        self.register_buffer("latents_mean", torch.ones(8))
+        self.register_buffer("latents_std", torch.full((8,), 3.0))
+
+    def decode(self, latents, return_dict=True):
+        return (self.decoder(latents),)
+
+
 @pytest.fixture(name="audio_stage")
 def audio_stage_fixture():
-    decoder = Decoder()
-    return SimpleNamespace(
-        audio_vae=SimpleNamespace(decoder=decoder, decode=None), vocoder=Vocoder()
-    )
+    return SimpleNamespace(audio_vae=AudioVae(), vocoder=Vocoder())
 
 
 @pytest.fixture(name="chained")
@@ -106,7 +115,12 @@ def chained_fixture(monkeypatch):
 
 
 def audio_forward(stage, batch, server_args):
-    latents = torch.ones(1, 2)
+    """The stage's audio path: denormalize (if the VAE still has statistics),
+    decode, vocoder."""
+    latents = torch.ones(1, 2, 3, 4)
+    mean, std = stage.audio_vae.latents_mean, stage.audio_vae.latents_std
+    if isinstance(mean, torch.Tensor) and isinstance(std, torch.Tensor):
+        latents = latents * std.view(1, 2, 1, 4) + mean.view(1, 2, 1, 4)
     spectrogram = stage.audio_vae.decode(latents, return_dict=False)[0]
     return stage.vocoder(spectrogram)
 
@@ -123,9 +137,20 @@ def test_compiles_the_audio_chain_once(audio_stage, chained, monkeypatch):
     assert isinstance(chain, vocoder.AudioChain)
     assert (kwargs["backend"], kwargs["dynamic"]) == ("rbln", False)
     assert (kwargs["options"]["num_devices"], kwargs["options"]["device"]) == (1, 3)
-    # The stage's decode-then-vocoder runs the chain: decoder, then vocoder.
+    # The chain denormalizes (1 * 3 + 1), decodes (x 2), vocodes (+ 1); the
+    # stage itself no longer denormalizes on the host.
+    assert audio_stage.audio_vae.latents_mean is None
     for waveform in waveforms:
-        assert torch.equal(waveform, torch.full((1, 2), 3.0))
+        assert torch.equal(waveform, torch.full((1, 2, 3, 4), 9.0))
+
+
+def test_chain_takes_flat_latents_and_returns_whole_tiles(audio_stage):
+    chain = vocoder.AudioChain(audio_stage.audio_vae, audio_stage.vocoder)
+    chain.latent_shape = (2, 3, 4)
+    padded = chain(torch.ones(1, 24))
+    assert padded.shape == (1, 2, 3, vocoder.TILE)
+    assert torch.equal(padded[..., :4], torch.full((1, 2, 3, 4), 9.0))
+    assert torch.count_nonzero(padded[..., 4:]) == 0
 
 
 def test_chain_runs_on_the_vocoders_placed_npu(audio_stage, chained):
@@ -148,13 +173,16 @@ def test_leaves_the_audio_modules_eager(
     server_args = SimpleNamespace(enable_torch_compile=enable_torch_compile)
     vocoder.compile_audio(forward, audio_stage, None, server_args)
     assert chained == []
-    assert audio_stage.audio_vae.decode is None
+    assert audio_stage.audio_vae.latents_mean is not None
+    assert torch.equal(
+        audio_forward(audio_stage, None, None), torch.full((1, 2, 3, 4), 9.0)
+    )
 
 
 def test_decode_hook_compiles_video_decoder_and_audio_chain(chained):
     av_stage = SimpleNamespace(
         vae=SimpleNamespace(decoder=nn.Linear(4, 4)),
-        audio_vae=SimpleNamespace(decoder=Decoder()),
+        audio_vae=AudioVae(),
         vocoder=Vocoder(),
     )
     batch = SimpleNamespace(use_diffusion_decoder=False)
