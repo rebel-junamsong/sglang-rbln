@@ -15,6 +15,7 @@ from sglang_rbln.patches.models import (
     flux3,
     flux3_video_vae,
     ltx_2,
+    ltx_2_tile_ranks,
     wanvae,
 )
 from sglang_rbln.patches.srt.layers.quantization import fp4_utils
@@ -57,6 +58,7 @@ def register() -> None:
     flux3_action_video.register()
     flux3_video_vae.register()
     ltx_2.register()
+    ltx_2_tile_ranks.register()
     text_encoding.register()
     decoding_av.register()
     image_encoding.register()

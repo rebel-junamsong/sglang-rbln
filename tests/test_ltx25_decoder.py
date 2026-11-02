@@ -16,6 +16,7 @@ from torch import nn
 
 from sglang_rbln.compilation import backend as compilation
 from sglang_rbln.compilation import placement, regions
+from sglang_rbln.patches.models import ltx_2_tile_ranks as tile_ranks
 from sglang_rbln.patches.stages.ltx_2 import decoding_av
 
 pytestmark = pytest.mark.usefixtures("rbln_platform")
@@ -181,11 +182,15 @@ def test_leaves_the_diffusion_decoder_eager_unless_opted_in(
 
 
 @pytest.mark.parametrize(
-    ("component_devices", "expected"),
+    ("component_devices", "stage_options", "tile_devices"),
     [
-        ("", {"num_devices": 4}),
-        ("diffusion_decoder=0,1,2,3", {"num_devices": 4, "device": [0, 1, 2, 3]}),
-        ("diffusion_decoder=2", {"num_devices": 1, "device": [2]}),
+        ("", {"num_devices": 4}, (0, 1, 2, 3)),
+        (
+            "diffusion_decoder=0,1,2,3",
+            {"num_devices": 4, "device": [0, 1, 2, 3]},
+            (0, 1, 2, 3),
+        ),
+        ("diffusion_decoder=2", {"num_devices": 1, "device": [2]}, (2,)),
     ],
     ids=["server-devices", "all-four", "one-device"],
 )
@@ -196,7 +201,8 @@ def test_diffusion_decoder_compiles_on_its_devices(
     diffusion_decoder,
     monkeypatch,
     component_devices,
-    expected,
+    stage_options,
+    tile_devices,
 ):
     monkeypatch.setenv("SGLANG_RBLN_COMPILE_DIFFUSION_DECODER", "1")
     monkeypatch.setenv("SGLANG_RBLN_NUM_DEVICES", "4")
@@ -209,17 +215,34 @@ def test_diffusion_decoder_compiles_on_its_devices(
     batch = SimpleNamespace(use_diffusion_decoder=True)
     server_args = SimpleNamespace(enable_torch_compile=True)
     decoding_av.compile_video_decoder(decode_video, stage, batch, server_args)
-    options = [kwargs["options"] for _, kwargs in torch_compiled + compiled]
-    assert options
-    for option in options:
-        assert {key: option.get(key) for key in expected} == expected
-    assert len({id(option["compile_context"]) for option in options}) == 1
+
+    # Stages 1-3 on the whole device set, in its one context.
+    stages = [kwargs["options"] for _, kwargs in compiled]
+    for option in stages:
+        assert {key: option.get(key) for key in stage_options} == stage_options
+    assert len({id(option["compile_context"]) for option in stages}) == 1
+    # Each tile phase once per device, on that device alone, in its own context.
+    assert getattr(diffusion_decoder, tile_ranks.TILE_DEVICES) == tile_devices
+    tiles = [kwargs["options"] for _, kwargs in torch_compiled]
+    assert len(tiles) == len(decoding_av.DIFFUSION_DECODER_GRAPHS) * len(tile_devices)
+    for phase in decoding_av.DIFFUSION_DECODER_GRAPHS:
+        dispatch = getattr(diffusion_decoder.decoder, phase)
+        assert isinstance(dispatch, tile_ranks.RankDispatch)
+        assert len(dispatch.compiled) == len(tile_devices)
+    by_device = {}
+    for option in tiles:
+        assert option["num_devices"] == 1
+        by_device.setdefault(option["device"], set()).add(id(option["compile_context"]))
+    assert sorted(by_device) == list(tile_devices)
+    assert all(len(contexts) == 1 for contexts in by_device.values())
+    assert len({next(iter(c)) for c in by_device.values()}) == len(tile_devices)
 
 
 def test_compiles_the_diffusion_decoder_once(
     stage, compiled, torch_compiled, diffusion_decoder, monkeypatch
 ):
     monkeypatch.setenv("SGLANG_RBLN_COMPILE_DIFFUSION_DECODER", "1")
+    monkeypatch.setenv("SGLANG_RBLN_NUM_DEVICES", "2")
     stage.diffusion_decoder = diffusion_decoder
     batch = SimpleNamespace(use_diffusion_decoder=True)
     server_args = SimpleNamespace(enable_torch_compile=True)
@@ -227,7 +250,9 @@ def test_compiles_the_diffusion_decoder_once(
         decoding_av.compile_video_decoder(decode_video, stage, batch, server_args)
     decoder = diffusion_decoder.decoder
     phases = [fn.__name__ for fn, _ in torch_compiled]
-    assert phases == list(decoding_av.DIFFUSION_DECODER_GRAPHS)
+    assert phases == [
+        name for name in decoding_av.DIFFUSION_DECODER_GRAPHS for _ in range(2)
+    ]
     modules = [module for module, _ in compiled]
     assert modules[0] is decoder.conv_in
     assert all(upsample in modules for upsample in decoder.upsamples[:-1])
@@ -238,8 +263,6 @@ def test_compiles_the_diffusion_decoder_once(
         if len(blocks) > 1
         for block in blocks
     )
-    options = [kwargs["options"] for _, kwargs in torch_compiled + compiled]
-    assert len({id(option["compile_context"]) for option in options}) == 1
     assert not stage.vae.use_framewise_decoding
 
 

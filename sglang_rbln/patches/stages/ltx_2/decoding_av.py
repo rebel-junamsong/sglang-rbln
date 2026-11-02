@@ -10,8 +10,9 @@ import torch
 from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry, HookType
 
 from sglang_rbln import envs
-from sglang_rbln.compilation import regions, tiling
-from sglang_rbln.compilation.backend import static_compile_kwargs
+from sglang_rbln.compilation import placement, regions, tiling
+from sglang_rbln.compilation.backend import device_set_context, static_compile_kwargs
+from sglang_rbln.patches.models import ltx_2_tile_ranks
 from sglang_rbln.patches.stages.ltx_2 import vocoder
 
 logger = logging.getLogger(__name__)
@@ -43,14 +44,32 @@ def fit_diffusion_decoder_tiles(model) -> None:
                 setattr(model, name, getattr(model, name) // 2)
 
 
-def compile_diffusion_decoder(model) -> None:
-    """Compile the decoder on its component's devices, one region per stage.
+def decoder_devices(model) -> tuple[int, ...]:
+    devices = placement.devices_of(model)
+    if devices:
+        return tuple(devices)
+    return tuple(range(envs.SGLANG_RBLN_NUM_DEVICES or 1))
 
-    The device set comes from SGLANG_RBLN_COMPONENT_DEVICES ("diffusion_decoder")
-    or the server's device count, as for the DiT: across several devices the
-    compiler shards each graph (RSD) and the decoder shares the DiT's context.
+
+def on_device(compile_kwargs: dict, device: int) -> dict:
+    options = compile_kwargs["options"] | {
+        "num_devices": 1,
+        "device": device,
+        "compile_context": device_set_context((device,)),
+    }
+    return compile_kwargs | {"options": options}
+
+
+def compile_diffusion_decoder(model) -> None:
+    """Compile the decoder on its component's devices.
+
+    Stages 1-3 compile on the whole device set, one region per stage
+    ModuleList. The stage-4/5 tiles follow upstream's decode-parallel tiling:
+    each NPU of the set is a rank (ltx_2_tile_ranks) whose tile graphs are
+    compiled for that NPU alone, with the decoder weights resident there.
     """
     compile_kwargs = static_compile_kwargs(model)
+    devices = decoder_devices(model)
     decoder = model.decoder
     fit_diffusion_decoder_tiles(model)
     decoder.conv_in.compile(**compile_kwargs)
@@ -60,8 +79,23 @@ def compile_diffusion_decoder(model) -> None:
         regions.group_blocks(list(blocks), None, compile_kwargs)
         upsample.compile(**compile_kwargs)
     for name in DIFFUSION_DECODER_GRAPHS:
-        setattr(decoder, name, torch.compile(getattr(decoder, name), **compile_kwargs))
-    logger.info("Compiling the LTX-2.5 diffusion decoder: %s", compile_kwargs)
+        phase = getattr(decoder, name)
+        setattr(
+            decoder,
+            name,
+            ltx_2_tile_ranks.RankDispatch(
+                [
+                    torch.compile(phase, **on_device(compile_kwargs, device))
+                    for device in devices
+                ]
+            ),
+        )
+    setattr(model, ltx_2_tile_ranks.TILE_DEVICES, devices)
+    logger.info(
+        "Compiling the LTX-2.5 diffusion decoder: stages 1-3 on %s, tiles on %s",
+        compile_kwargs["options"].get("device", devices),
+        devices,
+    )
 
 
 def compile_video_decoder(forward, stage, batch, server_args, *args, **kwargs):

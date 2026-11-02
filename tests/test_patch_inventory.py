@@ -308,6 +308,12 @@ PATCH_DEBTS = [
         upstream_fix="declare the checkpoint's type_emb (sglang 0.5.22)",
     ),
     PatchDebt(
+        patch="models/ltx_2_tile_ranks",
+        module="sglang.multimodal_gen.runtime.models.decoders.ltx_2_5_diffusion_decoder",
+        upstream_pattern="world_size = get_decode_parallel_world_size()",
+        upstream_fix="let a platform supply decode-parallel ranks inside one process",
+    ),
+    PatchDebt(
         patch="stages/ltx_2/decoding_av",
         module=f"{STAGES}.ltx_2.decoding_av",
         upstream_pattern="decode_output = vae.decode(latents",
