@@ -65,3 +65,40 @@ def test_connector_rotary_tables_match_upstream(rope_type, tokens):
     rope = LTX2RotaryPosEmbed1d(128, rope_type=rope_type, num_attention_heads=4)
     expected = rope(2, tokens, torch.device("cpu"), torch.bfloat16)
     assert_same_contiguous(ltx_2.contiguous_rotary_tables(expected), expected)
+
+
+class _CountingRope(LTX2AudioVideoRotaryPosEmbed):
+    calls = 0
+
+    def forward(self, *args, **kwargs):
+        type(self).calls += 1
+        return super().forward(*args, **kwargs)
+
+
+def test_rotary_tables_are_built_once_per_position_set():
+    rope = _CountingRope(dim=128, rope_type="split", num_attention_heads=4)
+    forward = _CountingRope.forward
+
+    def tables(frames):
+        coords = rope.prepare_video_coords(
+            2, frames, 17, 30, torch.device("cpu"), fps=24.0
+        )
+        return ltx_2.cached_rotary_tables(
+            forward, rope, coords, out_dtype=torch.bfloat16
+        )
+
+    first = tables(16)
+    assert tables(16) is first  # a new coords tensor of the same positions: no rebuild
+    assert _CountingRope.calls == 1
+    other = tables(15)
+    assert _CountingRope.calls == 2 and other[0].shape != first[0].shape
+    expected = forward(
+        rope,
+        rope.prepare_video_coords(2, 16, 17, 30, torch.device("cpu"), fps=24.0),
+        out_dtype=torch.bfloat16,
+    )
+    assert_same_contiguous(first, expected)
+    assert all(table.is_contiguous() for table in first)
+    for frames in range(ltx_2.ROTARY_TABLES_KEPT + 2):
+        tables(frames + 1)
+    assert len(rope.__dict__[ltx_2.ROTARY_TABLES]) == ltx_2.ROTARY_TABLES_KEPT

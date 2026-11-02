@@ -157,10 +157,10 @@ class TestLtx2RopeHook:
         assert torch.equal(cos, table.swapaxes(1, 2))
 
     @pytest.mark.parametrize("target", ltx_2.HOOK_TARGETS)
-    def test_registers_an_after_hook(self, target):
+    def test_registers_an_around_hook(self, target):
         assert target in ltx_2.register()
         assert any(
-            hook is ltx_2.contiguous_rotary_tables and kind is HookType.AFTER
+            hook is ltx_2.cached_rotary_tables and kind is HookType.AROUND
             for kind, hook, _ in HookRegistry._hooks[target]
         )
 
