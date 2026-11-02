@@ -89,11 +89,11 @@ def npus(monkeypatch):
     ("count", "expected"),
     [
         (8, ((4, 5, 6, 7), 4)),
-        (6, ((4, 5), 2)),
         (12, ((4, 5, 6, 7), 4)),
+        (6, (None, 4)),
         (4, (None, 4)),
     ],
-    ids=["eight", "six", "twelve", "dit-only"],
+    ids=["eight", "twelve", "six", "dit-only"],
 )
 def test_text_encoder_takes_the_npus_beyond_the_dit(npus, count, expected):
     npus(count)
@@ -102,7 +102,7 @@ def test_text_encoder_takes_the_npus_beyond_the_dit(npus, count, expected):
 
 
 def test_text_encoder_stays_with_the_dit_when_spare_npus_cannot_hold_it(npus):
-    npus(5, free=8.0)  # one spare NPU: 8 GiB of weights plus the reserve
+    npus(8, free=3.0)  # 2 GiB of weights per NPU plus the reserve
     encoder, _ = placement.place_component(_load, "text_encoder", "path")
     assert {_placement(module) for module in encoder.modules()} == {(None, 4)}
 

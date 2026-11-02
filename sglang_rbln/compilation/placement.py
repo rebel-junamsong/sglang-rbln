@@ -20,7 +20,7 @@ HOOK_TARGET = (
 _placements: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 
 # A text encoder runs once per request, before the DiT. With no explicit placement it
-# gets the visible NPUs beyond the DiT's tensor-parallel set, when they can hold it.
+# runs tensor-parallel at the DiT's width on the next visible NPUs, if they hold it.
 SPARE_NPU_COMPONENTS = ("text_encoder",)
 RUNTIME_RESERVE = 1536 << 20
 
@@ -46,11 +46,11 @@ def weight_bytes(module: nn.Module) -> int:
 
 
 def spare_devices(module: nn.Module) -> tuple[int, ...] | None:
-    """The NPUs beyond the DiT's that can hold `module`, split tensor-parallel."""
+    """As many NPUs after the DiT's as it has, if they can hold `module` together."""
     width = envs.SGLANG_RBLN_NUM_DEVICES or 1
-    spare = tuple(range(width, min(visible_npus(), 2 * width)))
-    if not spare:
+    if visible_npus() < 2 * width:
         return None
+    spare = tuple(range(width, 2 * width))
     share = weight_bytes(module) // len(spare) + RUNTIME_RESERVE
     free = min(device.npu_memory_info(index).free for index in spare)
     if share > free:
