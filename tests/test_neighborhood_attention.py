@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
+import math
+
 import pytest
 import torch
 from sglang.multimodal_gen.runtime.models.vaes import flux3_neighborhood_attention
@@ -129,14 +131,79 @@ def test_calls_split_under_the_score_budget_stay_exact(
         assert {shape[1] for shape in calls} == {2}
 
 
+@pytest.mark.parametrize("halo_budget", [neighborhood.MAX_HALO_COPY_BYTES, 1])
 @pytest.mark.parametrize(
     ("grid", "kernel"), [((13, 34, 36), [11, 11, 11]), ((17, 23), [5, 5])], ids=str
 )
-def test_traces_as_one_graph(monkeypatch, grid, kernel):
+def test_traces_as_one_graph(monkeypatch, grid, kernel, halo_budget):
     monkeypatch.setattr(neighborhood, "MAX_SCORES_PER_CALL", 1 << 16)
+    monkeypatch.setattr(neighborhood, "MAX_HALO_COPY_BYTES", halo_budget)
     q, k, v = (torch.randn(1, *grid, 2, 32) for _ in range(3))
     expected = neighborhood.neighborhood_attention(q, k, v, kernel_size=kernel)
     compiled = torch.compile(
         neighborhood.neighborhood_attention, backend="eager", fullgraph=True
     )
     torch.testing.assert_close(compiled(q, k, v, kernel_size=kernel), expected)
+
+
+def _token_bytes(heads: int) -> int:
+    """K/V bytes per token for heads of 64 bf16 channels."""
+    return heads * 64 * 2
+
+
+@pytest.mark.parametrize(
+    ("grid", "kernel", "heads", "expected"),
+    [
+        # The LTX-2.5 diffusion decoder's stages 1-3 at a 1920x1088 output.
+        ((18, 34, 60), [3, 7, 7], 32, [3, 8, 8]),
+        ((18, 68, 120), [3, 7, 7], 16, [3, 8, 16]),
+        ((35, 68, 120), [3, 5, 5], 8, [3, 8, 8]),
+    ],
+    ids=str,
+)
+def test_tiles_grow_until_the_halo_copies_fit(grid, kernel, heads, expected):
+    lengths = neighborhood.default_tile_lengths(grid, kernel)
+    token_bytes = _token_bytes(heads)
+    fitted = neighborhood.fit_tile_lengths(grid, kernel, lengths, token_bytes)
+    assert fitted == expected
+    copies = 2 * token_bytes * math.prod(grid)
+    assert copies * neighborhood.halo_factor(grid, kernel, lengths) > (
+        neighborhood.MAX_HALO_COPY_BYTES
+    )
+    assert copies * neighborhood.halo_factor(grid, kernel, fitted) <= (
+        neighborhood.MAX_HALO_COPY_BYTES
+    )
+
+
+@pytest.mark.parametrize(
+    ("grid", "kernel", "heads"),
+    [
+        # Stage 1 at 1280x704 and a stage-5 tile at 1920x1088.
+        ((18, 22, 40), [3, 7, 7], 32),
+        ((15, 96, 96), [11, 11, 11], 4),
+    ],
+    ids=str,
+)
+def test_tiles_within_the_halo_budget_stay(grid, kernel, heads):
+    lengths = neighborhood.default_tile_lengths(grid, kernel)
+    fitted = neighborhood.fit_tile_lengths(grid, kernel, lengths, _token_bytes(heads))
+    assert fitted == lengths
+
+
+def test_grown_tiles_stay_exact(monkeypatch, flex_reference):
+    grid, kernel = (7, 18, 20), [3, 5, 5]
+    q, k, v = (torch.randn(1, *grid, 2, 32) for _ in range(3))
+    expected = flex_reference(q, k, v, kernel_size=kernel)
+    monkeypatch.setattr(neighborhood, "MAX_HALO_COPY_BYTES", 1)
+    sizes = []
+    axis_tiles = neighborhood.axis_tiles
+    monkeypatch.setattr(
+        neighborhood,
+        "axis_tiles",
+        lambda length, kernel, causal, size, device: (
+            sizes.append(size) or axis_tiles(length, kernel, causal, size, device)
+        ),
+    )
+    actual = neighborhood.neighborhood_attention(q, k, v, kernel_size=kernel)
+    torch.testing.assert_close(actual, expected, atol=1e-5, rtol=1e-5)
+    assert sizes == [7, 18, 20]

@@ -14,6 +14,10 @@ __all__ = ["neighborhood_attention"]
 
 SINGLE_TILE_KERNELS = 3
 MAX_SCORES_PER_CALL = 1 << 30
+# Every query tile reads its keys and values from a halo copy of span x span
+# rows, so K and V are copied prod(span / size) times; the copies of all
+# calls are live together on device. Past this, the tiles grow to fit it.
+MAX_HALO_COPY_BYTES = 5 << 29
 
 
 class AxisTiles(NamedTuple):
@@ -159,6 +163,58 @@ def default_tile_lengths(grid: Sequence[int], kernel_size: Sequence[int]) -> lis
     ]
 
 
+def halo_factor(
+    grid: Sequence[int], kernel_size: Sequence[int], lengths: Sequence[int]
+) -> float:
+    factor = 1.0
+    for length, kernel, size in zip(grid, kernel_size, lengths, strict=True):
+        factor *= min(size + kernel - 1, length) / size
+    return factor
+
+
+def fit_tile_lengths(
+    grid: Sequence[int],
+    kernel_size: Sequence[int],
+    lengths: Sequence[int],
+    token_bytes: int,
+) -> list[int]:
+    """Grow the tiles until K's and V's halo copies fit MAX_HALO_COPY_BYTES.
+
+    Each axis first takes a whole kernel per tile, in steps of its default
+    size; then the axis copied most doubles until the copies fit.
+    """
+
+    def copy_bytes(lengths):
+        tokens = 1
+        for length in grid:
+            tokens *= length
+        return 2 * token_bytes * tokens * halo_factor(grid, kernel_size, lengths)
+
+    lengths = list(lengths)
+    if copy_bytes(lengths) <= MAX_HALO_COPY_BYTES:
+        return lengths
+    lengths = [
+        min(length, max(size, -(-kernel // step) * step))
+        for length, kernel, size, step in zip(
+            grid, kernel_size, lengths, default_tile_size(len(grid)), strict=True
+        )
+    ]
+    while copy_bytes(lengths) > MAX_HALO_COPY_BYTES:
+        # The axis copied most; ties go to the later axis, whose rows are the
+        # contiguous ones.
+        axis, ratio = 0, 1.0
+        for index, (length, kernel, size) in enumerate(
+            zip(grid, kernel_size, lengths, strict=True)
+        ):
+            axis_ratio = halo_factor([length], [kernel], [size])
+            if axis_ratio >= ratio:
+                axis, ratio = index, axis_ratio
+        if ratio == 1:
+            break
+        lengths[axis] = min(2 * lengths[axis], grid[axis])
+    return lengths
+
+
 def neighborhood_attention(
     q: torch.Tensor,
     k: torch.Tensor,
@@ -171,7 +227,15 @@ def neighborhood_attention(
 ) -> torch.Tensor:
     batch, *grid, heads, _ = q.shape
     causal = list(is_causal or [False] * len(grid))
-    sizes = list(tile_size or default_tile_lengths(grid, kernel_size))
+    sizes = list(
+        tile_size
+        or fit_tile_lengths(
+            grid,
+            kernel_size,
+            default_tile_lengths(grid, kernel_size),
+            heads * k.shape[-1] * k.element_size(),
+        )
+    )
     classes = [
         axis_tiles(length, kernel, axis_causal, size, q.device)
         for length, kernel, axis_causal, size in zip(
