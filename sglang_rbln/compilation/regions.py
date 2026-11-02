@@ -22,6 +22,7 @@ from sglang_rbln.compilation import shapes
 
 logger = logging.getLogger(__name__)
 
+GRAPH_COUNT = "_rbln_region_graphs"
 HOOK_TARGET = (
     "sglang.multimodal_gen.runtime.utils.torch_compile.compile_matching_submodules"
 )
@@ -374,6 +375,9 @@ def group_blocks(
 def compile_block_groups(
     compile_matching_submodules: Callable, module: nn.Module, *, compile_kwargs: dict
 ) -> int:
+    # Every denoising stage of a two-stage pipeline compiles the transformer it shares.
+    if (count := getattr(module, GRAPH_COUNT, None)) is not None:
+        return count
     size = envs.SGLANG_RBLN_BLOCKS_PER_REGION
     if size == 1:
         return compile_matching_submodules(module, compile_kwargs=compile_kwargs)
@@ -388,7 +392,9 @@ def compile_block_groups(
     runs = consecutive_runs(matches)
     for run in runs:
         group_blocks(run, size, compile_kwargs)
-    return sum(graph_count(run, size) for run in runs)
+    count = sum(graph_count(run, size) for run in runs)
+    setattr(module, GRAPH_COUNT, count)
+    return count
 
 
 def register() -> str:

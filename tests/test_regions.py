@@ -232,6 +232,28 @@ def test_default_compiles_each_block_list_as_one_region(monkeypatch, graphs):
     assert len(captured) == 1
 
 
+def test_a_module_compiled_by_two_stages_keeps_one_region(monkeypatch, graphs):
+    """Each denoising stage of a two-stage pipeline compiles the shared transformer."""
+    monkeypatch.delenv("SGLANG_RBLN_BLOCKS_PER_REGION", raising=False)
+    captured, compile_kwargs = graphs
+    torch.manual_seed(0)
+    model = Model().eval()
+    x = torch.randn(2, 8)
+    with torch.no_grad():
+        expected = model(x)
+        counts = [
+            regions.compile_block_groups(
+                _plain_compile, model, compile_kwargs=compile_kwargs
+            )
+            for _ in range(2)
+        ]
+        outputs = [model(x) for _ in range(2)]
+    assert counts == [1, 1]
+    for output in outputs:
+        assert torch.equal(output, expected)
+    assert len(captured) == 1
+
+
 @pytest.mark.parametrize("size", [2, 4, 6])
 def test_outputs_feed_keyword_and_positional_slots(monkeypatch, graphs, size):
     monkeypatch.setenv("SGLANG_RBLN_BLOCKS_PER_REGION", str(size))
