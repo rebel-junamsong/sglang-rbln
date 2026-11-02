@@ -17,7 +17,7 @@ from typing import Any
 import torch
 
 from sglang_rbln import envs
-from sglang_rbln.compilation import placement, shapes
+from sglang_rbln.compilation import device_views, placement, shapes
 
 logger = logging.getLogger(__name__)
 
@@ -265,9 +265,15 @@ def contiguous_device_inputs(args):
     ]
 
 
-def _contiguous_callable(compiled):
+def _on_device(value: torch.Tensor) -> bool:
+    return value.device.type == "rbln"
+
+
+def _contiguous_callable(compiled, rebased: device_views.RebasedViews | None = None):
     @functools.wraps(compiled)
     def run(*args, **kwargs):
+        if rebased is not None:
+            args = rebased.bases(args)
         return compiled(*contiguous_device_inputs(args), **kwargs)
 
     return run
@@ -293,14 +299,24 @@ def _instrumented_backend(backend):
             logger.info(
                 "rbln graph dumped to %s", dump_graph(graph, example_inputs, dump_dir)
             )
+        # A sliced device view reaches the graph as its base, sliced inside it,
+        # instead of as an eager contiguous copy (see device_views).
+        rebased = device_views.rebase_strided_views(graph, example_inputs, _on_device)
+        if rebased is not None:
+            logger.info(
+                "rbln graph takes %d sliced device views as their bases: %s",
+                len(rebased.slices),
+                sorted(rebased.slices),
+            )
+            example_inputs = rebased.bases(example_inputs)
         compiled = backend(
             graph, contiguous_device_inputs(example_inputs), *args, **kwargs
         )
         if any(
-            isinstance(value, torch.Tensor) and value.device.type == "rbln"
+            isinstance(value, torch.Tensor) and _on_device(value)
             for value in example_inputs
         ):
-            compiled = _contiguous_callable(compiled)
+            compiled = _contiguous_callable(compiled, rebased)
         if envs.SGLANG_RBLN_CHECK_GRAPHS:
             compiled = _checking_callable(
                 compiled, graph, describe_graph(graph, example_inputs)
