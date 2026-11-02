@@ -9,11 +9,9 @@ import logging
 import torch
 from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry, HookType
 
+from sglang_rbln import envs
 from sglang_rbln.compilation import regions, tiling
-from sglang_rbln.compilation.backend import (
-    single_device_compile_kwargs,
-    static_compile_kwargs,
-)
+from sglang_rbln.compilation.backend import static_compile_kwargs
 from sglang_rbln.patches.stages.ltx_2 import vocoder
 
 logger = logging.getLogger(__name__)
@@ -46,7 +44,13 @@ def fit_diffusion_decoder_tiles(model) -> None:
 
 
 def compile_diffusion_decoder(model) -> None:
-    compile_kwargs = single_device_compile_kwargs(model)
+    """Compile the decoder on its component's devices, one region per stage.
+
+    The device set comes from SGLANG_RBLN_COMPONENT_DEVICES ("diffusion_decoder")
+    or the server's device count, as for the DiT: across several devices the
+    compiler shards each graph (RSD) and the decoder shares the DiT's context.
+    """
+    compile_kwargs = static_compile_kwargs(model)
     decoder = model.decoder
     fit_diffusion_decoder_tiles(model)
     decoder.conv_in.compile(**compile_kwargs)
@@ -62,8 +66,14 @@ def compile_diffusion_decoder(model) -> None:
 
 def compile_video_decoder(forward, stage, batch, server_args, *args, **kwargs):
     module = stage.diffusion_decoder if batch.use_diffusion_decoder else stage.vae
+    opted_in = (
+        envs.SGLANG_RBLN_COMPILE_DIFFUSION_DECODER
+        if batch.use_diffusion_decoder
+        else True
+    )
     if (
         server_args.enable_torch_compile
+        and opted_in
         and module is not None
         and not getattr(module, COMPILED, False)
     ):

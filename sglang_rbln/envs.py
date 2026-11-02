@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     SGLANG_RBLN_NUM_DEVICES: int | None = None
     SGLANG_RBLN_COMPONENT_DEVICES: dict[str, tuple[int, ...]] = {}
     SGLANG_RBLN_COMPILE_VAE: bool = False
+    SGLANG_RBLN_COMPILE_DIFFUSION_DECODER: bool = False
     SGLANG_RBLN_CHECK_GRAPHS: bool = False
     SGLANG_RBLN_LOG_GRAPHS: bool = False
     SGLANG_RBLN_DUMP_GRAPHS: Path | None = None
@@ -81,6 +82,9 @@ environment_variables: dict[str, Callable[[], Any]] = {
         os.environ.get("SGLANG_RBLN_COMPONENT_DEVICES", "")
     ),
     "SGLANG_RBLN_COMPILE_VAE": _flag("SGLANG_RBLN_COMPILE_VAE"),
+    "SGLANG_RBLN_COMPILE_DIFFUSION_DECODER": _flag(
+        "SGLANG_RBLN_COMPILE_DIFFUSION_DECODER"
+    ),
     "SGLANG_RBLN_CHECK_GRAPHS": _flag("SGLANG_RBLN_CHECK_GRAPHS"),
     "SGLANG_RBLN_LOG_GRAPHS": _flag("SGLANG_RBLN_LOG_GRAPHS"),
     "SGLANG_RBLN_DUMP_GRAPHS": _optional("SGLANG_RBLN_DUMP_GRAPHS", Path),

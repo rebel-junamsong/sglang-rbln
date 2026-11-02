@@ -167,9 +167,59 @@ def test_diffusion_decoder_tiles_shrink_to_the_token_budget(diffusion_decoder):
     assert tokens <= decoding_av.DIFFUSION_DECODER_TILE_TOKENS
 
 
-def test_compiles_the_diffusion_decoder_once(
-    stage, compiled, torch_compiled, diffusion_decoder
+def test_leaves_the_diffusion_decoder_eager_unless_opted_in(
+    stage, compiled, torch_compiled, diffusion_decoder, monkeypatch
 ):
+    monkeypatch.delenv("SGLANG_RBLN_COMPILE_DIFFUSION_DECODER", raising=False)
+    stage.diffusion_decoder = diffusion_decoder
+    batch = SimpleNamespace(use_diffusion_decoder=True)
+    server_args = SimpleNamespace(enable_torch_compile=True)
+    output = decoding_av.compile_video_decoder(decode_video, stage, batch, server_args)
+    assert output == ("video", None)
+    assert compiled == torch_compiled == []
+    assert not getattr(diffusion_decoder, decoding_av.COMPILED, False)
+
+
+@pytest.mark.parametrize(
+    ("component_devices", "expected"),
+    [
+        ("", {"num_devices": 4}),
+        ("diffusion_decoder=0,1,2,3", {"num_devices": 4, "device": [0, 1, 2, 3]}),
+        ("diffusion_decoder=2", {"num_devices": 1, "device": [2]}),
+    ],
+    ids=["server-devices", "all-four", "one-device"],
+)
+def test_diffusion_decoder_compiles_on_its_devices(
+    stage,
+    compiled,
+    torch_compiled,
+    diffusion_decoder,
+    monkeypatch,
+    component_devices,
+    expected,
+):
+    monkeypatch.setenv("SGLANG_RBLN_COMPILE_DIFFUSION_DECODER", "1")
+    monkeypatch.setenv("SGLANG_RBLN_NUM_DEVICES", "4")
+    monkeypatch.setenv("SGLANG_RBLN_COMPONENT_DEVICES", component_devices)
+    loaded = diffusion_decoder
+    placement.place_component(
+        lambda *args, **kwargs: (loaded, 0.0), "diffusion_decoder"
+    )
+    stage.diffusion_decoder = diffusion_decoder
+    batch = SimpleNamespace(use_diffusion_decoder=True)
+    server_args = SimpleNamespace(enable_torch_compile=True)
+    decoding_av.compile_video_decoder(decode_video, stage, batch, server_args)
+    options = [kwargs["options"] for _, kwargs in torch_compiled + compiled]
+    assert options
+    for option in options:
+        assert {key: option.get(key) for key in expected} == expected
+    assert len({id(option["compile_context"]) for option in options}) == 1
+
+
+def test_compiles_the_diffusion_decoder_once(
+    stage, compiled, torch_compiled, diffusion_decoder, monkeypatch
+):
+    monkeypatch.setenv("SGLANG_RBLN_COMPILE_DIFFUSION_DECODER", "1")
     stage.diffusion_decoder = diffusion_decoder
     batch = SimpleNamespace(use_diffusion_decoder=True)
     server_args = SimpleNamespace(enable_torch_compile=True)
