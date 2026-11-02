@@ -37,6 +37,7 @@ def register() -> None:
     if current_platform.device_name != "rbln":
         return
     arch_config.register()
+    regions.install_fit_check()
     placement.register()
     video_sparse_attn.register()
     regions.register()

@@ -537,6 +537,28 @@ def test_other_compile_errors_do_not_split(monkeypatch):
     assert sizes == [4]
 
 
+def test_installed_check_covers_a_module_no_block_group_compiled(
+    device_memory, monkeypatch
+):
+    """A VAE coder or vocoder reaches the device through Module.compile, which
+    `checking_fit` never wrapped: it used to fail with a bare SYS_ENOMEM."""
+    import rebel
+
+    free, _ = device_memory
+    free["bytes"] = BLOCK_BYTES
+    monkeypatch.setattr(regions, "_installed", False)
+    original = rebel.RBLNCompiledModel.create_runtime
+    monkeypatch.setattr(
+        rebel.RBLNCompiledModel, "create_runtime", original, raising=False
+    )
+    assert regions.install_fit_check()
+    compiled = SimpleNamespace(get_alloc_per_node=lambda: [4 * BLOCK_BYTES])
+    with pytest.raises(regions.RegionDoesNotFit) as error:
+        rebel.RBLNCompiledModel.create_runtime(compiled, device=0)
+    assert error.value.needed == [4 * BLOCK_BYTES]
+    assert not regions.install_fit_check()
+
+
 def test_runtime_creation_checks_every_node_it_loads_on(device_memory):
     import rebel
 

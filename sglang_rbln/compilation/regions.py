@@ -156,20 +156,51 @@ def check_fits(compiled_model: Any, device: Any = None) -> None:
         raise RegionDoesNotFit(needed, free)
 
 
+def _checked_create_runtime(create_runtime: Callable) -> Callable:
+    def checked(compiled_model, *args, **kwargs):
+        check_fits(compiled_model, kwargs.get("device", args[0] if args else None))
+        return create_runtime(compiled_model, *args, **kwargs)
+
+    return checked
+
+
+_installed = False
+
+
+def install_fit_check() -> bool:
+    """Check every runtime this process creates, whatever compiled it.
+
+    `checking_fit` only covers block regions, so a module compiled straight
+    through `Module.compile` -- the VAE coders, the vocoder, the duration head
+    -- reached the device unchecked and failed with a bare SYS_ENOMEM from the
+    runtime instead of a RegionDoesNotFit naming what it needed.
+    """
+    global _installed
+    if _installed:
+        return False
+    try:
+        from rebel import RBLNCompiledModel
+    except ImportError:
+        return False
+    RBLNCompiledModel.create_runtime = _checked_create_runtime(
+        RBLNCompiledModel.create_runtime
+    )
+    _installed = True
+    return True
+
+
 @contextlib.contextmanager
 def checking_fit() -> Iterator[None]:
+    if _installed:
+        yield
+        return
     try:
         from rebel import RBLNCompiledModel
     except ImportError:
         yield
         return
     create_runtime = RBLNCompiledModel.create_runtime
-
-    def checked(compiled_model, *args, **kwargs):
-        check_fits(compiled_model, kwargs.get("device", args[0] if args else None))
-        return create_runtime(compiled_model, *args, **kwargs)
-
-    RBLNCompiledModel.create_runtime = checked
+    RBLNCompiledModel.create_runtime = _checked_create_runtime(create_runtime)
     try:
         yield
     finally:

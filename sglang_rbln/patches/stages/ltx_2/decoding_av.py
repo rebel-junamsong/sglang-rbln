@@ -7,6 +7,7 @@ import logging
 
 from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry, HookType
 
+from sglang_rbln.compilation import tiling
 from sglang_rbln.patches.stages.ltx_2 import vocoder
 
 logger = logging.getLogger(__name__)
@@ -38,12 +39,25 @@ def compile_video_decoder(forward, stage, batch, server_args, *args, **kwargs):
     return forward(stage, batch, server_args, *args, **kwargs)
 
 
+def decode_within_memory(forward, stage, batch, server_args, *args, **kwargs):
+    """Retry the decode on smaller tiles when its graph does not fit.
+
+    One tile is one graph, so a decoder cannot be split like a block region;
+    the tile size is its knob.
+    """
+    return tiling.with_smaller_tiles(
+        lambda: forward(stage, batch, server_args, *args, **kwargs), stage.vae
+    )
+
+
 def compile_decoders(forward, stage, batch, server_args):
     audio = functools.partial(
         vocoder.compile_audio,
         functools.partial(vocoder.compile_vocoder, forward),
     )
-    return compile_video_decoder(audio, stage, batch, server_args)
+    return compile_video_decoder(
+        functools.partial(decode_within_memory, audio), stage, batch, server_args
+    )
 
 
 def register() -> str:
