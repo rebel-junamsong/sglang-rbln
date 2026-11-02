@@ -138,6 +138,11 @@ the NPU. A compile error fails the request unless `SGLANG_RBLN_COMPILE_STRICT=0`
 | `SGLANG_RBLN_VOCODER_ON_NPU=1` | compile the LTX-2 vocoder for one NPU, the last tensor-parallel one. Off by default: the NPU's convolutions accumulate with an upward gain that compounds through the vocoder's ~100 convs, so its waveform lands below CPU bf16 (12.9 vs 16.6 dB SNR against float32 at 5 s of audio) |
 | `SGLANG_RBLN_COMPILE_AUDIO=1` | compile the LTX-2 audio VAE decoder and the vocoder as one graph (audio latent in, waveform out) on one NPU: the vocoder's own if `SGLANG_RBLN_COMPONENT_DEVICES` places it (`vocoder=8`), else the last tensor-parallel one. Nothing runs on the host inside it, and the mel stays on the device. 0.44 s against 2.2-3.2 s on the CPU at 5 s of audio; its precision is the vocoder's (see `SGLANG_RBLN_VOCODER_ON_NPU`). Takes the place of `SGLANG_RBLN_VOCODER_ON_NPU` |
 | `SGLANG_RBLN_BLOCKS_PER_REGION=7` | cap the blocks compiled as one region graph (see [Compiled graphs](#compiled-graphs); 1 compiles each block alone, and for FLUX 3 Action any value replaces the one-graph step with block regions). Set it only when one graph does not fit or does not compile |
+| `SGLANG_RBLN_PROMPT_ENHANCER=1` | serve a request's `enhance_prompt` with the checkpoint's own `prompt_enhancer/` component (LTX-2.5: a Gemma-4 instruct model) when no `--prompt-enhancer-config` endpoint is set: its decoder layers compile as one region on `SGLANG_RBLN_COMPONENT_DEVICES` `prompt_enhancer=…` and it decodes greedily with a static KV cache (one prefill graph, one decode graph). Text prompts only |
+| `SGLANG_RBLN_PROMPT_ENHANCER_SYSTEM_PROMPT=<file>` | system prompt for `SGLANG_RBLN_PROMPT_ENHANCER` (default: upstream's enhancer system prompt) |
+| `SGLANG_RBLN_PROMPT_ENHANCER_USER_TEMPLATE='user prompt: {prompt}'` | user turn for `SGLANG_RBLN_PROMPT_ENHANCER`, with `{prompt}` and `{task}` (default: upstream's `{"task", "prompt"}` JSON) |
+| `SGLANG_RBLN_PROMPT_ENHANCER_MAX_NEW_TOKENS=512` | longest rewrite `SGLANG_RBLN_PROMPT_ENHANCER` generates (default 512, upstream's) |
+| `SGLANG_RBLN_PROMPT_ENHANCER_NO_REPEAT_NGRAM=0` | ban repeating any n-gram of this size in the rewrite (0 = off; the LTX-2.5 recipe uses 5) |
 
 `--enable-torch-compile` and `--regional-compile` are on by default; pass either
 flag explicitly to change it.

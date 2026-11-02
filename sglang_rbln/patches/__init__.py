@@ -6,6 +6,7 @@ from sglang_rbln import device
 from sglang_rbln.compilation import placement, regions, residency
 from sglang_rbln.patches import ffmpeg_spawn
 from sglang_rbln.patches.configs import arch_config
+from sglang_rbln.patches.entrypoints import prompt_enhancement
 from sglang_rbln.patches.layers import layernorm
 from sglang_rbln.patches.layers.attention import video_sparse_attn
 from sglang_rbln.patches.managers import gpu_worker
@@ -52,6 +53,7 @@ def register() -> None:
     text_encoding.register()
     decoding_av.register()
     gpu_worker.register()
+    prompt_enhancement.register()
     ffmpeg_spawn.register()
     wanvae.register()
     if device.torch_rbln_available():
