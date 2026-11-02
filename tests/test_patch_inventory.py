@@ -304,6 +304,18 @@ PATCH_DEBTS = [
         upstream_pattern="decode_output = vae.decode(latents",
         upstream_fix="compile the video decoder like DenoisingStage compiles the DiT",
     ),
+    PatchDebt(
+        patch="stages/ltx_2/image_encoding",
+        module="sglang.multimodal_gen.runtime.pipelines_core.stages.image_encoding",
+        upstream_pattern="latent_dist = vae.encode(video_condition)",
+        upstream_fix="compile the video encoder like DenoisingStage compiles the DiT",
+    ),
+    PatchDebt(
+        patch="stages/ltx_2/duration",
+        module=f"{STAGES}.ltx_2.duration",
+        upstream_pattern="num_frames = duration_head.predict_num_frames(",
+        upstream_fix="compile the duration head through the platform backend",
+    ),
     pytest.param(
         PatchDebt(
             patch="torch_rbln/ops_utils",

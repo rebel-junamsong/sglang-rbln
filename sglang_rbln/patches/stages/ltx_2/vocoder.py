@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 COMPILED = "_rbln_vocoder_compiled"
 
 
-def _compile_on_one_device(module: nn.Module, what: str) -> None:
+def compile_on_one_device(module: nn.Module, what: str) -> None:
     """Compile `module` for one NPU: its own if placed, else the last TP one."""
     from sglang.multimodal_gen.runtime.utils.torch_compile import (
         build_torch_compile_kwargs,
@@ -45,7 +45,7 @@ def compile_vocoder(forward, stage, batch, server_args):
         and server_args.enable_torch_compile
         and not getattr(vocoder, COMPILED, False)
     ):
-        _compile_on_one_device(vocoder, "vocoder")
+        compile_on_one_device(vocoder, "vocoder")
     return forward(stage, batch, server_args)
 
 
@@ -140,7 +140,7 @@ def compile_audio(forward, stage, batch, server_args):
         chain = AudioChain(audio_vae, vocoder)
         if devices := placement.devices_of(vocoder):
             placement.place(chain, devices)
-        _compile_on_one_device(chain, "audio VAE decoder + vocoder")
+        compile_on_one_device(chain, "audio VAE decoder + vocoder")
         audio_vae.latents_mean = None
         audio_vae.latents_std = None
         audio_vae.decode = lambda latents, return_dict=True: (latents,)

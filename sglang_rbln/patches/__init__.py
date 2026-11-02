@@ -25,7 +25,7 @@ from sglang_rbln.patches.stages import (
     flux3_action_video,
     text_encoding,
 )
-from sglang_rbln.patches.stages.ltx_2 import decoding_av
+from sglang_rbln.patches.stages.ltx_2 import decoding_av, duration, image_encoding
 from sglang_rbln.patches.torch_rbln import ops_utils
 
 __all__ = ["register"]
@@ -52,6 +52,8 @@ def register() -> None:
     ltx_2.register()
     text_encoding.register()
     decoding_av.register()
+    image_encoding.register()
+    duration.register()
     gpu_worker.register()
     prompt_enhancement.register()
     ffmpeg_spawn.register()
