@@ -11,7 +11,7 @@ from sglang.multimodal_gen.runtime.models.adapter.ltx_2_duration_head import (
     LTX2DurationHead,
 )
 from sglang.multimodal_gen.runtime.models.vaes.ltx_2_vae import LTX2VideoEncoder3d
-from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry
+from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry, HookType
 from torch import nn
 
 from sglang_rbln.compilation import backend as compilation
@@ -61,18 +61,22 @@ def upsample_stage(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    ("module", "hook"),
+    ("module", "hook", "kind"),
     [
-        (image_encoding, image_encoding.compile_video_encoder),
-        (duration, duration.compile_duration_head),
-        (upsampling, upsampling.compile_upsampler),
+        (image_encoding, image_encoding.compile_video_encoder, HookType.AROUND),
+        (duration, duration.compile_duration_head, HookType.AROUND),
+        # the upsampler's one AROUND belongs to the detailing LoRA (ltx_2/detailing.py)
+        (upsampling, upsampling.compile_upsampler, HookType.BEFORE),
     ],
     ids=["encoder", "duration-head", "upsampler"],
 )
-def test_registers_around_the_stage(module, hook):
+def test_registers_on_the_stage(module, hook, kind):
     target = module.register()
     assert target == module.HOOK_TARGET
-    assert hook in [registered for _, registered, _ in HookRegistry._hooks[target]]
+    assert (kind, hook) in [
+        (registered_kind, registered)
+        for registered_kind, registered, _ in HookRegistry._hooks[target]
+    ]
 
 
 def test_compiles_only_the_encoder_once(encode_stage, compiled):
@@ -149,11 +153,11 @@ def test_compiles_the_upsampler_once_on_one_device(
     monkeypatch.setenv("SGLANG_RBLN_NUM_DEVICES", "4")
     if placed:
         placement.place(upsample_stage.spatial_upsampler, placed)
+    # a BEFORE hook: it compiles and leaves the arguments alone
     outputs = [
-        upsampling.compile_upsampler(forward, upsample_stage, None, COMPILE)
-        for _ in range(2)
+        upsampling.compile_upsampler(upsample_stage, None, COMPILE) for _ in range(2)
     ]
-    assert outputs == ["output", "output"]
+    assert outputs == [None, None]
     assert [module for module, _ in compiled] == [upsample_stage.spatial_upsampler]
     options = compiled[0][1]["options"]
     assert (options["num_devices"], options["device"]) == (1, device)
@@ -168,7 +172,7 @@ def test_leaves_the_upsampler_eager(
     upsample_stage, compiled, monkeypatch, requested, server_args
 ):
     monkeypatch.setenv("SGLANG_RBLN_UPSAMPLER_ON_NPU", requested)
-    upsampling.compile_upsampler(forward, upsample_stage, None, server_args)
+    upsampling.compile_upsampler(upsample_stage, None, server_args)
     assert compiled == []
 
 
