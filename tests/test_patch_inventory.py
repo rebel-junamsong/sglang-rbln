@@ -91,6 +91,12 @@ PATCH_DEBTS = [
         upstream_fix="return the connector rotary cos/sin tables contiguous",
     ),
     PatchDebt(
+        patch="models/ltx_2_vae_assembly",
+        module="sglang.multimodal_gen.runtime.models.vaes.ltx_2_vae",
+        upstream_pattern="            result_rows.append(torch.cat(result_row, dim=4))",
+        upstream_fix="join the decoded tiles on the device that decoded them",
+    ),
+    PatchDebt(
         patch="stages/ltx_2/vocoder",
         module=f"{STAGES}.ltx_2.decoding_av",
         upstream_pattern="                    waveform = self.vocoder(spectrogram)",

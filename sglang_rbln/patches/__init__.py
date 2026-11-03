@@ -16,6 +16,7 @@ from sglang_rbln.patches.models import (
     flux3_video_vae,
     ltx_2,
     ltx_2_tile_ranks,
+    ltx_2_vae_assembly,
     wanvae,
 )
 from sglang_rbln.patches.srt.layers.quantization import fp4_utils
@@ -73,3 +74,4 @@ def register() -> None:
         ops_utils.register()
     if device.resident_regions():
         residency.register()
+        ltx_2_vae_assembly.register()
