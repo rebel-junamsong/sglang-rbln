@@ -79,3 +79,35 @@ def test_readme_documents_every_plugin_variable():
     assert sorted(documented) == sorted(
         name for name in envs.environment_variables if name.startswith("SGLANG_RBLN_")
     )
+
+
+def _declared_bool_defaults() -> dict[str, bool]:
+    """The `TYPE_CHECKING` block's bool defaults, read from the source.
+
+    They are annotations, so they do not exist at runtime: the value a caller
+    actually gets comes from `environment_variables`. The two are written
+    separately, and only the second one is read.
+    """
+    import ast
+
+    source = Path(envs.__file__).read_text()
+    block = next(
+        node
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.If) and ast.unparse(node.test) == "TYPE_CHECKING"
+    )
+    return {
+        node.target.id: node.value.value
+        for node in block.body
+        if isinstance(node, ast.AnnAssign)
+        and isinstance(node.value, ast.Constant)
+        and isinstance(node.value.value, bool)
+    }
+
+
+@pytest.mark.parametrize(
+    ("name", "declared"), sorted(_declared_bool_defaults().items())
+)
+def test_the_declared_default_is_the_one_a_caller_gets(monkeypatch, name, declared):
+    monkeypatch.delenv(name, raising=False)
+    assert getattr(envs, name) is declared

@@ -220,6 +220,25 @@ def _does_not_fit(error: BaseException | None) -> bool:
     return False
 
 
+def run_on_cpu_if_it_does_not_fit(call: Callable, module: nn.Module, what: str) -> Any:
+    """Run `call`; if `module` does not fit its NPUs, run it eager instead.
+
+    A module compiled by default has to degrade, not fail: the request still
+    has to be served. `nn.Module.compile` only installs a compiled call, so
+    dropping it leaves the eager module the caller already holds.
+    """
+    try:
+        return call()
+    except Exception as error:
+        if not _does_not_fit(error):
+            raise
+        module._compiled_call_impl = None
+        logger.warning(
+            "The LTX-2 %s does not fit its NPUs (%s); it stays on the CPU", what, error
+        )
+        return call()
+
+
 class Region:
     def __init__(
         self,

@@ -73,6 +73,11 @@ def spare_devices(module: nn.Module) -> tuple[int, ...] | None:
     return spare
 
 
+def text_encoder_devices() -> tuple[int, ...] | None:
+    """Where the text encoder runs: its explicit placement, else the spare set."""
+    return envs.SGLANG_RBLN_COMPONENT_DEVICES.get("text_encoder") or spare_set()
+
+
 def place_component(load_component, component_name: str, *args, **kwargs):
     module, memory_usage = load_component(component_name, *args, **kwargs)
     if not isinstance(module, nn.Module):
