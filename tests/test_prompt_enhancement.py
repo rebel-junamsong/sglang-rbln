@@ -67,6 +67,108 @@ def test_kv_shared_layers_get_no_cache_of_their_own(tiny_enhancer):
     assert {layer.max_cache_len for layer in cache.layers} == {256}
 
 
+def test_the_whole_cache_is_allocated_outside_any_graph(tiny_enhancer):
+    # the graphs take the cache as an input they write back, not as something the
+    # prefill graph creates
+    cache = prompt_enhancement.window_cache(tiny_enhancer, window=256)
+    assert all(layer.is_initialized for layer in cache.layers)
+    assert {tuple(layer.keys.shape) for layer in cache.layers} == {(1, 1, 256, 32)}
+    assert {layer.keys.dtype for layer in cache.layers} == {torch.float32}
+
+
+@pytest.fixture
+def on_device(monkeypatch):
+    """Judge the host tensors of a test the way the plugin judges device tensors."""
+    monkeypatch.setattr(prompt_enhancement, "on_device", lambda tensor: True)
+
+
+def rows(layer, count: int) -> None:
+    for step in range(count):
+        row = torch.full((1, 1, 1, 4), float(step + 1))
+        layer.update(row, row * 10)
+
+
+def test_a_single_row_write_lands_where_index_copy_puts_it(on_device):
+    masked = prompt_enhancement.MaskedWriteLayer(max_cache_len=8)
+    plain = prompt_enhancement.StaticLayer(max_cache_len=8)
+
+    rows(masked, 3)
+    with pytest.MonkeyPatch.context() as off:  # the plain layer keeps index_copy_
+        off.setattr(prompt_enhancement, "on_device", lambda tensor: False)
+        rows(plain, 3)
+
+    torch.testing.assert_close(masked.keys, plain.keys, rtol=0, atol=0)
+    torch.testing.assert_close(masked.values, plain.values, rtol=0, atol=0)
+    assert int(masked.cumulative_length) == int(plain.cumulative_length) == 3
+
+
+def test_a_single_row_write_uses_no_index_copy(on_device, monkeypatch):
+    layer = prompt_enhancement.MaskedWriteLayer(max_cache_len=8)
+    rows(layer, 1)  # allocate before the ban, where lazy_initialization may index
+    monkeypatch.setattr(
+        torch.Tensor,
+        "index_copy_",
+        lambda *args, **kwargs: pytest.fail("the decode step wrote with index_copy_"),
+    )
+
+    rows(layer, 1)
+
+    assert layer.keys[0, 0, 1, 0] == 1  # the second row holds the second write
+
+
+def test_a_prefill_keeps_the_index_copy_path(on_device, monkeypatch):
+    layer = prompt_enhancement.MaskedWriteLayer(max_cache_len=8)
+    block = torch.ones((1, 1, 4, 4))
+    layer.update(block, block)  # allocate before the ban
+    monkeypatch.setattr(
+        torch,
+        "where",
+        lambda *args, **kwargs: pytest.fail("a multi-row write took the masked path"),
+    )
+
+    layer.update(block * 2, block * 2)
+
+    assert int(layer.cumulative_length) == 8
+
+
+def test_the_whole_graph_hands_the_model_an_integer_mask():
+    seen = {}
+
+    class Decoder(torch.nn.Module):
+        def forward(self, input_ids, attention_mask, **kwargs):
+            seen["dtype"] = attention_mask.dtype
+            return attention_mask.sum()
+
+    step = prompt_enhancement.WholeGraph(Decoder())
+    mask = torch.ones((1, 4), dtype=prompt_enhancement.WholeGraph.MASK_DTYPE)
+
+    assert (
+        step(input_ids=torch.zeros((1, 4), dtype=torch.long), attention_mask=mask) == 4
+    )
+    assert seen["dtype"] == torch.long
+    assert prompt_enhancement.mask_dtype(step) is torch.bfloat16
+    assert prompt_enhancement.mask_dtype(Decoder()) is torch.long
+
+
+def test_whole_graph_decode_matches_generate(tiny_enhancer):
+    # the boundary mask is bf16, so the step must cast it back before the model reads it
+    input_ids = torch.randint(
+        1, 500, (1, 20), generator=torch.Generator().manual_seed(1)
+    )
+    expected = tiny_enhancer.generate(input_ids, do_sample=False, max_new_tokens=16)[
+        0, 20:
+    ].tolist()
+
+    tokens = prompt_enhancement.greedy_decode(
+        tiny_enhancer,
+        input_ids,
+        max_new_tokens=16,
+        step=prompt_enhancement.WholeGraph(tiny_enhancer.get_decoder()),
+    )
+
+    assert tokens == expected
+
+
 @pytest.fixture
 def served(monkeypatch, tmp_path):
     """A server whose model directory ships a prompt_enhancer/ component."""

@@ -34,6 +34,7 @@ if TYPE_CHECKING:
     SGLANG_RBLN_PROMPT_ENHANCER_USER_TEMPLATE: str | None = None
     SGLANG_RBLN_PROMPT_ENHANCER_MAX_NEW_TOKENS: int = 512
     SGLANG_RBLN_PROMPT_ENHANCER_NO_REPEAT_NGRAM: int = 0
+    SGLANG_RBLN_PROMPT_ENHANCER_WHOLE_GRAPH: bool = False
 
 
 def _flag(name: str, default: bool = False) -> Callable[[], bool]:
@@ -101,6 +102,9 @@ environment_variables: dict[str, Callable[[], Any]] = {
     ),
     "SGLANG_RBLN_PROMPT_ENHANCER_NO_REPEAT_NGRAM": _int(
         "SGLANG_RBLN_PROMPT_ENHANCER_NO_REPEAT_NGRAM", 0
+    ),
+    "SGLANG_RBLN_PROMPT_ENHANCER_WHOLE_GRAPH": _flag(
+        "SGLANG_RBLN_PROMPT_ENHANCER_WHOLE_GRAPH"
     ),
 }
 

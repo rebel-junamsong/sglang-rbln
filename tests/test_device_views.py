@@ -121,7 +121,7 @@ def test_a_changed_view_is_refused_not_misread():
 
 def test_backend_hands_the_compiled_program_the_base(monkeypatch):
     torch._dynamo.reset()
-    monkeypatch.setattr(backend, "_on_device", lambda value: True)
+    monkeypatch.setattr(backend, "on_device", lambda value: True)
     calls = []
 
     def program_backend(graph_module, example_inputs):

@@ -265,7 +265,7 @@ def contiguous_device_inputs(args):
     ]
 
 
-def _on_device(value: torch.Tensor) -> bool:
+def on_device(value: torch.Tensor) -> bool:
     return value.device.type == "rbln"
 
 
@@ -301,7 +301,7 @@ def _instrumented_backend(backend):
             )
         # A sliced device view reaches the graph as its base, sliced inside it,
         # instead of as an eager contiguous copy (see device_views).
-        rebased = device_views.rebase_strided_views(graph, example_inputs, _on_device)
+        rebased = device_views.rebase_strided_views(graph, example_inputs, on_device)
         if rebased is not None:
             logger.info(
                 "rbln graph takes %d sliced device views as their bases: %s",
@@ -313,7 +313,7 @@ def _instrumented_backend(backend):
             graph, contiguous_device_inputs(example_inputs), *args, **kwargs
         )
         if any(
-            isinstance(value, torch.Tensor) and _on_device(value)
+            isinstance(value, torch.Tensor) and on_device(value)
             for value in example_inputs
         ):
             compiled = _contiguous_callable(compiled, rebased)
