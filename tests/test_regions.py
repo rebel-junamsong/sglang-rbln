@@ -584,6 +584,9 @@ def test_a_region_runs_on_the_npus_of_its_blocks():
     assert [placement.devices_of(region.group) for region in groups] == [
         (4, 5, 6, 7)
     ] * 2
-    assert placement.devices_of(regions.Region(
-        [Block(8)], {"backend": "eager", "dynamic": False}
-    ).group) is None
+    assert (
+        placement.devices_of(
+            regions.Region([Block(8)], {"backend": "eager", "dynamic": False}).group
+        )
+        is None
+    )
