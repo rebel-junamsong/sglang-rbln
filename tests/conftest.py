@@ -8,6 +8,7 @@ import sys
 from collections.abc import Callable
 
 import pytest
+import torch
 from sglang.multimodal_gen.runtime import platforms
 
 from sglang_rbln import device, envs
@@ -18,6 +19,93 @@ from sglang_rbln.patches.srt.layers.quantization import fp4_utils
 def pytest_configure(config: pytest.Config) -> None:
     video_sparse_attn.register()
     fp4_utils.register()
+
+
+RBLN_DEVICE = "rbln"
+
+
+def _names_the_device(value) -> bool:
+    if isinstance(value, torch.device):
+        return value.type == RBLN_DEVICE
+    return isinstance(value, str) and value.split(":")[0] == RBLN_DEVICE
+
+
+def on_a_dummy_device() -> bool:
+    """True when the process cannot reach real hardware whatever it names."""
+    return os.environ.get("RBLN_DUMMY_DEVICE", "").strip() not in ("", "0")
+
+
+class ForbidDevice(torch.overrides.TorchFunctionMode):
+    """Raise on any torch call that names the RBLN device.
+
+    Checking the call rather than the process is what makes this per-test: one rbln
+    tensor opens every device node and leaves them open, so anything that reads
+    /proc/self/fd blames whichever test happens to run next and a single offender
+    poisons the rest of the run.
+    """
+
+    MOVES = frozenset({"to", "to_empty", "_to_copy", "new_empty", "new_zeros"})
+
+    def __torch_function__(self, func, types, args=(), kwargs=None):
+        kwargs = kwargs or {}
+        # a device argument only: "rbln" also names the compile backend, which is a
+        # host-side choice and not a tensor reaching the hardware
+        candidates = [kwargs.get("device")]
+        if getattr(func, "__name__", "") in self.MOVES:
+            candidates += list(args[1:])
+        named = [value for value in candidates if _names_the_device(value)]
+        if named:
+            raise AssertionError(
+                f"{getattr(func, '__name__', func)} names the {named[0]} device in a "
+                "test without @pytest.mark.npu. Mark it, or keep its tensors on the "
+                "host: the gate runs -m 'not npu' on a host whose NPUs belong to "
+                "other sessions, and RBLN_VISIBLE_DEVICES= does not stop a tensor "
+                "reaching one."
+            )
+        return func(*args, **kwargs)
+
+
+RBLN_NODE = "/dev/rbln"
+
+
+def open_device_nodes() -> set[str]:
+    """The RBLN device nodes this process has open."""
+    nodes = set()
+    for descriptor in os.listdir("/proc/self/fd"):
+        try:
+            target = os.readlink(f"/proc/self/fd/{descriptor}")
+        except OSError:  # the descriptor closed while we looked
+            continue
+        if target.startswith(RBLN_NODE):
+            nodes.add(target)
+    return nodes
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_call(item: pytest.Item):
+    """Hold every test that is not marked `npu` to the host.
+
+    Two ways to reach the device, so two checks. A tensor placed on it is a torch call
+    naming it, which `ForbidDevice` refuses as it happens. A compiled graph run through
+    the rbln backend reaches it without any such call, and shows up as the process
+    opening the device nodes -- which only the test that opens them first can be blamed
+    for, since they stay open for the rest of the process. So this names one opener per
+    run: mark it, run again, and the next one surfaces.
+    """
+    if item.get_closest_marker("npu") or on_a_dummy_device():
+        yield
+        return
+    before = open_device_nodes()
+    with ForbidDevice():
+        outcome = yield
+    opened = open_device_nodes() - before
+    if opened and outcome.excinfo is None:
+        pytest.fail(
+            f"opened {len(opened)} RBLN device node(s) "
+            f"({', '.join(sorted(opened)[:3])}, ...) without @pytest.mark.npu: its "
+            "compiled graphs ran on the device. Mark it, or keep the run on the host.",
+            pytrace=False,
+        )
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:

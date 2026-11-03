@@ -11,6 +11,11 @@ from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry
 
 from sglang_rbln.patches.models import ltx_2_tile_ranks as tile_ranks
 
+# These need a device to name, not the hardware: placement and graph structure
+# only. A dummy device refuses to execute a compiled graph and its eager outputs
+# are garbage, so nothing here may assert on values from one.
+pytestmark = pytest.mark.usefixtures("dummy_device")
+
 MODEL = ltx_2_5_diffusion_decoder.LTX2VideoDiffusionDecoderModel
 DECODER = ltx_2_5_diffusion_decoder.LTX2VideoDiffusionDecoder3d
 

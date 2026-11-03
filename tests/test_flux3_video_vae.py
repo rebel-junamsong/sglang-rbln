@@ -40,6 +40,7 @@ def test_registers_the_attention_and_the_compile_hooks(compile_vae):
     assert flux3_video_vae.compile_coders in hooks[flux3_video_vae.LOAD_TARGET]
 
 
+@pytest.mark.npu  # FLUX 3 is out of scope here; marked, not converted
 @pytest.mark.parametrize(("causal", "max_t"), [(False, 4), (True, 3), (False, None)])
 def test_a_looped_block_traces_as_one_graph(monkeypatch, causal, max_t):
     from sglang.multimodal_gen.runtime.models.vaes import flux3_video_vae as upstream
@@ -140,6 +141,7 @@ def test_keeps_the_float32_decoder_without_compile(monkeypatch, compiled):
     ],
     ids=str,
 )
+@pytest.mark.npu  # FLUX 3 is out of scope here; marked, not converted
 def test_a_coder_traces_as_one_graph(monkeypatch, coder, shape):
     module = getattr(_upstream_vae(monkeypatch).model, coder)
     x = torch.randn(shape)

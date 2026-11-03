@@ -11,6 +11,11 @@ from sglang_rbln import device
 from sglang_rbln.compilation import placement, residency
 from sglang_rbln.compilation.backend import COMPILE_BACKEND_NAME
 
+# These need a device to name, not the hardware: placement and graph structure
+# only. A dummy device refuses to execute a compiled graph and its eager outputs
+# are garbage, so nothing here may assert on values from one.
+pytestmark = pytest.mark.usefixtures("dummy_device")
+
 
 @pytest.mark.parametrize(
     ("mode", "num_devices", "expected"),
@@ -190,6 +195,7 @@ def test_a_host_value_moves_once_per_version(monkeypatch):
     assert len(moves) == 2
 
 
+@pytest.mark.npu  # it runs an eager copy between NPU sets, which a dummy device refuses
 @pytest.mark.device_mode
 def test_a_value_crosses_npu_sets_on_the_device():
     if torch.rbln.device_count() < 2:

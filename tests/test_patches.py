@@ -236,6 +236,7 @@ class TestCosmos3TimestepEmbedderHook:
         assert torch.equal(out, embedder(t))
         assert not hasattr(embedder, cosmos3video.HOST_STATE)
 
+    @pytest.mark.npu  # it runs device weights, which a dummy device refuses
     @pytest.mark.device_mode
     def test_device_weights_embed_in_float32_on_the_host(self):
         embedder, t = _TimestepEmbedder(), torch.tensor([0.5, 0.25])
@@ -342,6 +343,7 @@ class TestRunOnHost:
         assert not cosmos3video.run_on_host(norm)
         assert "forward" not in vars(norm)
 
+    @pytest.mark.npu  # it runs device weights, which a dummy device refuses
     @pytest.mark.device_mode
     def test_device_weights_run_in_float32_on_the_host(self):
         norm, hidden = self.norm(), torch.randn(2, 3, 8)
@@ -353,6 +355,7 @@ class TestRunOnHost:
         assert torch.equal(out.cpu(), expected)
         assert next(norm.parameters()).device.type == "rbln"
 
+    @pytest.mark.npu  # it runs device weights, which a dummy device refuses
     @pytest.mark.device_mode
     def test_nested_outputs_return_to_the_device(self):
         layers = nn.ModuleList([nn.Linear(8, 8), nn.Linear(8, 8)])

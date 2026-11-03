@@ -167,7 +167,15 @@ class TestVaeDecodePlacement:
     @pytest.mark.parametrize(
         "traceable", [False, True], ids=["contextvar", "traceable"]
     )
-    @pytest.mark.parametrize("shape", [(3, 4, 6), (2, 5, 7), (1, 3, 9)], ids=str)
+    @pytest.mark.parametrize(
+        "shape",
+        [
+            (3, 4, 6),
+            pytest.param((2, 5, 7), marks=pytest.mark.npu),
+            pytest.param((1, 3, 9), marks=pytest.mark.npu),
+        ],
+        ids=str,
+    )
     def test_flag_compiles_the_vae_regions_for_host_latents(
         self, monkeypatch, tiny_wan_vae, eager_compile_kwargs, shape, traceable
     ):
@@ -193,6 +201,7 @@ class TestVaeDecodePlacement:
             ]
         assert all(torch.equal(out, expected) for out in outputs)
 
+    @pytest.mark.npu  # it decodes device latents, so it holds a device
     @pytest.mark.device_mode
     def test_device_latents_decode_on_the_cpu_and_return_to_the_device(self, stage):
         stage.vae.to("rbln:0")
@@ -217,6 +226,7 @@ class TestVaeEncodePlacement:
             for _, hook, _ in HookRegistry._hooks[cosmos3.ENCODE_HOOK_TARGET]
         )
 
+    @pytest.mark.npu  # every shape's encode regions reach the device
     @pytest.mark.parametrize(
         "shape", [(1, 32, 48), (5, 32, 48), (9, 48, 32), (13, 16, 80)], ids=str
     )
@@ -242,6 +252,7 @@ class TestVaeEncodePlacement:
             assert torch.equal(out, self.encode(stage, video))
         assert not getattr(tiny_wan_codec, "_rbln_regions_compiled", False)
 
+    @pytest.mark.npu  # it encodes a device video, so it holds a device
     @pytest.mark.device_mode
     def test_device_video_encodes_on_the_cpu_and_returns_to_the_device(
         self, tiny_wan_codec

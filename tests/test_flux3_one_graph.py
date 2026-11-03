@@ -142,6 +142,7 @@ def assert_same(actual, expected):
         torch.testing.assert_close(a, e, atol=0, rtol=0)
 
 
+@pytest.mark.npu  # the backport's stages place their tensors on the device
 @pytest.mark.parametrize(
     "config",
     [

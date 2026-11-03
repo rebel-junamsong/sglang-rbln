@@ -9,6 +9,11 @@ from sglang.multimodal_gen.runtime.models.vaes import flux3_neighborhood_attenti
 
 from sglang_rbln.layers.attention import neighborhood
 
+# These need a device to name, not the hardware: placement and graph structure
+# only. A dummy device refuses to execute a compiled graph and its eager outputs
+# are garbage, so nothing here may assert on values from one.
+pytestmark = pytest.mark.usefixtures("dummy_device")
+
 
 @pytest.fixture(scope="module")
 def flex_reference():
