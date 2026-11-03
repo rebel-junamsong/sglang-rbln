@@ -37,6 +37,14 @@ is never used on RBLN.
 Install `sglang-rbln[device]` instead to add `torch-rbln` (built for
 `torch==2.13.0`) for `device` execution mode.
 
+To reproduce a published result, build the environment from the committed
+`uv.lock`. It pins the exact `rebel-compiler` and `torch-rbln` builds the result
+was measured with (the RBLN index needs credentials in `~/.netrc`):
+
+```bash
+uv sync --frozen --extra device
+```
+
 The plugin activates itself when an NPU is present, or when
 `RBLN_FORCE_NPU_NAME` names the target NPU (for example `RBLN-CA25`) on a host
 without one. Set `SGLANG_DIFFUSION_PLATFORM_OVERRIDE=rbln` when several platform

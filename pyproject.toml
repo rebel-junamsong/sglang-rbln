@@ -22,7 +22,7 @@ classifiers = [
 ]
 dependencies = [
     "sglang[diffusion]==0.5.21",
-    "rebel-compiler==0.12.0",
+    "rebel-compiler>=0.12.0",
 ]
 
 [project.urls]
@@ -39,6 +39,45 @@ rbln = "sglang_rbln:activate"
 
 [project.entry-points."sglang.multimodal_gen.plugins"]
 rbln_patches = "sglang_rbln.patches:register"
+
+# The committed uv.lock is the environment every functionality and perf result in
+# the PR was measured on. Bump these pins together with the result they produced.
+[tool.uv]
+constraint-dependencies = [
+    "rebel-compiler==0.12.1.dev618+g6d7e2bcb",
+    "torch-rbln==0.12.1.dev34+ga2ba49aaf",
+    "torch==2.13.0+cpu",
+    "torchvision==0.28.0+cpu",
+    "torchaudio==2.11.0+cpu",
+    "diffusers==0.37.0",
+    "transformers==5.12.1",
+    "torchcodec==0.15.0+cpu",
+    "numpy==2.3.5",
+    "scipy==1.17.1",
+    "datasets==5.1.0",
+]
+# sglang 0.5.21 pins flashinfer-python==0.6.18, which asserts a CUDA device at
+# import; 0.7.1 does not. flashinfer is never used on RBLN.
+override-dependencies = ["flashinfer-python==0.7.1"]
+environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
+
+[[tool.uv.index]]
+name = "rebellions"
+url = "https://pypi.rebellions.in/simple"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+rebel-compiler = { index = "rebellions" }
+torch-rbln = { index = "rebellions" }
+torch = { index = "pytorch-cpu" }
+torchvision = { index = "pytorch-cpu" }
+torchaudio = { index = "pytorch-cpu" }
+torchcodec = { index = "pytorch-cpu" }
 
 [tool.setuptools.packages.find]
 include = ["sglang_rbln*"]
