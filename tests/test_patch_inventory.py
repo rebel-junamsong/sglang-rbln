@@ -316,6 +316,12 @@ PATCH_DEBTS = [
         upstream_pattern="num_frames = duration_head.predict_num_frames(",
         upstream_fix="compile the duration head through the platform backend",
     ),
+    PatchDebt(
+        patch="stages/ltx_2/upsampling",
+        module=f"{STAGES}.ltx_2.upsampling",
+        upstream_pattern="latents = spatial_upsampler(latents)",
+        upstream_fix="compile the latent upsampler through the platform backend",
+    ),
     pytest.param(
         PatchDebt(
             patch="torch_rbln/ops_utils",

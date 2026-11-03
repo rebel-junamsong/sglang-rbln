@@ -16,7 +16,7 @@ from torch import nn
 
 from sglang_rbln.compilation import backend as compilation
 from sglang_rbln.compilation import placement
-from sglang_rbln.patches.stages.ltx_2 import duration, image_encoding
+from sglang_rbln.patches.stages.ltx_2 import duration, image_encoding, upsampling
 
 pytestmark = pytest.mark.usefixtures("rbln_platform")
 
@@ -53,13 +53,20 @@ def duration_stage(monkeypatch):
 AUTO = SimpleNamespace(auto_duration=True)
 
 
+@pytest.fixture
+def upsample_stage(monkeypatch):
+    monkeypatch.setenv("SGLANG_RBLN_UPSAMPLER_ON_NPU", "1")
+    return SimpleNamespace(spatial_upsampler=nn.Conv3d(4, 4, 3))
+
+
 @pytest.mark.parametrize(
     ("module", "hook"),
     [
         (image_encoding, image_encoding.compile_video_encoder),
         (duration, duration.compile_duration_head),
+        (upsampling, upsampling.compile_upsampler),
     ],
-    ids=["encoder", "duration-head"],
+    ids=["encoder", "duration-head", "upsampler"],
 )
 def test_registers_around_the_stage(module, hook):
     target = module.register()
@@ -127,6 +134,38 @@ def test_leaves_the_duration_head_eager(
 ):
     monkeypatch.setenv("SGLANG_RBLN_DURATION_HEAD_ON_NPU", requested)
     duration.compile_duration_head(forward, duration_stage, batch, server_args)
+    assert compiled == []
+
+
+@pytest.mark.parametrize(
+    ("placed", "device"), [(None, 3), ((0, 1, 2, 3), 3)], ids=["tp-last", "placed"]
+)
+def test_compiles_the_upsampler_once_on_one_device(
+    upsample_stage, compiled, monkeypatch, placed, device
+):
+    monkeypatch.setenv("SGLANG_RBLN_NUM_DEVICES", "4")
+    if placed:
+        placement.place(upsample_stage.spatial_upsampler, placed)
+    outputs = [
+        upsampling.compile_upsampler(forward, upsample_stage, None, COMPILE)
+        for _ in range(2)
+    ]
+    assert outputs == ["output", "output"]
+    assert [module for module, _ in compiled] == [upsample_stage.spatial_upsampler]
+    options = compiled[0][1]["options"]
+    assert (options["num_devices"], options["device"]) == (1, device)
+
+
+@pytest.mark.parametrize(
+    ("requested", "server_args"),
+    [("", COMPILE), ("1", SimpleNamespace(enable_torch_compile=False))],
+    ids=["not-requested", "compile-disabled"],
+)
+def test_leaves_the_upsampler_eager(
+    upsample_stage, compiled, monkeypatch, requested, server_args
+):
+    monkeypatch.setenv("SGLANG_RBLN_UPSAMPLER_ON_NPU", requested)
+    upsampling.compile_upsampler(forward, upsample_stage, None, server_args)
     assert compiled == []
 
 
