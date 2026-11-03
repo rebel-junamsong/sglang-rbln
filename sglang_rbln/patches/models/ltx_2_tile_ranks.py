@@ -14,6 +14,7 @@ and run once; every rank reads their result.
 from __future__ import annotations
 
 import concurrent.futures
+import contextvars
 import threading
 from collections.abc import Callable, Sequence
 from typing import Any
@@ -115,7 +116,13 @@ def tiled_decode_over_ranks(tiled_decode, model, hidden_states, *args, **kwargs)
             _current.rank = None
 
     with concurrent.futures.ThreadPoolExecutor(len(devices)) as pool:
-        futures = [pool.submit(rank_call, rank) for rank in range(len(devices))]
+        # Dynamo's config overrides (the lifted recompile limit, static shapes)
+        # are context variables, which a pool thread does not inherit: without
+        # the caller's, a rank falls back to eager at the default limit.
+        futures = [
+            pool.submit(contextvars.copy_context().run, rank_call, rank)
+            for rank in range(len(devices))
+        ]
         outputs = [future.result() for future in futures]
     output, rank_generator = outputs[0]
     # Every rank walked the same draws, as a single rank would have.

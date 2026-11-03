@@ -129,6 +129,24 @@ def test_tiles_spread_over_ranks_match_one_rank(model, world_size):
     assert stage_calls == [0]
 
 
+@pytest.mark.usefixtures("ranked")
+def test_ranks_compile_under_the_callers_dynamo_config(model):
+    seen = []
+    for name in ("forward_stage_4", "forward_diffusion_step"):
+        phase = getattr(model.decoder, name)
+
+        def run(*args, _phase=phase, **kwargs):
+            seen.append(torch._dynamo.config.recompile_limit)
+            return _phase(*args, **kwargs)
+
+        setattr(model.decoder, name, run)
+    setattr(model, tile_ranks.TILE_DEVICES, (0, 1))
+    with torch._dynamo.config.patch(recompile_limit=1234), torch.no_grad():
+        model(torch.randn(1, 128, 2, 4, 6), generator=torch.Generator())
+    assert seen
+    assert set(seen) == {1234}
+
+
 def test_registers_around_the_upstream_tiling():
     targets = tile_ranks.register()
     for target, hook in zip(
