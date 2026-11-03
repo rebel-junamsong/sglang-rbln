@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import logging
-
 import torch
 import torch.nn.functional as F
 from torch import nn
@@ -11,30 +9,7 @@ from torch._subclasses.fake_tensor import FakeTensorMode
 
 from sglang_rbln import envs
 from sglang_rbln.compilation import placement
-from sglang_rbln.compilation.backend import on_one_device
-
-logger = logging.getLogger(__name__)
-
-COMPILED = "_rbln_vocoder_compiled"
-
-
-def compile_on_one_device(module: nn.Module, what: str) -> None:
-    """Compile `module` for one NPU: its own if placed, else the last TP one."""
-    from sglang.multimodal_gen.runtime.utils.torch_compile import (
-        build_torch_compile_kwargs,
-    )
-
-    compile_kwargs = build_torch_compile_kwargs(mode=None, module=module)
-    compile_kwargs["dynamic"] = False
-    options = compile_kwargs["options"]
-    if devices := placement.devices_of(module):
-        if len(devices) > 1:
-            compile_kwargs["options"] = on_one_device(options, devices[-1], module)
-    elif num_devices := options.get("num_devices"):
-        compile_kwargs["options"] = on_one_device(options, num_devices - 1, module)
-    module.compile(**compile_kwargs)
-    setattr(module, COMPILED, True)
-    logger.info("Compiling the LTX-2 %s: %s", what, compile_kwargs)
+from sglang_rbln.compilation.backend import COMPILED, compile_on_one_device
 
 
 def compile_vocoder(forward, stage, batch, server_args):

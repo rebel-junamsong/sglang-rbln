@@ -94,6 +94,23 @@ def static_compile_kwargs(module: torch.nn.Module) -> dict[str, Any]:
     return compile_kwargs
 
 
+COMPILED = "_rbln_compiled_on_one_device"
+
+
+def compile_on_one_device(module: torch.nn.Module, what: str) -> None:
+    """Compile `module` for one NPU: its own if placed, else the last TP one."""
+    compile_kwargs = static_compile_kwargs(module)
+    options = compile_kwargs["options"]
+    if devices := placement.devices_of(module):
+        if len(devices) > 1:
+            compile_kwargs["options"] = on_one_device(options, devices[-1], module)
+    elif num_devices := options.get("num_devices"):
+        compile_kwargs["options"] = on_one_device(options, num_devices - 1, module)
+    module.compile(**compile_kwargs)
+    setattr(module, COMPILED, True)
+    logger.info("Compiling the LTX-2 %s: %s", what, compile_kwargs)
+
+
 def single_device_compile_kwargs(module: torch.nn.Module) -> dict[str, Any]:
     compile_kwargs = static_compile_kwargs(module)
     options = compile_kwargs["options"]

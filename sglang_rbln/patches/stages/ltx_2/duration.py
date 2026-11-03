@@ -6,8 +6,8 @@ from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry, HookTy
 
 from sglang_rbln import envs
 from sglang_rbln.compilation import placement
+from sglang_rbln.compilation.backend import COMPILED, compile_on_one_device
 from sglang_rbln.compilation.regions import run_on_cpu_if_it_does_not_fit
-from sglang_rbln.patches.stages.ltx_2.vocoder import COMPILED, compile_on_one_device
 
 HOOK_TARGET = (
     "sglang.multimodal_gen.runtime.pipelines_core.stages.model_specific_stages"

@@ -5,7 +5,7 @@ from __future__ import annotations
 from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry, HookType
 
 from sglang_rbln import envs
-from sglang_rbln.patches.stages.ltx_2.vocoder import COMPILED, compile_on_one_device
+from sglang_rbln.compilation.backend import COMPILED, compile_on_one_device
 
 HOOK_TARGET = (
     "sglang.multimodal_gen.runtime.pipelines_core.stages.model_specific_stages"
