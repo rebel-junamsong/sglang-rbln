@@ -195,6 +195,30 @@ def test_a_host_value_moves_once_per_version(monkeypatch):
     assert len(moves) == 2
 
 
+def test_a_resident_transfer_takes_an_inference_tensor(dummy_device):
+    # a compiled call under @torch.inference_mode() -- the prompt enhancer's decode --
+    # hands _Transfers a tensor with no version counter
+    with torch.inference_mode():
+        value = torch.zeros(4)
+    residency._transfers.to(value, torch.device("rbln"))
+
+
+def test_an_inference_tensor_moves_on_every_call(monkeypatch):
+    # it has no version counter, so a cached copy could not tell it was updated in place
+    moves = []
+    to = torch.Tensor.to
+    monkeypatch.setattr(
+        torch.Tensor, "to", lambda self, *args: moves.append(args) or to(self, *args)
+    )
+    transfers, meta = residency._Transfers(), torch.device("meta")
+    with torch.inference_mode():
+        value = torch.ones(2)
+        transfers.to(value, meta)
+        value.add_(1)
+        transfers.to(value, meta)
+    assert len(moves) == 2
+
+
 @pytest.mark.npu  # it runs an eager copy between NPU sets, which a dummy device refuses
 @pytest.mark.device_mode
 def test_a_value_crosses_npu_sets_on_the_device():

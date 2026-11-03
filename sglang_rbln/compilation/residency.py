@@ -170,15 +170,19 @@ class _Transfers:
             return value
         if value.device.type not in ("cpu", "rbln"):
             return value
+        if value.device.type == "rbln":
+            config = layout_to_keep(value, device, read_as)
+            move = functools.partial(copy_across_devices, value, device, config)
+        else:
+            move = functools.partial(value.to, device)
+        # An inference tensor has no version counter to tell an in-place update by.
+        if value.is_inference():
+            return move()
         moved = self.moved.setdefault(device, WeakIdKeyDictionary())
         cached = moved.get(value)
         if cached is not None and cached[0] == value._version:
             return cached[1]
-        if value.device.type == "rbln":
-            config = layout_to_keep(value, device, read_as)
-            resident = copy_across_devices(value, device, config)
-        else:
-            resident = value.to(device)
+        resident = move()
         moved[value] = (value._version, resident)
         return resident
 
