@@ -103,6 +103,37 @@ def test_temporal_join_matches_upstream_bit_for_bit(dtype, frames):
     assert torch.equal(actual, expected)
 
 
+def test_a_chunk_left_with_no_frames_is_not_joined(monkeypatch):
+    """The last temporal chunk can decode to a single frame, which upstream drops: an
+    empty join that a compiled graph cannot run."""
+    joined = []
+    real = assembly._assembly
+
+    def recording(vae, key, build, *tensors):
+        joined.append([tuple(tensor.shape) for tensor in tensors])
+        return real(vae, key, build, *tensors)
+
+    monkeypatch.setattr(assembly, "_assembly", recording)
+    z = latent(torch.float32, 9)
+    ours = fake_vae(
+        torch.float32, assembly.tiled_decode, assembly.temporal_tiled_decode, frames=16
+    )
+    upstream = fake_vae(
+        torch.float32,
+        UPSTREAM["tiled_decode"],
+        UPSTREAM["_temporal_tiled_decode"],
+        frames=16,
+    )
+    assert torch.equal(
+        ours._temporal_tiled_decode(z, None).sample,
+        upstream._temporal_tiled_decode(z, None).sample,
+    )
+    temporal = [
+        shapes for shapes in joined if len(shapes) == 2 and shapes[0][3] == shapes[1][3]
+    ]
+    assert temporal and all(shapes[1][2] > 1 for shapes in temporal)
+
+
 def test_host_tiles_are_not_compiled(monkeypatch):
     def compile_called(*args, **kwargs):
         raise AssertionError("host tiles must not compile an assembly")

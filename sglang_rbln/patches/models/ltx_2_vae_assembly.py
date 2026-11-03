@@ -183,6 +183,9 @@ def temporal_tiled_decode(self, z, temb, causal=None, return_dict=True):
                 decoded[:, :, : self.tile_sample_stride_num_frames + 1],
                 decoded,
             )
+        elif decoded.shape[2] <= 1:
+            # Upstream drops this chunk's last frame, which leaves it nothing to add.
+            continue
         else:
             key = ("temporal", tuple(previous.shape), tuple(decoded.shape))
             step = _assembly(self, key, lambda: TemporalStep(self), previous, decoded)
