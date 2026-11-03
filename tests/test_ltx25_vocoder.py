@@ -249,3 +249,21 @@ def test_vocoder_runs_on_the_npu(caplog, monkeypatch, tmp_path):
     assert output.shape == reference.shape == (1, 2, 1920)
     snr = 10 * torch.log10(reference.pow(2).sum() / (output - reference).pow(2).sum())
     assert snr > 30
+
+
+@pytest.mark.parametrize(
+    ("mode", "devices"),
+    [("device", (4, [4, 5, 6, 7])), ("host", (1, 3))],
+    ids=["resident", "host"],
+)
+def test_the_audio_chain_compiles_beside_the_text_encoder_when_resident(
+    audio_stage, chained, monkeypatch, mode, devices
+):
+    # with resident regions the DiT's set has no room for it beside both DiT shapes
+    monkeypatch.setenv("SGLANG_RBLN_EXECUTION_MODE", mode)
+    monkeypatch.setenv("SGLANG_RBLN_NUM_DEVICES", "4")
+    monkeypatch.setattr(placement, "text_encoder_devices", lambda: (4, 5, 6, 7))
+    compile_on = SimpleNamespace(enable_torch_compile=True)
+    vocoder.compile_audio(audio_forward, audio_stage, None, compile_on)
+    options = chained[0][1]["options"]
+    assert (options["num_devices"], options["device"]) == devices

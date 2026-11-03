@@ -7,9 +7,19 @@ import torch.nn.functional as F
 from torch import nn
 from torch._subclasses.fake_tensor import FakeTensorMode
 
-from sglang_rbln import envs
+from sglang_rbln import device, envs
 from sglang_rbln.compilation import placement
 from sglang_rbln.compilation.backend import COMPILED, compile_on_one_device
+
+
+def audio_devices(vocoder: nn.Module) -> tuple[int, ...] | None:
+    """The vocoder's own placement, else, with resident regions, the text encoder's set.
+
+    The DiT's set has no room for the audio graphs beside both DiT shapes and the VAE.
+    """
+    if devices := placement.devices_of(vocoder):
+        return devices
+    return placement.text_encoder_devices() if device.resident_regions() else None
 
 
 def compile_vocoder(forward, stage, batch, server_args):
@@ -20,6 +30,8 @@ def compile_vocoder(forward, stage, batch, server_args):
         and server_args.enable_torch_compile
         and not getattr(vocoder, COMPILED, False)
     ):
+        if devices := audio_devices(vocoder):
+            placement.place(vocoder, devices)
         compile_on_one_device(vocoder, "vocoder")
     return forward(stage, batch, server_args)
 
@@ -113,7 +125,7 @@ def compile_audio(forward, stage, batch, server_args):
         and not getattr(vocoder, COMPILED, False)
     ):
         chain = AudioChain(audio_vae, vocoder)
-        if devices := placement.devices_of(vocoder):
+        if devices := audio_devices(vocoder):
             placement.place(chain, devices)
         compile_on_one_device(chain, "audio VAE decoder + vocoder")
         audio_vae.latents_mean = None
