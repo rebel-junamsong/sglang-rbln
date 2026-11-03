@@ -80,29 +80,42 @@ def mask_dtype(step: torch.nn.Module) -> torch.dtype:
 
 
 class MaskedWriteLayer(StaticLayer):
-    """Write the decode step's single row into the cache with a mask, on the device.
+    """Write into the cache by selecting over the window, so the write stays on device.
 
-    ``index_copy_`` at a tensor position has no device form at the cache's shape, so the
-    compiler leaves it -- and the ops around it -- on the host, which is what splits a
-    decode step into one graph per layer. Selecting over the window with ``where`` says
-    the same thing in ops the device has, at the cost of reading and rewriting the
-    window. Only the single-row write is rewritten; a multi-row write (the prefill)
-    keeps the original path, where the break costs one host op once.
+    ``index_copy_`` at a tensor position has no device form at the cache's shape, for
+    one row or for many: the compiler leaves it -- and the ops around it -- on the
+    host, which is what split a decode step into one graph per layer and the prefill
+    into one per layer as well. Saying the same write as a selection over the window
+    gives it ops the device has, at the cost of reading and rewriting the window.
+
+    A single row (a decode step) selects with ``where`` against a one-hot row mask. A
+    chunk of rows (a prefill) is the same selection with one column per row written, so
+    the gather is a matmul by that one-hot matrix -- exact, since every output is one
+    value times one and a sum of zeros.
     """
 
     def update(self, key_states, value_states, *args, **kwargs):
         if not self.is_initialized:
             self.lazy_initialization(key_states, value_states)
-        if key_states.shape[-2] != 1 or not on_device(self.keys):
+        if not on_device(self.keys):
             return super().update(key_states, value_states, *args, **kwargs)
-        rows = torch.arange(self.max_cache_len, device=self.keys.device)
-        # the row is read before the counter moves: a view of it would move with it
-        hit = rows.view(1, 1, -1, 1) == self.cumulative_length.view(1, 1, 1, 1)
-        self.keys.copy_(torch.where(hit, key_states.expand_as(self.keys), self.keys))
-        values = torch.where(hit, value_states.expand_as(self.values), self.values)
-        self.values.copy_(values)
-        self.cumulative_length.add_(1)
+        written = key_states.shape[-2]
+        rows = torch.arange(self.max_cache_len, device=self.keys.device).view(-1, 1)
+        # the rows are read before the counter moves: a view of it would move with it
+        offsets = torch.arange(written, device=self.keys.device).view(1, -1)
+        hit = rows == self.cumulative_length.view(1, 1) + offsets
+        self.keys.copy_(self._select(self.keys, key_states, hit))
+        self.values.copy_(self._select(self.values, value_states, hit))
+        self.cumulative_length.add_(written)
         return self.keys, self.values
+
+    @staticmethod
+    def _select(cache, states, hit):
+        """`cache` with the rows `hit` names replaced by `states`, as device ops."""
+        if hit.shape[1] == 1:
+            return torch.where(hit.view(1, 1, -1, 1), states.expand_as(cache), cache)
+        gathered = torch.matmul(hit.to(states.dtype), states)
+        return torch.where(hit.any(dim=1).view(1, 1, -1, 1), gathered, cache)
 
 
 def window_cache(model, window: int):

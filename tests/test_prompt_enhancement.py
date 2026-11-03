@@ -116,19 +116,40 @@ def test_a_single_row_write_uses_no_index_copy(on_device, monkeypatch):
     assert layer.keys[0, 0, 1, 0] == 1  # the second row holds the second write
 
 
-def test_a_prefill_keeps_the_index_copy_path(on_device, monkeypatch):
-    layer = prompt_enhancement.MaskedWriteLayer(max_cache_len=8)
+def test_a_chunk_write_lands_where_index_copy_puts_it(on_device):
+    masked = prompt_enhancement.MaskedWriteLayer(max_cache_len=16)
+    plain = prompt_enhancement.StaticLayer(max_cache_len=16)
+    chunks = [
+        torch.randn(1, 1, 4, 4, generator=torch.Generator().manual_seed(n))
+        for n in range(3)
+    ]
+
+    for chunk in chunks:
+        masked.update(chunk, chunk * 10)
+    with pytest.MonkeyPatch.context() as off:
+        off.setattr(prompt_enhancement, "on_device", lambda tensor: False)
+        for chunk in chunks:
+            plain.update(chunk, chunk * 10)
+
+    torch.testing.assert_close(masked.keys, plain.keys, rtol=0, atol=0)
+    torch.testing.assert_close(masked.values, plain.values, rtol=0, atol=0)
+    assert int(masked.cumulative_length) == 12
+
+
+def test_a_chunk_write_uses_no_index_copy(on_device, monkeypatch):
+    # the prefill broke per layer for the same reason the decode step did
+    layer = prompt_enhancement.MaskedWriteLayer(max_cache_len=16)
     block = torch.ones((1, 1, 4, 4))
     layer.update(block, block)  # allocate before the ban
     monkeypatch.setattr(
-        torch,
-        "where",
-        lambda *args, **kwargs: pytest.fail("a multi-row write took the masked path"),
+        torch.Tensor,
+        "index_copy_",
+        lambda *args, **kwargs: pytest.fail("the prefill wrote with index_copy_"),
     )
 
     layer.update(block * 2, block * 2)
 
-    assert int(layer.cumulative_length) == 8
+    assert layer.keys[0, 0, 4, 0] == 2  # the second chunk starts at row 4
 
 
 def test_the_whole_graph_hands_the_model_an_integer_mask():
