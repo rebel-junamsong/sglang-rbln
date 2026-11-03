@@ -307,3 +307,51 @@ def test_both_stages_compile_against_one_weight_pool(
     stage1, stage2 = _kernel_bytes(tmp_path)
     assert stage1 > 0
     assert (stage2 == 0) is shares_pool
+
+
+class UpsampleStage:
+    """Stands in for LTX2UpsampleStage, the one target both plugins hook."""
+
+    def __init__(self, upsampler):
+        self.spatial_upsampler = upsampler
+
+    def forward(self, batch, server_args):
+        batch.latents = torch.randn(1, FRAMES * HEIGHT * WIDTH * 4, CHANNELS)
+        return batch
+
+
+def test_the_upsampler_compiles_and_the_reference_is_kept_in_one_forward(
+    lora, stage1_latents, monkeypatch
+):
+    # compiling is a BEFORE hook so the detailing LoRA keeps the only AROUND one; both
+    # have to take effect on the same call
+    from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry
+
+    from sglang_rbln.patches.stages.ltx_2 import upsampling
+
+    compiled = []
+    monkeypatch.setattr(
+        upsampling, "compile_on_one_device", lambda module, name: compiled.append(name)
+    )
+    monkeypatch.setenv("SGLANG_RBLN_UPSAMPLER_ON_NPU", "1")
+    monkeypatch.setattr(HookRegistry, "_hooks", type(HookRegistry._hooks)(list))
+    monkeypatch.setattr(HookRegistry, "_patched", set())
+    # records the unhooked forward as the value to restore, before the hooks replace it
+    monkeypatch.setattr(UpsampleStage, "forward", UpsampleStage.forward)
+    target = f"{__name__}.UpsampleStage.forward"
+    HookRegistry.register(target, upsampling.compile_upsampler, HookType.BEFORE)
+    HookRegistry.register(target, detailing.keep_reference, HookType.AROUND)
+    HookRegistry.apply_hooks()
+
+    stage = UpsampleStage(SimpleNamespace())
+    batch = SimpleNamespace(
+        latents=stage1_latents, fps=FPS, height=64, width=128, extra={}
+    )
+    args = SimpleNamespace(
+        enable_torch_compile=True,
+        pipeline_config=SimpleNamespace(maybe_pack_latents=pack),
+    )
+    out = stage.forward(batch, args)
+
+    assert compiled == ["latent upsampler"]
+    assert detailing.REFERENCE in out.extra
