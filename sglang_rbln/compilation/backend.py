@@ -16,7 +16,7 @@ from typing import Any
 
 import torch
 
-from sglang_rbln import envs
+from sglang_rbln import device, envs
 from sglang_rbln.compilation import device_views, placement, shapes
 
 logger = logging.getLogger(__name__)
@@ -104,8 +104,16 @@ def compile_once(module: torch.nn.Module, what: str, compile_kwargs: dict) -> No
 
 
 def compile_on_one_device(module: torch.nn.Module, what: str) -> None:
-    """Compile `module` for one NPU: its own if placed, else the last TP one."""
+    """Compile `module` for one NPU: its own if placed, else the last TP one.
+
+    With resident regions each NPU set is one logical device, and a graph reads a
+    device input only on the device that holds it, so `module` then compiles for
+    the whole set its inputs live on.
+    """
     compile_kwargs = static_compile_kwargs(module)
+    if device.resident_regions():
+        compile_once(module, what, compile_kwargs)
+        return
     options = compile_kwargs["options"]
     if devices := placement.devices_of(module):
         if len(devices) > 1:

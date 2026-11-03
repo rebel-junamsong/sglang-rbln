@@ -52,6 +52,7 @@ def test_compiles_the_vocoder_once(stage, compiled):
 def test_runs_the_vocoder_on_the_last_tensor_parallel_device(
     stage, compiled, monkeypatch
 ):
+    monkeypatch.setenv("SGLANG_RBLN_EXECUTION_MODE", "host")
     monkeypatch.setenv("SGLANG_RBLN_NUM_DEVICES", "4")
     server_args = SimpleNamespace(enable_torch_compile=True)
     vocoder.compile_vocoder(forward, stage, None, server_args)
@@ -126,6 +127,7 @@ def audio_forward(stage, batch, server_args):
 
 
 def test_compiles_the_audio_chain_once(audio_stage, chained, monkeypatch):
+    monkeypatch.setenv("SGLANG_RBLN_EXECUTION_MODE", "host")
     monkeypatch.setenv("SGLANG_RBLN_NUM_DEVICES", "4")
     server_args = SimpleNamespace(enable_torch_compile=True)
     waveforms = [

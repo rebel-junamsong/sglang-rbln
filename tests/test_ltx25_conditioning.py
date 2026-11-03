@@ -115,6 +115,7 @@ def test_compiles_the_duration_head_once_on_the_last_device(
     duration_stage, compiled, monkeypatch
 ):
     """With no spare NPUs for a text encoder the head falls to the DiT's last."""
+    monkeypatch.setenv("SGLANG_RBLN_EXECUTION_MODE", "host")
     monkeypatch.setenv("SGLANG_RBLN_NUM_DEVICES", "4")
     monkeypatch.setattr(placement, "visible_npus", lambda: 4)
     outputs = [
@@ -125,6 +126,23 @@ def test_compiles_the_duration_head_once_on_the_last_device(
     assert [module for module, _ in compiled] == [duration_stage.duration_head]
     options = compiled[0][1]["options"]
     assert (options["num_devices"], options["device"]) == (1, 3)
+
+
+@pytest.mark.parametrize(
+    ("placed", "devices"),
+    [(None, (4, None)), ((4, 5, 6, 7), (4, [4, 5, 6, 7]))],
+    ids=["dit-set", "placed"],
+)
+def test_resident_duration_head_compiles_for_the_set_of_its_inputs(
+    duration_stage, compiled, monkeypatch, placed, devices
+):
+    # in device mode each NPU set is one logical device that holds the head's inputs
+    monkeypatch.setenv("SGLANG_RBLN_EXECUTION_MODE", "device")
+    monkeypatch.setenv("SGLANG_RBLN_NUM_DEVICES", "4")
+    monkeypatch.setattr(placement, "text_encoder_devices", lambda: placed)
+    duration.compile_duration_head(forward, duration_stage, AUTO, COMPILE)
+    options = compiled[0][1]["options"]
+    assert (options["num_devices"], options.get("device")) == devices
 
 
 @pytest.mark.parametrize(
@@ -186,6 +204,7 @@ def test_leaves_the_upsampler_eager(
 
 def test_duration_head_follows_the_text_encoder(duration_stage, compiled, monkeypatch):
     """With no placement of its own the head goes where the text encoder is."""
+    monkeypatch.setenv("SGLANG_RBLN_EXECUTION_MODE", "host")
     monkeypatch.setenv("SGLANG_RBLN_NUM_DEVICES", "4")
     monkeypatch.setattr(placement, "visible_npus", lambda: 8)
     duration.compile_duration_head(forward, duration_stage, AUTO, COMPILE)
