@@ -18,7 +18,7 @@ from torch import nn
 from torch.utils._pytree import tree_leaves, tree_map
 
 from sglang_rbln import envs
-from sglang_rbln.compilation import shapes
+from sglang_rbln.compilation import placement, shapes
 
 logger = logging.getLogger(__name__)
 
@@ -250,6 +250,11 @@ class Region:
         self.compile_kwargs = compile_kwargs
         self.keep_outputs = keep_outputs
         self.group: BlockGroup | None = BlockGroup(self.blocks, keep_outputs)
+        # A new module, so it takes the NPUs its blocks are placed on. The blocks
+        # are shallow copies, placed through their submodules.
+        placed = map(placement.devices_of, self.blocks[0].modules())
+        if devices := next(filter(None, placed), None):
+            placement.place(self.group, devices)
         self.group.compile(**compile_kwargs)
         self.parts: dict[tuple, list[Region]] = {}
         self.loaded: set[tuple] = set()

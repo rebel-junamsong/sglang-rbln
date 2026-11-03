@@ -11,7 +11,7 @@ import torch
 from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry
 from torch import nn
 
-from sglang_rbln.compilation import regions, shapes
+from sglang_rbln.compilation import placement, regions, shapes
 
 pytestmark = pytest.mark.usefixtures("rbln_platform")
 
@@ -573,3 +573,17 @@ def test_runtime_creation_checks_every_node_it_loads_on(device_memory):
     assert queried == [2, 3]
     assert error.value.needed == [BLOCK_BYTES, 4 * BLOCK_BYTES]
     assert rebel.RBLNCompiledModel.create_runtime is original
+
+
+def test_a_region_runs_on_the_npus_of_its_blocks():
+    model = Model(depth=4).eval()
+    placement.place(model, (4, 5, 6, 7))
+    groups = regions.group_blocks(
+        list(model.blocks), 2, {"backend": "eager", "dynamic": False}
+    )
+    assert [placement.devices_of(region.group) for region in groups] == [
+        (4, 5, 6, 7)
+    ] * 2
+    assert placement.devices_of(regions.Region(
+        [Block(8)], {"backend": "eager", "dynamic": False}
+    ).group) is None
