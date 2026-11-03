@@ -51,7 +51,11 @@ def cached_rotary_tables(forward, rope: torch.nn.Module, *args, **kwargs):
     A denoise step asks for the same positions as the step before it, and building
     the tables for every video token on the host cost about a tenth of a second per
     step. A table depends only on the positions and the output dtype and device.
+    Traced into a compiled DiT forward, upstream's tables are built in the graph:
+    the cache's host-side hashing would split that graph.
     """
+    if torch.compiler.is_compiling():
+        return contiguous_rotary_tables(forward(rope, *args, **kwargs))
     key = (
         tuple(map(_argument_key, args)),
         tuple(sorted((name, _argument_key(value)) for name, value in kwargs.items())),

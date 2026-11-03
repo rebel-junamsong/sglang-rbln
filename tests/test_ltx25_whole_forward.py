@@ -18,15 +18,33 @@ from sglang.multimodal_gen.runtime.server_args import server_args as server_args
 from sglang.srt.utils.network import get_open_port
 
 from sglang_rbln.patches.configs import arch_config
+from sglang_rbln.patches.models import ltx_2 as ltx_2_patch
 
 pytestmark = pytest.mark.usefixtures("rbln_platform")
 
 FRAMES, HEIGHT, WIDTH, AUDIO_FRAMES, TEXT = 2, 4, 4, 8, 6
 
 
+def install_dit_hooks(monkeypatch):
+    """The plugin's hooks on the DiT, as the rbln platform registers them."""
+    monkeypatch.setattr(ArchConfig, "__getattr__", arch_config.extra_attr)
+    rope = dit.LTX2AudioVideoRotaryPosEmbed
+    forward = rope.forward
+    monkeypatch.setattr(
+        rope,
+        "forward",
+        lambda self, *args, **kwargs: ltx_2_patch.cached_rotary_tables(
+            forward, self, *args, **kwargs
+        ),
+    )
+    monkeypatch.setattr(
+        dit, "_ltx2_try_fused_ada_values9", ltx_2_patch.without_triton_ada_values
+    )
+
+
 @pytest.fixture
 def model(monkeypatch):
-    monkeypatch.setattr(ArchConfig, "__getattr__", arch_config.extra_attr)
+    install_dit_hooks(monkeypatch)
     monkeypatch.setattr(
         server_args_module,
         "_global_server_args",
@@ -78,7 +96,9 @@ def model(monkeypatch):
 
 def test_dit_forward_traces_as_one_graph(model):
     """--regional-compile false compiles the whole DiT: latents in, velocities
-    out, with the patchify, adaLN and output layers on the device."""
+    out, with the patchify, adaLN, rotary tables and output layers on the device.
+    The eager reference fills the plugin's rotary-table cache first; the compiled
+    forward builds its tables in the graph instead of reading that cache."""
     inputs = dict(
         hidden_states=torch.randn(1, FRAMES * HEIGHT * WIDTH, 128).bfloat16(),
         audio_hidden_states=torch.randn(1, AUDIO_FRAMES, 128).bfloat16(),
@@ -102,5 +122,6 @@ def test_dit_forward_traces_as_one_graph(model):
         compiled = torch.compile(model, backend=backend, fullgraph=True, dynamic=False)
         outputs = compiled(**inputs)
     assert len(graphs) == 1
+    assert ltx_2_patch.ROTARY_TABLES in model.rope.__dict__
     for output, reference in zip(outputs, expected, strict=True):
         torch.testing.assert_close(output, reference)
