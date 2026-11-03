@@ -15,6 +15,7 @@ from sglang_rbln.patches.models import (
     flux3,
     flux3_video_vae,
     ltx_2,
+    ltx_2_text_features,
     ltx_2_tile_ranks,
     ltx_2_vae_assembly,
     wanvae,
@@ -75,3 +76,4 @@ def register() -> None:
     if device.resident_regions():
         residency.register()
         ltx_2_vae_assembly.register()
+        ltx_2_text_features.register()

@@ -91,6 +91,12 @@ PATCH_DEBTS = [
         upstream_fix="return the connector rotary cos/sin tables contiguous",
     ),
     PatchDebt(
+        patch="models/ltx_2_text_features",
+        module="sglang.multimodal_gen.runtime.models.adapter.ltx_2_connector",
+        upstream_pattern="hidden_states[i, binary_attn_mask[i].bool(), :]",
+        upstream_fix="replace the padded tokens over a fixed length",
+    ),
+    PatchDebt(
         patch="models/ltx_2_vae_assembly",
         module="sglang.multimodal_gen.runtime.models.vaes.ltx_2_vae",
         upstream_pattern="            result_rows.append(torch.cat(result_row, dim=4))",
