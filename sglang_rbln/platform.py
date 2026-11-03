@@ -8,12 +8,12 @@ import torch
 from sglang.multimodal_gen import envs as sglang_envs
 from sglang.multimodal_gen.runtime.platforms import Platform, PlatformEnum
 from sglang.multimodal_gen.runtime.platforms.cpu import CpuPlatform
+from sglang.multimodal_gen.runtime.platforms.interface import AttentionBackendEnum
 
 from sglang_rbln import device
 from sglang_rbln.compilation import backend as compilation
 from sglang_rbln.compilation import residency
 
-ATTENTION_BACKEND_PATH = "sglang_rbln.layers.attention.backends.sdpa.RBLNSdpaBackend"
 EXECUTION_MODE = device.execution_mode()
 RESIDENT_REGIONS = device.resident_regions()
 RUNS_ON_DEVICE = EXECUTION_MODE is device.ExecutionMode.DEVICE and not RESIDENT_REGIONS
@@ -138,8 +138,17 @@ class RBLNPlatform(Platform):
     def inference_mode(cls):
         return torch.no_grad()
 
-    def get_attn_backend_cls_str(self, *args, **kwargs) -> str:
-        return ATTENTION_BACKEND_PATH
+    def get_attn_backend_cls_str(
+        self,
+        selected_backend: AttentionBackendEnum | None,
+        head_size: int,
+        dtype: torch.dtype,
+    ) -> str:
+        # `Platform`'s own is a stub returning "", so this cannot just be
+        # dropped. The plugin used to name an SDPA subclass that expanded the
+        # kv heads itself; the compiler honours `enable_gqa` now, so upstream's
+        # own backend and its selection logic do.
+        return CpuPlatform.get_attn_backend_cls_str(selected_backend, head_size, dtype)
 
     def get_torch_distributed_backend_str(self) -> str:
         return "gloo"

@@ -164,9 +164,16 @@ class TestDeviceQueries:
         resolved = resolve_name(RBLNPlatform.get_device_communicator_cls())
         assert resolved.__name__ == communicator
 
-    def test_attention_backend_is_importable(self):
-        backend_cls = resolve_name(RBLNPlatform().get_attn_backend_cls_str())
-        assert backend_cls.__name__ == "RBLNSdpaBackend"
+    def test_attention_backend_is_upstreams(self):
+        """The plugin named its own kv-expanding SDPA subclass until the
+        compiler honoured `enable_gqa`. `Platform`'s method is a stub returning
+        "", so the override stays -- it just defers to upstream now.
+        """
+        backend_cls = resolve_name(
+            RBLNPlatform().get_attn_backend_cls_str(None, 128, torch.bfloat16)
+        )
+        assert backend_cls.__name__ == "SDPABackend"
+        assert backend_cls.__module__.startswith("sglang.")
 
     def test_memory_queries_are_positive(self):
         total_bytes = RBLNPlatform.get_device_total_memory(0)
