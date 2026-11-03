@@ -39,10 +39,11 @@ Install `sglang-rbln[device]` instead to add `torch-rbln` (built for
 
 To reproduce a published result, build the environment from the committed
 `uv.lock`. It pins the exact `rebel-compiler` and `torch-rbln` builds the result
-was measured with (the RBLN index needs credentials in `~/.netrc`):
+was measured with (the RBLN index needs credentials in `~/.netrc`;
+`.python-version` selects CPython 3.12, the only ABI the pinned compiler ships):
 
 ```bash
-uv sync --frozen --extra device
+uv sync --frozen --extra device --extra test
 ```
 
 The plugin activates itself when an NPU is present, or when
