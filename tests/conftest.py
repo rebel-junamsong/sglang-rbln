@@ -34,6 +34,19 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 item.add_marker(pytest.mark.xfail(reason=reason, strict=True))
 
 
+@pytest.fixture
+def dummy_device(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A device that exists without being hardware, for one test.
+
+    Compiling and placement need a device to name; they do not need the NPUs, which on
+    this host belong to other sessions. Never set this for the whole run: a dummy
+    device refuses to execute a compiled graph, and its eager outputs are garbage, so
+    only placement and structure may be asserted under it.
+    """
+    monkeypatch.setenv("RBLN_DUMMY_DEVICE", "1")
+    monkeypatch.setenv("RBLN_FORCE_NPU_NAME", envs.RBLN_FORCE_NPU_NAME or "RBLN-CA22")
+
+
 @pytest.fixture(scope="session")
 def npu_name() -> str:
     if forced := envs.RBLN_FORCE_NPU_NAME:

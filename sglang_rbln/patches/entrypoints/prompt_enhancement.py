@@ -39,7 +39,6 @@ from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry, HookTy
 from transformers.cache_utils import Cache, StaticLayer
 
 from sglang_rbln import envs
-from sglang_rbln.compilation.backend import on_device
 
 logger = logging.getLogger(__name__)
 
@@ -75,47 +74,13 @@ class WholeGraph(torch.nn.Module):
         )
 
 
-def mask_dtype(step: torch.nn.Module) -> torch.dtype:
-    return WholeGraph.MASK_DTYPE if isinstance(step, WholeGraph) else torch.long
+def mask_dtype(step) -> torch.dtype:
+    """The dtype the mask crosses the boundary as: the step says, or long by default.
 
-
-class MaskedWriteLayer(StaticLayer):
-    """Write into the cache by selecting over the window, so the write stays on device.
-
-    ``index_copy_`` at a tensor position has no device form at the cache's shape, for
-    one row or for many: the compiler leaves it -- and the ops around it -- on the
-    host, which is what split a decode step into one graph per layer and the prefill
-    into one per layer as well. Saying the same write as a selection over the window
-    gives it ops the device has, at the cost of reading and rewriting the window.
-
-    A single row (a decode step) selects with ``where`` against a one-hot row mask. A
-    chunk of rows (a prefill) is the same selection with one column per row written, so
-    the gather is a matmul by that one-hot matrix -- exact, since every output is one
-    value times one and a sum of zeros.
+    Read as an attribute rather than by type, so anything standing in for the step --
+    a wrapper that times or traces it -- answers for the module it wraps.
     """
-
-    def update(self, key_states, value_states, *args, **kwargs):
-        if not self.is_initialized:
-            self.lazy_initialization(key_states, value_states)
-        if not on_device(self.keys):
-            return super().update(key_states, value_states, *args, **kwargs)
-        written = key_states.shape[-2]
-        rows = torch.arange(self.max_cache_len, device=self.keys.device).view(-1, 1)
-        # the rows are read before the counter moves: a view of it would move with it
-        offsets = torch.arange(written, device=self.keys.device).view(1, -1)
-        hit = rows == self.cumulative_length.view(1, 1) + offsets
-        self.keys.copy_(self._select(self.keys, key_states, hit))
-        self.values.copy_(self._select(self.values, value_states, hit))
-        self.cumulative_length.add_(written)
-        return self.keys, self.values
-
-    @staticmethod
-    def _select(cache, states, hit):
-        """`cache` with the rows `hit` names replaced by `states`, as device ops."""
-        if hit.shape[1] == 1:
-            return torch.where(hit.view(1, 1, -1, 1), states.expand_as(cache), cache)
-        gathered = torch.matmul(hit.to(states.dtype), states)
-        return torch.where(hit.any(dim=1).view(1, 1, -1, 1), gathered, cache)
+    return getattr(step, "MASK_DTYPE", torch.long)
 
 
 def window_cache(model, window: int):
@@ -128,13 +93,13 @@ def window_cache(model, window: int):
 
     Every cache tensor is allocated here, on the model's device and outside any graph,
     so the graphs take the cache as an input they write back instead of creating it in
-    the prefill graph.
+    the prefill graph. The write itself is the layer's own ``index_copy_``: the compiler
+    lowers it to the device's batched row scatter (rebel_compiler 4aea7ee411), so the
+    step stays one graph without the plugin saying the write any other way.
     """
     text = model.config.get_text_config()
     owners = text.num_hidden_layers - (getattr(text, "num_kv_shared_layers", 0) or 0)
-    cache = Cache(
-        layers=[MaskedWriteLayer(max_cache_len=window) for _ in range(owners)]
-    )
+    cache = Cache(layers=[StaticLayer(max_cache_len=window) for _ in range(owners)])
     param = next(model.parameters())
     for index, layer in enumerate(cache.layers):
         full = text.layer_types[index] == "full_attention"

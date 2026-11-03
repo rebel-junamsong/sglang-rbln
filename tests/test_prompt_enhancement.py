@@ -76,80 +76,58 @@ def test_the_whole_cache_is_allocated_outside_any_graph(tiny_enhancer):
     assert {layer.keys.dtype for layer in cache.layers} == {torch.float32}
 
 
-@pytest.fixture
-def on_device(monkeypatch):
-    """Judge the host tensors of a test the way the plugin judges device tensors."""
-    monkeypatch.setattr(prompt_enhancement, "on_device", lambda tensor: True)
+def test_the_cache_write_compiles_to_one_device_function(tmp_path, dummy_device):
+    """The step is one graph only while the cache write has a device form.
 
+    `index_copy_` at a tensor position had none, for a decode row or a prefill chunk,
+    so the compiler left it and the ops around it on the host and split the step into
+    one graph per layer. rebel_compiler 4aea7ee411 lowers it; this is the contract the
+    plugin relies on, and it fails here rather than as a slow step on a device.
+    """
+    import rebel
 
-def rows(layer, count: int) -> None:
-    for step in range(count):
-        row = torch.full((1, 1, 1, 4), float(step + 1))
-        layer.update(row, row * 10)
-
-
-def test_a_single_row_write_lands_where_index_copy_puts_it(on_device):
-    masked = prompt_enhancement.MaskedWriteLayer(max_cache_len=8)
-    plain = prompt_enhancement.StaticLayer(max_cache_len=8)
-
-    rows(masked, 3)
-    with pytest.MonkeyPatch.context() as off:  # the plain layer keeps index_copy_
-        off.setattr(prompt_enhancement, "on_device", lambda tensor: False)
-        rows(plain, 3)
-
-    torch.testing.assert_close(masked.keys, plain.keys, rtol=0, atol=0)
-    torch.testing.assert_close(masked.values, plain.values, rtol=0, atol=0)
-    assert int(masked.cumulative_length) == int(plain.cumulative_length) == 3
-
-
-def test_a_single_row_write_uses_no_index_copy(on_device, monkeypatch):
-    layer = prompt_enhancement.MaskedWriteLayer(max_cache_len=8)
-    rows(layer, 1)  # allocate before the ban, where lazy_initialization may index
-    monkeypatch.setattr(
-        torch.Tensor,
-        "index_copy_",
-        lambda *args, **kwargs: pytest.fail("the decode step wrote with index_copy_"),
+    window, heads, dim = 256, 1, 64
+    layer = prompt_enhancement.StaticLayer(max_cache_len=window)
+    layer.lazy_initialization(
+        *(torch.zeros((1, heads, 1, dim), dtype=torch.bfloat16, device="rbln"),) * 2
     )
 
-    rows(layer, 1)
+    class Write(torch.nn.Module):
+        def forward(self, rows):
+            keys, _ = layer.update(rows, rows)
+            return keys.sum()
 
-    assert layer.keys[0, 0, 1, 0] == 1  # the second row holds the second write
-
-
-def test_a_chunk_write_lands_where_index_copy_puts_it(on_device):
-    masked = prompt_enhancement.MaskedWriteLayer(max_cache_len=16)
-    plain = prompt_enhancement.StaticLayer(max_cache_len=16)
-    chunks = [
-        torch.randn(1, 1, 4, 4, generator=torch.Generator().manual_seed(n))
-        for n in range(3)
-    ]
-
-    for chunk in chunks:
-        masked.update(chunk, chunk * 10)
-    with pytest.MonkeyPatch.context() as off:
-        off.setattr(prompt_enhancement, "on_device", lambda tensor: False)
-        for chunk in chunks:
-            plain.update(chunk, chunk * 10)
-
-    torch.testing.assert_close(masked.keys, plain.keys, rtol=0, atol=0)
-    torch.testing.assert_close(masked.values, plain.values, rtol=0, atol=0)
-    assert int(masked.cumulative_length) == 12
-
-
-def test_a_chunk_write_uses_no_index_copy(on_device, monkeypatch):
-    # the prefill broke per layer for the same reason the decode step did
-    layer = prompt_enhancement.MaskedWriteLayer(max_cache_len=16)
-    block = torch.ones((1, 1, 4, 4))
-    layer.update(block, block)  # allocate before the ban
-    monkeypatch.setattr(
-        torch.Tensor,
-        "index_copy_",
-        lambda *args, **kwargs: pytest.fail("the prefill wrote with index_copy_"),
-    )
-
-    layer.update(block * 2, block * 2)
-
-    assert layer.keys[0, 0, 4, 0] == 2  # the second chunk starts at row 4
+    for written in (1, 128):
+        layer.cumulative_length.fill_(0)
+        cache_dir = tmp_path / f"rows{written}"
+        compiled = torch.compile(
+            Write(),
+            backend="rbln",
+            dynamic=False,
+            options={"mode": ["strict", "compile_only"], "cache_dir": str(cache_dir)},
+        )
+        with torch.inference_mode():
+            compiled(
+                torch.ones(
+                    (1, heads, written, dim), dtype=torch.bfloat16, device="rbln"
+                )
+            )
+        stats = [
+            stat
+            for artifact in sorted(cache_dir.glob("*.rbln"))
+            for stat in rebel.RBLNCompiledModel.inspect(str(artifact))["subgraph"][
+                "stats"
+            ]
+        ]
+        assert [stat["device_func_count"] for stat in stats] == [1], written
+        host_ops = {
+            op
+            for stat in stats
+            for ops in stat["host_op_reason"].values()
+            for op in ops
+            if not op.startswith("args_")
+        }
+        assert host_ops == set(), (written, host_ops)
 
 
 def test_the_whole_graph_hands_the_model_an_integer_mask():
