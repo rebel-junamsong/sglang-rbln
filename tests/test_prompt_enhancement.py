@@ -324,6 +324,59 @@ def test_the_decode_step_compiles_to_one_device_function(
     assert host_ops == set(), host_ops
 
 
+def test_the_cache_is_built_on_the_device_the_step_will_run_on(
+    dummy_device, monkeypatch, tiny_enhancer
+):
+    """A resident step moves itself on its first call, after the cache is built.
+
+    Reading the device from the model's parameters then gives cpu, and the cache that
+    the graphs write back is left on the host. Host mode is unaffected, which is why
+    this only showed up in the server.
+    """
+    from sglang_rbln.compilation import placement, residency
+
+    step = prompt_enhancement.WholeGraph(tiny_enhancer.get_decoder())
+    assert prompt_enhancement.cache_device(step, tiny_enhancer).type == "cpu"
+
+    placement.place(step, (4, 5, 6, 7))
+    monkeypatch.setattr(residency, "logical_device_of", lambda module: 0)
+
+    device = prompt_enhancement.cache_device(step, tiny_enhancer)
+    assert (device.type, device.index) == ("rbln", 0)
+    cache = prompt_enhancement.window_cache(tiny_enhancer, 128, device)
+    assert {layer.keys.device.type for layer in cache.layers} == {"rbln"}
+
+
+def test_the_step_is_placed_where_the_decoder_is(monkeypatch, tiny_enhancer):
+    """The wrapper is a new module, so nothing has placed it; unplaced means device 0,
+    which is the DiT's set rather than the enhancer's."""
+    from sglang_rbln.compilation import placement
+
+    monkeypatch.setenv("SGLANG_RBLN_PROMPT_ENHANCER_WHOLE_GRAPH", "1")
+    monkeypatch.setenv("SGLANG_RBLN_COMPONENT_DEVICES", "prompt_enhancer=4,5,6,7")
+    monkeypatch.setattr(
+        "sglang_rbln.compilation.backend.static_compile_kwargs", lambda module: {}
+    )
+    monkeypatch.setattr(
+        prompt_enhancement.WholeGraph, "compile", lambda self, **k: None
+    )
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "sglang_rbln.patches.stages.text_encoding",
+        SimpleNamespace(compile_regions=lambda m: 1, traceable=lambda m: m),
+    )
+    monkeypatch.setattr(
+        tiny_enhancer,
+        "get_output_embeddings",
+        lambda: SimpleNamespace(compile=lambda **k: None),
+    )
+    enhancer = bare_enhancer(model=tiny_enhancer, step=tiny_enhancer.get_decoder())
+
+    enhancer._compile()
+
+    assert placement.devices_of(enhancer.step) == (4, 5, 6, 7)
+
+
 def test_the_whole_graph_flag_picks_which_compile_runs(monkeypatch):
     calls = []
     monkeypatch.setattr(
@@ -342,10 +395,14 @@ def test_the_whole_graph_flag_picks_which_compile_runs(monkeypatch):
     monkeypatch.setattr(
         "sglang_rbln.compilation.backend.static_compile_kwargs", lambda module: {}
     )
-    decoder = SimpleNamespace(compile=lambda **kwargs: None)
+
+    class Stub(torch.nn.Module):  # placement keys modules weakly, so not a namespace
+        def compile(self, **kwargs):
+            pass
+
+    decoder, head = Stub(), Stub()
     model = SimpleNamespace(
-        get_decoder=lambda: decoder,
-        get_output_embeddings=lambda: SimpleNamespace(compile=lambda **kwargs: None),
+        get_decoder=lambda: decoder, get_output_embeddings=lambda: head
     )
 
     # the whole graph is the default now, so only "0" picks the per-layer path

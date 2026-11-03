@@ -73,7 +73,21 @@ def mask_dtype(step) -> torch.dtype:
     return getattr(step, "MASK_DTYPE", torch.long)
 
 
-def window_cache(model, window: int):
+def cache_device(step, model) -> torch.device:
+    """Where the KV cache must live: the device the compiled step will run on.
+
+    A resident step moves its module to its placed NPUs on the first call, which has
+    not happened when the cache is built, so the model's parameters still read cpu.
+    Allocating from them leaves the cache on the host and the first device run fails.
+    """
+    from sglang_rbln.compilation import placement, residency
+
+    if placement.devices_of(step) is None:
+        return next(model.parameters()).device
+    return torch.device("rbln", residency.logical_device_of(step))
+
+
+def window_cache(model, window: int, device: torch.device | None = None):
     """A static KV layer of the whole window for every layer that owns its KV.
 
     Sliding-window layers get the whole window too; their mask hides what lies outside
@@ -87,6 +101,7 @@ def window_cache(model, window: int):
     owners = text.num_hidden_layers - (getattr(text, "num_kv_shared_layers", 0) or 0)
     cache = Cache(layers=[StaticLayer(max_cache_len=window) for _ in range(owners)])
     param = next(model.parameters())
+    device = param.device if device is None else device
     for index, layer in enumerate(cache.layers):
         full = text.layer_types[index] == "full_attention"
         head_dim = text.head_dim
@@ -95,7 +110,7 @@ def window_cache(model, window: int):
         row = torch.empty(
             (1, text.num_key_value_heads, 1, head_dim),
             dtype=param.dtype,
-            device=param.device,
+            device=device,
         )
         layer.lazy_initialization(row, row)
     return cache
@@ -160,8 +175,8 @@ def greedy_decode(
     prompt = input_ids.shape[1]
     window = cache_window(prompt + max_new_tokens)
     padded = -(-prompt // PREFILL_CHUNK) * PREFILL_CHUNK
-    cache = window_cache(model, window)
-    device = next(model.parameters()).device
+    device = cache_device(step, model)
+    cache = window_cache(model, window, device)
     ids = torch.zeros((1, padded), dtype=torch.long)
     ids[0, :prompt] = input_ids[0]
     host_mask = torch.zeros((1, window), dtype=mask_dtype(step))
@@ -242,6 +257,10 @@ class ModelPromptEnhancer:
         decoder = self.model.get_decoder()
         if envs.SGLANG_RBLN_PROMPT_ENHANCER_WHOLE_GRAPH:
             self.step = WholeGraph(decoder)
+            # a new module, so it carries no placement of its own and would resolve to
+            # logical device 0 -- the DiT's set -- rather than the enhancer's
+            if devices := placement.devices_of(decoder):
+                placement.place(self.step, devices)
             self.step.compile(**static_compile_kwargs(decoder))
             graphs = 1
         else:
