@@ -94,7 +94,13 @@ def static_compile_kwargs(module: torch.nn.Module) -> dict[str, Any]:
     return compile_kwargs
 
 
-COMPILED = "_rbln_compiled_on_one_device"
+COMPILED = "_rbln_compiled"
+
+
+def compile_once(module: torch.nn.Module, what: str, compile_kwargs: dict) -> None:
+    module.compile(**compile_kwargs)
+    setattr(module, COMPILED, True)
+    logger.info("Compiling the %s: %s", what, compile_kwargs)
 
 
 def compile_on_one_device(module: torch.nn.Module, what: str) -> None:
@@ -106,9 +112,7 @@ def compile_on_one_device(module: torch.nn.Module, what: str) -> None:
             compile_kwargs["options"] = on_one_device(options, devices[-1], module)
     elif num_devices := options.get("num_devices"):
         compile_kwargs["options"] = on_one_device(options, num_devices - 1, module)
-    module.compile(**compile_kwargs)
-    setattr(module, COMPILED, True)
-    logger.info("Compiling the LTX-2 %s: %s", what, compile_kwargs)
+    compile_once(module, what, compile_kwargs)
 
 
 def single_device_compile_kwargs(module: torch.nn.Module) -> dict[str, Any]:
