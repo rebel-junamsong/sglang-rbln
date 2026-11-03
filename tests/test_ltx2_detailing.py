@@ -331,8 +331,11 @@ def test_the_upsampler_compiles_and_the_reference_is_kept_in_one_forward(
 
     compiled = []
     monkeypatch.setattr(
-        upsampling, "compile_on_one_device", lambda module, name: compiled.append(name)
+        upsampling, "compile_once", lambda module, name, kwargs: compiled.append(name)
     )
+    monkeypatch.setattr(upsampling, "static_compile_kwargs", lambda module: {})
+    monkeypatch.setattr(upsampling.placement, "devices_of", lambda module: None)
+    monkeypatch.setattr(upsampling.placement, "text_encoder_devices", lambda: None)
     monkeypatch.setenv("SGLANG_RBLN_UPSAMPLER_ON_NPU", "1")
     monkeypatch.setattr(HookRegistry, "_hooks", type(HookRegistry._hooks)(list))
     monkeypatch.setattr(HookRegistry, "_patched", set())

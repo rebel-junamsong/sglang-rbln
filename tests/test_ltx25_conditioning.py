@@ -145,12 +145,20 @@ def test_leaves_the_duration_head_eager(
 
 
 @pytest.mark.parametrize(
-    ("placed", "device"), [(None, 3), ((0, 1, 2, 3), 3)], ids=["tp-last", "placed"]
+    ("placed", "text_encoder", "devices"),
+    [
+        (None, (4, 5, 6, 7), (4, [4, 5, 6, 7])),
+        ((8, 9, 10, 11), (4, 5, 6, 7), (4, [8, 9, 10, 11])),
+        (None, None, (4, None)),
+    ],
+    ids=["text-encoder-set", "placed", "dit-set"],
 )
-def test_compiles_the_upsampler_once_on_one_device(
-    upsample_stage, compiled, monkeypatch, placed, device
+def test_compiles_the_upsampler_once_on_its_device_set(
+    upsample_stage, compiled, monkeypatch, placed, text_encoder, devices
 ):
+    # beside the text encoder: the DiT's set has no room beside both DiT shapes
     monkeypatch.setenv("SGLANG_RBLN_NUM_DEVICES", "4")
+    monkeypatch.setattr(placement, "text_encoder_devices", lambda: text_encoder)
     if placed:
         placement.place(upsample_stage.spatial_upsampler, placed)
     # a BEFORE hook: it compiles and leaves the arguments alone
@@ -160,7 +168,7 @@ def test_compiles_the_upsampler_once_on_one_device(
     assert outputs == [None, None]
     assert [module for module, _ in compiled] == [upsample_stage.spatial_upsampler]
     options = compiled[0][1]["options"]
-    assert (options["num_devices"], options["device"]) == (1, device)
+    assert (options["num_devices"], options.get("device")) == devices
 
 
 @pytest.mark.parametrize(
