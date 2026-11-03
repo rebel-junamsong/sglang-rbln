@@ -2,19 +2,15 @@
 """Feed a compiled graph the base of a strided device view, and slice inside the graph.
 
 rebel takes contiguous device inputs only, so a strided view (Gemma-4's
-``per_layer_inputs[:, :, i, :]``, one slice per decoder layer) used to reach the
-graph as an eager ``.contiguous()`` copy: one more eager device op per input and
-step, and a copy the runtime then fails to resolve in the next graph run
-(``RUN_INTERNAL (Invalid key_vaddr)``; see
-rebel_requests/eager_contiguous_device_view_invalid_key.md).
+``per_layer_inputs[:, :, i, :]``, one slice per decoder layer) reached the graph as an
+eager ``.contiguous()`` copy: one more eager device op per input and step, and a copy
+the runtime then failed to resolve in the next run (``RUN_INTERNAL (Invalid
+key_vaddr)``; see rebel_requests/eager_contiguous_device_view_invalid_key.md).
 
-When such a view is ``narrow``/``select`` slices of a contiguous base (its ``_base``,
-or under ``torch.inference_mode``, where views record none, its storage laid out by
-its strides), the graph's
-placeholder takes the base instead and rebuilds the view from the same slices
-(rebel lowers those; it does not lower ``as_strided``). The rebuild is checked to
-reproduce the view's shape, strides and offset exactly; any other view keeps the
-contiguous copy.
+When such a view is ``narrow``/``select`` slices of a contiguous base, the placeholder
+takes the base instead and rebuilds the view from those slices, which rebel lowers
+where it does not lower ``as_strided``. The rebuild must reproduce the view's shape,
+strides and offset exactly; any other view keeps the contiguous copy.
 """
 
 from __future__ import annotations

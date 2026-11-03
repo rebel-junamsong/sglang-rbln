@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import asyncio
 import json
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -212,6 +213,147 @@ def test_the_configured_length_is_what_the_cache_is_compiled_for(monkeypatch):
     assert (
         prompt_enhancement.cache_window(1025) == 1152
     )  # its own graphs, chunk-aligned
+
+
+def bare_enhancer(**attributes):
+    """A ModelPromptEnhancer without its checkpoint, for the settings around it."""
+    enhancer = object.__new__(prompt_enhancement.ModelPromptEnhancer)
+    for name, value in attributes.items():
+        setattr(enhancer, name, value)
+    return enhancer
+
+
+def test_the_system_prompt_comes_from_a_file_when_one_is_named(monkeypatch, tmp_path):
+    monkeypatch.delenv("SGLANG_RBLN_PROMPT_ENHANCER_SYSTEM_PROMPT", raising=False)
+    upstream_default = prompt_enhancement.ModelPromptEnhancer._system_prompt()
+    recipe = tmp_path / "system.txt"
+    recipe.write_text("Rewrite it the way this model was trained.\n")
+
+    monkeypatch.setenv("SGLANG_RBLN_PROMPT_ENHANCER_SYSTEM_PROMPT", str(recipe))
+
+    assert prompt_enhancement.ModelPromptEnhancer._system_prompt() == recipe.read_text()
+    assert upstream_default and upstream_default != recipe.read_text()
+
+
+@pytest.mark.parametrize(
+    ("variable", "argument", "value", "default"),
+    [
+        ("SGLANG_RBLN_PROMPT_ENHANCER_MAX_NEW_TOKENS", "max_new_tokens", "64", 512),
+        ("SGLANG_RBLN_PROMPT_ENHANCER_NO_REPEAT_NGRAM", "no_repeat_ngram", "5", 0),
+    ],
+)
+def test_the_decode_settings_reach_greedy_decode(
+    monkeypatch, variable, argument, value, default
+):
+    # they are read per request, so a running server picks up a change
+    seen = []
+    monkeypatch.setattr(
+        prompt_enhancement,
+        "greedy_decode",
+        lambda model, ids, **kwargs: seen.append(kwargs) or [7],
+    )
+    enhancer = bare_enhancer(
+        model=None,
+        step=None,
+        system_prompt="",
+        lock=threading.Lock(),
+        tokenizer=SimpleNamespace(
+            apply_chat_template=lambda *a, **k: {
+                "input_ids": torch.zeros((1, 3), dtype=torch.long)
+            },
+            decode=lambda tokens, **k: "a rewrite",
+        ),
+    )
+
+    monkeypatch.delenv(variable, raising=False)
+    enhancer.enhance("a fox", "video")
+    monkeypatch.setenv(variable, value)
+    enhancer.enhance("a fox", "video")
+
+    assert [kwargs[argument] for kwargs in seen] == [default, int(value)]
+
+
+def test_the_decode_step_compiles_to_one_device_function(
+    tmp_path, dummy_device, tiny_enhancer
+):
+    """The whole-graph default exists to make a step one graph; hold it to that.
+
+    Compiled layer by layer the same step is one device function per cache-owning
+    layer, with the embeddings, masks and rotary left on the host between them. This
+    compiles on a dummy device, which is enough to count what the compiler produced.
+
+    It counts the compiled step only: a host copy outside the traced region and a
+    graph break in ``greedy_decode`` both leave the count at 1 and pass here.
+    """
+    import rebel
+
+    window = 2 * prompt_enhancement.PREFILL_CHUNK
+    step = prompt_enhancement.WholeGraph(tiny_enhancer.get_decoder())
+    step.compile(
+        backend="rbln",
+        dynamic=False,
+        options={"mode": ["strict", "compile_only"], "cache_dir": str(tmp_path)},
+    )
+    cache = prompt_enhancement.window_cache(tiny_enhancer, window)
+    for layer in cache.layers:
+        layer.cumulative_length.fill_(1)
+
+    with torch.inference_mode():
+        step(
+            input_ids=torch.ones((1, 1), dtype=torch.long),
+            attention_mask=torch.ones((1, window), dtype=step.MASK_DTYPE),
+            past_key_values=cache,
+            use_cache=True,
+            cache_position=torch.tensor([1]),
+            position_ids=torch.tensor([[1]]),
+        )
+
+    stats = [
+        stat
+        for artifact in sorted(tmp_path.glob("*.rbln"))
+        for stat in rebel.RBLNCompiledModel.inspect(str(artifact))["subgraph"]["stats"]
+    ]
+    assert [stat["device_func_count"] for stat in stats] == [1], stats
+    host_ops = {
+        op
+        for stat in stats
+        for ops in stat["host_op_reason"].values()
+        for op in ops
+        if not op.startswith("args_")
+    }
+    assert host_ops == set(), host_ops
+
+
+def test_the_whole_graph_flag_picks_which_compile_runs(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        prompt_enhancement,
+        "WholeGraph",
+        lambda decoder: calls.append("whole") or decoder,
+    )
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "sglang_rbln.patches.stages.text_encoding",
+        SimpleNamespace(
+            compile_regions=lambda module: calls.append("regions") or 3,
+            traceable=lambda module: module,
+        ),
+    )
+    monkeypatch.setattr(
+        "sglang_rbln.compilation.backend.static_compile_kwargs", lambda module: {}
+    )
+    decoder = SimpleNamespace(compile=lambda **kwargs: None)
+    model = SimpleNamespace(
+        get_decoder=lambda: decoder,
+        get_output_embeddings=lambda: SimpleNamespace(compile=lambda **kwargs: None),
+    )
+
+    # the whole graph is the default now, so only "0" picks the per-layer path
+    for flag, expected in (("0", "regions"), ("1", "whole")):
+        calls.clear()
+        monkeypatch.setenv("SGLANG_RBLN_PROMPT_ENHANCER_WHOLE_GRAPH", flag)
+        bare_enhancer(model=model, step=decoder)._compile()
+        assert calls == [expected], flag
 
 
 @pytest.fixture

@@ -1,25 +1,18 @@
 # SPDX-License-Identifier: Apache-2.0
 """Serve ``enhance_prompt`` with the model's own prompt enhancer on the NPU.
 
-Upstream rewrites a prompt only through an external chat endpoint
-(``--prompt-enhancer-config``). Checkpoints that ship their rewrite model as a
-``prompt_enhancer/`` component (LTX-2.5: a Gemma-4 instruct model) are left without
-one. With ``SGLANG_RBLN_PROMPT_ENHANCER=1`` and no external endpoint configured, the
-request's ``enhance_prompt`` runs that component here instead: its decoder layers
-compile as one region on ``SGLANG_RBLN_COMPONENT_DEVICES["prompt_enhancer"]`` and it
-decodes greedily with a static KV cache, so the prefill and the decode step are one
-graph each.
+Upstream rewrites only through an external chat endpoint, so a checkpoint that ships
+its rewrite model as a ``prompt_enhancer/`` component (LTX-2.5: a Gemma-4 instruct
+model) gets no rewrite at all. With ``SGLANG_RBLN_PROMPT_ENHANCER=1`` and no endpoint
+configured, the request runs that component here, compiled on
+``SGLANG_RBLN_COMPONENT_DEVICES["prompt_enhancer"]`` and decoding greedily against a
+static KV cache. ``..._WHOLE_GRAPH=1`` compiles the decoder's own forward from the
+token ids rather than its layers region by region, putting embeddings, masks and
+rotary on the device too.
 
-``SGLANG_RBLN_PROMPT_ENHANCER_WHOLE_GRAPH=1`` compiles the decoder's own forward from
-the token ids instead of its layers region by region, so embeddings, masks and rotary
-run on the device too and a decode step is one graph with nothing eager between steps.
-
-The chat turn follows upstream's enhancer by default (its system prompt, the
-``{"task", "prompt"}`` JSON user turn, at most 512 new tokens). A model's own recipe is
-set with ``SGLANG_RBLN_PROMPT_ENHANCER_SYSTEM_PROMPT`` (a file),
-``SGLANG_RBLN_PROMPT_ENHANCER_USER_TEMPLATE`` (``{prompt}`` / ``{task}``),
-``SGLANG_RBLN_PROMPT_ENHANCER_MAX_NEW_TOKENS`` and
-``SGLANG_RBLN_PROMPT_ENHANCER_NO_REPEAT_NGRAM``.
+The chat turn follows upstream's enhancer unless ``..._SYSTEM_PROMPT`` (a file),
+``..._USER_TEMPLATE``, ``..._MAX_NEW_TOKENS`` or ``..._NO_REPEAT_NGRAM`` say otherwise;
+the README lists them in full.
 """
 
 from __future__ import annotations
@@ -53,13 +46,10 @@ PREFILL_CHUNK = 128
 class WholeGraph(torch.nn.Module):
     """The decoder's own forward, behind a boundary dtype the runtime can bind.
 
-    A device input is bound by converting its host dtype to the physical dtype the
-    compiler chose for it, and the runtime converts only the pairs it registers. The
-    physical form of an attention mask is a one-byte mask, which pairs with bf16 and
-    dlf16 and with no integer dtype, so an integer mask crossing the boundary fails the
-    bind (``IsDtypeConversionAvailable``). bf16 is the best-connected dtype, so the mask
-    crosses as bf16 and the cast back to the mask dtype the model expects is a graph op.
-    The model keeps its own dtypes; nothing outside it changes.
+    An attention mask's physical form is a one-byte mask, which pairs with bf16 and
+    dlf16 and with no integer dtype, so an integer mask fails the bind
+    (``IsDtypeConversionAvailable``). It crosses as bf16 and is cast back inside the
+    graph; the model keeps its own dtypes.
     """
 
     MASK_DTYPE = torch.bfloat16
@@ -86,16 +76,12 @@ def mask_dtype(step) -> torch.dtype:
 def window_cache(model, window: int):
     """A static KV layer of the whole window for every layer that owns its KV.
 
-    Sliding-window layers get the whole window as well: the attention mask, built from
-    ``config.sliding_window``, hides what lies outside their window, which is what
-    sliding attention means. ``StaticSlidingWindowLayer`` instead branches on a Python
-    int that grows every step, so a compiled decode step would recompile at every token.
+    Sliding-window layers get the whole window too; their mask hides what lies outside
+    it. ``StaticSlidingWindowLayer`` would branch on a Python int that grows each step,
+    recompiling the decode graph at every token.
 
-    Every cache tensor is allocated here, on the model's device and outside any graph,
-    so the graphs take the cache as an input they write back instead of creating it in
-    the prefill graph. The write itself is the layer's own ``index_copy_``: the compiler
-    lowers it to the device's batched row scatter (rebel_compiler 4aea7ee411), so the
-    step stays one graph without the plugin saying the write any other way.
+    Every cache tensor is allocated here, outside any graph, so the graphs take the
+    cache as an input they write back rather than creating it in the prefill graph.
     """
     text = model.config.get_text_config()
     owners = text.num_hidden_layers - (getattr(text, "num_kv_shared_layers", 0) or 0)
@@ -158,16 +144,13 @@ def greedy_decode(
 ) -> list[int]:
     """Greedy decoding with a static KV cache: one prefill shape, one decode shape.
 
-    Both shapes are a property of the configuration, not of the request: the prompt is
-    prefilled in fixed ``PREFILL_CHUNK`` chunks against a cache of
-    ``SGLANG_RBLN_PROMPT_ENHANCER_MAX_SEQ_LEN``, so prompts of every length run the same
-    two graphs. The prompt's pad tail is masked and overwritten by the decode steps.
-    ``step`` is the module they run, the decoder itself unless a ``WholeGraph`` was
-    compiled.
+    Both shapes belong to the configuration, not the request -- fixed ``PREFILL_CHUNK``
+    chunks against a cache of ``SGLANG_RBLN_PROMPT_ENHANCER_MAX_SEQ_LEN`` -- so prompts
+    of every length run the same two graphs. ``step`` is the module they run, the
+    decoder unless a ``WholeGraph`` was compiled.
 
-    Everything the step takes is built on the model's device and the mask is grown on a
-    host copy, so a device run has no eager op of its own between steps; the logits come
-    back to the host, where the sampling the step does not cover belongs.
+    Everything the step takes is built on the model's device and the mask grows on a
+    host copy, so a device run has no eager op of its own between steps.
     """
     step = model.get_decoder() if step is None else step
     head = model.get_output_embeddings()
