@@ -48,7 +48,7 @@ HOOK_TARGET = (
     ".maybe_enhance_prompt"
 )
 COMPONENT = "prompt_enhancer"
-WINDOW_BUCKET = 128
+PREFILL_CHUNK = 128
 
 
 class WholeGraph(torch.nn.Module):
@@ -137,6 +137,27 @@ def window_cache(model, window: int):
     return cache
 
 
+def cache_window(needed: int) -> int:
+    """The static cache length, one configured size for every request.
+
+    The cache length and the prefill chunk are the shapes the prefill and the decode
+    graph are compiled for, so holding them still is what keeps a server from compiling
+    a new pair of graphs for every prompt length it sees. A prompt that does not fit the
+    configured length still runs, on graphs of its own.
+    """
+    limit = envs.SGLANG_RBLN_PROMPT_ENHANCER_MAX_SEQ_LEN
+    if needed <= limit:
+        return limit
+    logger.warning(
+        "The prompt and its rewrite need %d tokens, past the %d of "
+        "SGLANG_RBLN_PROMPT_ENHANCER_MAX_SEQ_LEN; this request compiles graphs of its "
+        "own. Raise that setting to keep every request on one pair of graphs.",
+        needed,
+        limit,
+    )
+    return -(-needed // PREFILL_CHUNK) * PREFILL_CHUNK
+
+
 def _banned_by_ngram(history: list[int], size: int) -> list[int]:
     if size <= 0 or len(history) < size:
         return []
@@ -159,9 +180,12 @@ def greedy_decode(
 ) -> list[int]:
     """Greedy decoding with a static KV cache: one prefill shape, one decode shape.
 
-    The prompt is right-padded to a multiple of ``WINDOW_BUCKET`` for the prefill; the
-    pad tail is masked and overwritten by the decode steps. ``step`` is the module the
-    prefill and the decode run, the decoder itself unless a ``WholeGraph`` was compiled.
+    Both shapes are a property of the configuration, not of the request: the prompt is
+    prefilled in fixed ``PREFILL_CHUNK`` chunks against a cache of
+    ``SGLANG_RBLN_PROMPT_ENHANCER_MAX_SEQ_LEN``, so prompts of every length run the same
+    two graphs. The prompt's pad tail is masked and overwritten by the decode steps.
+    ``step`` is the module they run, the decoder itself unless a ``WholeGraph`` was
+    compiled.
 
     Everything the step takes is built on the model's device and the mask is grown on a
     host copy, so a device run has no eager op of its own between steps; the logits come
@@ -173,23 +197,28 @@ def greedy_decode(
     eos = model.generation_config.eos_token_id
     eos = set(eos if isinstance(eos, list) else [eos])
     prompt = input_ids.shape[1]
-    prefill = -(-prompt // WINDOW_BUCKET) * WINDOW_BUCKET
-    window = -(-(prompt + max_new_tokens) // WINDOW_BUCKET) * WINDOW_BUCKET
+    window = cache_window(prompt + max_new_tokens)
+    padded = -(-prompt // PREFILL_CHUNK) * PREFILL_CHUNK
     cache = window_cache(model, window)
     device = next(model.parameters()).device
-    ids = torch.zeros((1, prefill), dtype=torch.long)
+    ids = torch.zeros((1, padded), dtype=torch.long)
     ids[0, :prompt] = input_ids[0]
     host_mask = torch.zeros((1, window), dtype=mask_dtype(step))
     host_mask[0, :prompt] = 1
-    ids, mask = ids.to(device), host_mask.to(device)
-    hidden = step(
-        input_ids=ids,
-        attention_mask=mask[:, :prefill],
-        past_key_values=cache,
-        use_cache=True,
-        cache_position=torch.arange(prefill, device=device),
-        position_ids=torch.arange(prefill, device=device)[None],
-    ).last_hidden_state[:, prompt - 1 : prompt]
+    mask = host_mask.to(device)
+    for start in range(0, padded, PREFILL_CHUNK):
+        positions = torch.arange(start, start + PREFILL_CHUNK, device=device)
+        hidden = step(
+            # a chunk of its own, not a slice: a slice reaches the graph as its base,
+            # whose length would follow the prompt again
+            input_ids=ids[:, start : start + PREFILL_CHUNK].clone().to(device),
+            attention_mask=mask,
+            past_key_values=cache,
+            use_cache=True,
+            cache_position=positions,
+            position_ids=positions[None],
+        ).last_hidden_state
+    hidden = hidden[:, prompt - 1 - (padded - PREFILL_CHUNK)][:, None]
     for layer in cache.layers:
         layer.cumulative_length.fill_(prompt)
     history, tokens = input_ids[0].tolist(), []

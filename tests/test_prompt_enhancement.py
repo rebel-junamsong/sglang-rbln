@@ -169,6 +169,52 @@ def test_whole_graph_decode_matches_generate(tiny_enhancer):
     assert tokens == expected
 
 
+def recorded_shapes(model, prompt_tokens: int, monkeypatch) -> set:
+    """The shapes the step is called with for a prompt of `prompt_tokens`."""
+    shapes = set()
+    decoder = model.get_decoder()
+
+    def record(*args, **kwargs):
+        shapes.add(
+            (tuple(kwargs["input_ids"].shape), tuple(kwargs["attention_mask"].shape))
+        )
+        return decoder(*args, **kwargs)
+
+    input_ids = torch.randint(
+        1, 500, (1, prompt_tokens), generator=torch.Generator().manual_seed(2)
+    )
+    prompt_enhancement.greedy_decode(model, input_ids, max_new_tokens=8, step=record)
+    return shapes
+
+
+def test_the_graphs_do_not_follow_the_prompt_length(tiny_enhancer, monkeypatch):
+    # a server that compiled a graph per prompt length would pay the compile again for
+    # every new length it sees
+    monkeypatch.setenv("SGLANG_RBLN_PROMPT_ENHANCER_MAX_SEQ_LEN", "512")
+
+    short = recorded_shapes(tiny_enhancer, 20, monkeypatch)
+    long = recorded_shapes(tiny_enhancer, 300, monkeypatch)
+
+    assert short == long == {((1, 128), (1, 512)), ((1, 1), (1, 512))}
+
+
+def test_a_prompt_past_the_configured_length_still_runs(tiny_enhancer, monkeypatch):
+    monkeypatch.setenv("SGLANG_RBLN_PROMPT_ENHANCER_MAX_SEQ_LEN", "128")
+
+    shapes = recorded_shapes(tiny_enhancer, 200, monkeypatch)
+
+    assert shapes == {((1, 128), (1, 256)), ((1, 1), (1, 256))}
+
+
+def test_the_configured_length_is_what_the_cache_is_compiled_for(monkeypatch):
+    monkeypatch.setenv("SGLANG_RBLN_PROMPT_ENHANCER_MAX_SEQ_LEN", "1024")
+    assert prompt_enhancement.cache_window(900) == 1024
+    assert prompt_enhancement.cache_window(1024) == 1024
+    assert (
+        prompt_enhancement.cache_window(1025) == 1152
+    )  # its own graphs, chunk-aligned
+
+
 @pytest.fixture
 def served(monkeypatch, tmp_path):
     """A server whose model directory ships a prompt_enhancer/ component."""
