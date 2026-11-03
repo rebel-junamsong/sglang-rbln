@@ -14,13 +14,7 @@ HOOK_TARGET = (
 
 
 def compile_upsampler(stage, batch, server_args, *args, **kwargs):
-    """Compile the upsampler the first time the stage runs, and change nothing else.
-
-    Compiling is a setup step, not something that wraps the call, so it registers
-    BEFORE rather than AROUND: only one hook can wrap this stage's call, and that one
-    belongs to the detailing LoRA, which needs the stage-1 latent from around it
-    (see ltx_2/detailing.py). Returning None leaves the arguments as they are.
-    """
+    """BEFORE, not AROUND: the stage's one AROUND hook belongs to detailing."""
     upsampler = stage.spatial_upsampler
     if (
         envs.SGLANG_RBLN_UPSAMPLER_ON_NPU
