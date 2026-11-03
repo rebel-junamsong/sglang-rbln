@@ -10,12 +10,12 @@ from typing import Any
 
 import torch
 from torch.overrides import TorchFunctionMode, _pop_mode_temporarily
-from torch.utils._pytree import tree_map
+from torch.utils._pytree import tree_flatten, tree_map, tree_unflatten
 from torch.utils.weak import WeakIdKeyDictionary
 
 from sglang_rbln import envs
 from sglang_rbln.compilation import placement
-from sglang_rbln.compilation.backend import COMPILE_BACKEND_NAME
+from sglang_rbln.compilation.backend import COMPILE_BACKEND_NAME, static_compile_kwargs
 
 NPUS_PER_DEVICE_ENV = "RBLN_NPUS_PER_DEVICE"
 DEVICE_MAP_ENV = "RBLN_DEVICE_MAP"
@@ -37,6 +37,10 @@ _TENSOR_QUERIES = frozenset(
 
 
 _DESCRIPTORS = frozenset({"__get__", "__set__"})
+# What rebel leaves on a compiled graph's device output: the view it wrote and its
+# device config (rebel.core.io_placement).
+PRODUCER_VIEW = "_rbln_producer_view"
+PRODUCER_CONFIG = "_rbln_producer_config"
 
 
 def device_groups() -> list[tuple[int, ...]]:
@@ -91,12 +95,43 @@ def logical_device_of(module: torch.nn.Module) -> int:
     )
 
 
-def copy_across_devices(tensor: torch.Tensor, device: torch.device) -> torch.Tensor:
-    """`tensor` on `device`, copied on the device between the two NPU sets."""
+def npus_of(device: torch.device) -> tuple[int, ...]:
+    from torch_rbln._internal.rsd_utils import get_physical_device_ids
+
+    return tuple(get_physical_device_ids(device.index or 0) or ())
+
+
+def layout_to_keep(tensor: torch.Tensor, device: torch.device, read_as: str | None):
+    """The device config to write `tensor` in on `device`, or None for a dense copy.
+
+    The layout a graph wrote can be kept on another NPU set of the same size: a config
+    names its buffers by node within the set. It is kept only while the graph that reads
+    it there reads that layout, the one it first ran with (`read_as`), which it was
+    compiled against. Another layout comes over dense, and the runtime lays it out.
+    """
+    config = getattr(tensor, PRODUCER_CONFIG, None)
+    if config is None or not tensor.is_contiguous():
+        return None
+    if len(npus_of(tensor.device)) != len(npus_of(device)):
+        return None
+    if read_as is not None and read_as != config.json:
+        return None
+    return config
+
+
+def copy_across_devices(
+    tensor: torch.Tensor, device: torch.device, config=None
+) -> torch.Tensor:
+    """`tensor` on `device`, copied on the device between the two NPU sets: in the
+    layout `config` describes, which it keeps for the next graph, or else dense."""
     from rebel._C import vmem
 
-    source = tensor.contiguous()
+    source = tensor if config is not None else tensor.contiguous()
     copied = torch.empty(source.shape, dtype=source.dtype, device=device)
+    if config is not None:
+        vmem.set_device_alloc(copied.data_ptr(), config)
+        setattr(copied, PRODUCER_VIEW, getattr(source, PRODUCER_VIEW))
+        setattr(copied, PRODUCER_CONFIG, config)
     if source.numel():
         vmem.copy(
             source.data_ptr(), copied.data_ptr(), source.numel() * source.element_size()
@@ -108,12 +143,29 @@ def _is_resident(value: Any) -> bool:
     return isinstance(value, torch.Tensor) and value.device.type == "rbln"
 
 
+def resident_module(
+    cache: dict, key: tuple, build: Callable[[], torch.nn.Module], tensors, devices=None
+) -> torch.nn.Module:
+    """`build()`, compiled for `devices` and cached under `key` when any of `tensors`
+    lives on the NPUs, so it runs where they are; on the host, `build()` to run
+    eagerly."""
+    if not any(map(_is_resident, tensors)):
+        return build()
+    if key not in cache:
+        module = build()
+        if devices:
+            placement.place(module, devices)
+        module.compile(**static_compile_kwargs(module))
+        cache[key] = module
+    return cache[key]
+
+
 class _Transfers:
     def __init__(self) -> None:
         self.moved: dict[torch.device, WeakIdKeyDictionary] = {}
         self.downloads: WeakIdKeyDictionary = WeakIdKeyDictionary()
 
-    def to(self, value: Any, device: torch.device) -> Any:
+    def to(self, value: Any, device: torch.device, read_as: str | None = None) -> Any:
         if not isinstance(value, torch.Tensor) or value.device == device:
             return value
         if value.device.type not in ("cpu", "rbln"):
@@ -123,7 +175,8 @@ class _Transfers:
         if cached is not None and cached[0] == value._version:
             return cached[1]
         if value.device.type == "rbln":
-            resident = copy_across_devices(value, device)
+            config = layout_to_keep(value, device, read_as)
+            resident = copy_across_devices(value, device, config)
         else:
             resident = value.to(device)
         moved[value] = (value._version, resident)
@@ -165,6 +218,9 @@ def _outside_boundary() -> contextlib.AbstractContextManager:
 
 def resident_call(module: torch.nn.Module, compiled: Callable) -> Callable:
     device: torch.device | None = None
+    # The layout each input from another NPU set first came in, which the graph was
+    # compiled against.
+    read_as: dict[int, str] = {}
 
     @functools.wraps(compiled)
     def run(*args, **kwargs):
@@ -173,9 +229,13 @@ def resident_call(module: torch.nn.Module, compiled: Callable) -> Callable:
             if device is None:
                 device = torch.device("rbln", logical_device_of(module))
                 module.to(device)
-            args, kwargs = tree_map(
-                lambda value: _transfers.to(value, device), (args, kwargs)
-            )
+            leaves, spec = tree_flatten((args, kwargs))
+            for index, leaf in enumerate(leaves):
+                config = getattr(leaf, PRODUCER_CONFIG, None)
+                if config is not None and leaf.device != device:
+                    read_as.setdefault(index, config.json)
+                leaves[index] = _transfers.to(leaf, device, read_as.get(index))
+            args, kwargs = tree_unflatten(leaves, spec)
             return compiled(*args, **kwargs)
 
     return run

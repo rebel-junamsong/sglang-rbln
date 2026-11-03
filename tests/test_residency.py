@@ -260,3 +260,41 @@ def test_a_resident_component_survives_the_manager_move(monkeypatch, hooked):
     else:
         strategies._module_to_local_device(module)
     assert (module.weight.device.type == "rbln") is hooked
+
+
+SHARDED_ROWS = '{"on_device": {"allocs": [{"node_id": 0}, {"node_id": 1}], "axis": 0}}'
+SHARDED_COLS = '{"on_device": {"allocs": [{"node_id": 0}, {"node_id": 1}], "axis": 1}}'
+
+
+@pytest.mark.parametrize(
+    ("destination_npus", "config", "read_as", "kept"),
+    [
+        (4, SHARDED_ROWS, None, True),
+        (4, SHARDED_ROWS, SHARDED_ROWS, True),
+        (4, SHARDED_ROWS, SHARDED_COLS, False),
+        (2, SHARDED_ROWS, None, False),
+        (4, None, None, False),
+    ],
+    ids=[
+        "first-read",
+        "same-layout",
+        "other-shard-axis",
+        "other-set-size",
+        "no-config",
+    ],
+)
+def test_a_cross_set_copy_keeps_only_a_layout_its_reader_reads(
+    monkeypatch, destination_npus, config, read_as, kept
+):
+    """A layout crosses NPU sets only when the destination set is as large and the graph
+    reading it there reads that layout; anything else comes over dense, with no tags,
+    so no graph ever reads a buffer as a layout it does not have."""
+    sizes = {0: 4, 1: destination_npus}
+    monkeypatch.setattr(
+        residency, "npus_of", lambda device: tuple(range(sizes[device.index or 0]))
+    )
+    tensor = torch.ones(2, 2)
+    if config is not None:
+        setattr(tensor, residency.PRODUCER_CONFIG, types.SimpleNamespace(json=config))
+    kept_config = residency.layout_to_keep(tensor, torch.device("cpu", 1), read_as)
+    assert (kept_config is not None) is kept

@@ -20,8 +20,7 @@ from diffusers.models.autoencoders.vae import DecoderOutput
 from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry, HookType
 from torch import nn
 
-from sglang_rbln.compilation import placement
-from sglang_rbln.compilation.backend import static_compile_kwargs
+from sglang_rbln.compilation import placement, residency
 
 VAE = "sglang.multimodal_gen.runtime.models.vaes.ltx_2_vae.AutoencoderKLLTX2Video"
 TILED_DECODE = f"{VAE}.tiled_decode"
@@ -108,16 +107,13 @@ def _resident(value: Any) -> bool:
 
 def _assembly(vae, key: tuple, build, *tensors: torch.Tensor) -> nn.Module:
     """``build()``, compiled for the decoder's NPUs when the tensors live there."""
-    if not all(map(_resident, tensors)):
-        return build()
-    assemblies: dict[tuple, nn.Module] = vae.__dict__.setdefault(ASSEMBLIES, {})
-    if key not in assemblies:
-        module = build()
-        if devices := placement.devices_of(vae.decoder):
-            placement.place(module, devices)
-        module.compile(**static_compile_kwargs(module))
-        assemblies[key] = module
-    return assemblies[key]
+    return residency.resident_module(
+        vae.__dict__.setdefault(ASSEMBLIES, {}),
+        key,
+        build,
+        tensors,
+        placement.devices_of(vae.decoder),
+    )
 
 
 def tiled_decode(self, z, temb, causal=None, return_dict=True):
