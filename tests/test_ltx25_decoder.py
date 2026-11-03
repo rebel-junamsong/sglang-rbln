@@ -221,7 +221,7 @@ def test_diffusion_decoder_compiles_on_its_devices(
     for option in stages:
         assert {key: option.get(key) for key in stage_options} == stage_options
     assert len({id(option["compile_context"]) for option in stages}) == 1
-    # Each tile phase once per device, on that device alone, in its own context.
+    # Each tile phase once per device, on that device alone, in the stages' context.
     assert getattr(diffusion_decoder, tile_ranks.TILE_DEVICES) == tile_devices
     tiles = [kwargs["options"] for _, kwargs in torch_compiled]
     assert len(tiles) == len(decoding_av.DIFFUSION_DECODER_GRAPHS) * len(tile_devices)
@@ -229,13 +229,30 @@ def test_diffusion_decoder_compiles_on_its_devices(
         dispatch = getattr(diffusion_decoder.decoder, phase)
         assert isinstance(dispatch, tile_ranks.RankDispatch)
         assert len(dispatch.compiled) == len(tile_devices)
+    assert all(option["num_devices"] == 1 for option in tiles)
+    assert sorted({option["device"] for option in tiles}) == list(tile_devices)
+    contexts = {id(option["compile_context"]) for option in stages + tiles}
+    assert len(contexts) == 1
+
+
+def test_tile_ranks_without_the_cache_keep_a_context_each(
+    stage, compiled, torch_compiled, diffusion_decoder, monkeypatch
+):
+    monkeypatch.setenv("SGLANG_RBLN_COMPILE_DIFFUSION_DECODER", "1")
+    monkeypatch.setenv("SGLANG_RBLN_NUM_DEVICES", "4")
+    monkeypatch.setenv("SGLANG_RBLN_DISABLE_COMPILE_CACHE", "1")
+    stage.diffusion_decoder = diffusion_decoder
+    batch = SimpleNamespace(use_diffusion_decoder=True)
+    server_args = SimpleNamespace(enable_torch_compile=True)
+    decoding_av.compile_video_decoder(decode_video, stage, batch, server_args)
     by_device = {}
-    for option in tiles:
-        assert option["num_devices"] == 1
-        by_device.setdefault(option["device"], set()).add(id(option["compile_context"]))
-    assert sorted(by_device) == list(tile_devices)
+    for _, kwargs in torch_compiled:
+        options = kwargs["options"]
+        context = id(options["compile_context"])
+        by_device.setdefault(options["device"], set()).add(context)
+    assert sorted(by_device) == [0, 1, 2, 3]
     assert all(len(contexts) == 1 for contexts in by_device.values())
-    assert len({next(iter(c)) for c in by_device.values()}) == len(tile_devices)
+    assert len(set().union(*by_device.values())) == 4
 
 
 def test_compiles_the_diffusion_decoder_once(

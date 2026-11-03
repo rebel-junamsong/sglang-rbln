@@ -52,11 +52,16 @@ def decoder_devices(model) -> tuple[int, ...]:
 
 
 def on_device(compile_kwargs: dict, device: int) -> dict:
-    options = compile_kwargs["options"] | {
-        "num_devices": 1,
-        "device": device,
-        "compile_context": device_set_context((device,)),
-    }
+    """The compile on one device of the set.
+
+    With the compile cache, every rank stays in the set's weight-sharing context: each
+    tile graph compiles once and its weight pool is brought up on each rank's device.
+    Without it rebel brings a pool up only where the graph compiled, so each device
+    keeps a context of its own.
+    """
+    options = compile_kwargs["options"] | {"num_devices": 1, "device": device}
+    if "cache_dir" not in options:
+        options["compile_context"] = device_set_context((device,))
     return compile_kwargs | {"options": options}
 
 
@@ -65,8 +70,9 @@ def compile_diffusion_decoder(model) -> None:
 
     Stages 1-3 compile on the whole device set, one region per stage
     ModuleList. The stage-4/5 tiles follow upstream's decode-parallel tiling:
-    each NPU of the set is a rank (ltx_2_tile_ranks) whose tile graphs are
-    compiled for that NPU alone, with the decoder weights resident there.
+    each NPU of the set is a rank (ltx_2_tile_ranks) whose tile graphs run on
+    that NPU alone, with the decoder weights resident there; the set's one
+    context compiles each tile graph once for all ranks.
     """
     compile_kwargs = static_compile_kwargs(model)
     devices = decoder_devices(model)
