@@ -86,6 +86,17 @@ class RegisterStep(nn.Module):
         return keep * padded + (1 - flipped) * registers
 
 
+class Normalize(nn.Module):
+    """The connector's own output norm, as one graph."""
+
+    def __init__(self, norm: nn.Module) -> None:
+        super().__init__()
+        self.norm = norm
+
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        return self.norm(hidden_states)
+
+
 def gemma_postprocess(postprocess, outputs, text_inputs, pipeline_config=None):
     hidden_states = getattr(outputs, "hidden_states", None)
     if hidden_states is None:
@@ -164,8 +175,14 @@ def connector_forward(
         hidden_states = block(
             hidden_states, attention_mask=attention_mask, rotary_emb=rotary_emb
         )
-    hidden_states = self.norm_out(hidden_states)
-    return hidden_states, attention_mask
+    norm = residency.resident_module(
+        COMPILED,
+        ("norm_out", id(self), _signature(hidden_states)),
+        lambda: Normalize(self.norm_out),
+        (hidden_states,),
+        placement.devices_of(self),
+    )
+    return norm(hidden_states), attention_mask
 
 
 TARGETS = {

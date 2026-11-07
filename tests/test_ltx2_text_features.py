@@ -97,6 +97,31 @@ def test_register_step_matches_upstream_bit_for_bit(on_the_npus, dtype, mask):
         assert torch.equal(got, want)
 
 
+def test_the_output_norm_runs_as_a_module_on_the_npus(monkeypatch):
+    built = []
+
+    def resident_module(cache, key, build, tensors, devices=None):
+        module = build()
+        built.append((key[0], type(module).__name__))
+        return module
+
+    monkeypatch.setattr(residency, "_is_resident", lambda value: True)
+    monkeypatch.setattr(residency, "resident_module", resident_module)
+    torch.manual_seed(0)
+    connector = LTX2ConnectorTransformer1d(
+        num_attention_heads=2,
+        attention_head_dim=16,
+        num_layers=1,
+        num_learnable_registers=8,
+    )
+    additive = torch.zeros(1, LENGTH)
+    with torch.no_grad():
+        features.connector_forward(
+            FORWARD, connector, torch.randn(1, LENGTH, 32), additive
+        )
+    assert ("norm_out", "Normalize") in built
+
+
 def test_host_inputs_take_upstream_and_compile_nothing(monkeypatch):
     def compile_called(*args, **kwargs):
         raise AssertionError("host inputs must not compile a module")
