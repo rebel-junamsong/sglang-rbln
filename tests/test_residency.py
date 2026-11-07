@@ -356,3 +356,18 @@ def test_a_stage_with_no_crossings_reports_none(monkeypatch, caplog):
     with caplog.at_level("INFO", logger=residency.__name__):
         residency.stage_on_host_boundary(lambda stage: torch.ones(2) * 2, _Stage(None))
     assert "rbln crossings in _Stage: none" in caplog.text
+
+
+@pytest.mark.device_mode
+def test_casting_a_resident_module_downloads_no_parameter():
+    # Upstream casts the VAE around each decode: it brought the whole decoder down
+    # (776.6 MiB) to compare tensor types.
+    module = nn.Linear(8, 8).to("rbln:0")
+
+    def cast():
+        module.to(torch.float32)
+        return residency.crossings.of_stage("_Stage")
+
+    seen = residency.stage_on_host_boundary(lambda stage: stage.work(), _Stage(cast))
+    assert seen == {}
+    assert module.weight.device.type == "rbln"

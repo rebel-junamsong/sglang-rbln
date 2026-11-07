@@ -41,7 +41,10 @@ _TENSOR_QUERIES = frozenset(
 )
 
 
-_DESCRIPTORS = frozenset({"__get__", "__set__"})
+# Matched by name, as dynamo traces this check: Module._apply asks the type check of
+# every parameter it casts or moves, and it compares the two tensors' types without
+# reading any data.
+_PASSED_BY_NAME = frozenset({"__get__", "__set__", "_has_compatible_shallow_copy_type"})
 # What rebel leaves on a compiled graph's device output: the view it wrote and its
 # device config (rebel.core.io_placement).
 PRODUCER_VIEW = "_rbln_producer_view"
@@ -258,7 +261,10 @@ _transfers = _Transfers()
 class HostBoundary(TorchFunctionMode):
     def __torch_function__(self, func, types, args=(), kwargs=None):
         kwargs = kwargs or {}
-        if func in _TENSOR_QUERIES or getattr(func, "__name__", None) in _DESCRIPTORS:
+        if (
+            func in _TENSOR_QUERIES
+            or getattr(func, "__name__", None) in _PASSED_BY_NAME
+        ):
             return func(*args, **kwargs)
         flat = (*args, *kwargs.values())
         if any(
