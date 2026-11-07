@@ -77,3 +77,4 @@ def register() -> None:
         residency.register()
         ltx_2_vae_assembly.register()
         ltx_2_text_features.register()
+        upsampling.register_resident()

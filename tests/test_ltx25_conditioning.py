@@ -176,6 +176,8 @@ def test_compiles_the_upsampler_once_on_its_device_set(
 ):
     # beside the text encoder: the DiT's set has no room beside both DiT shapes
     monkeypatch.setenv("SGLANG_RBLN_NUM_DEVICES", "4")
+    # with resident regions it compiles inside its latent graph instead
+    monkeypatch.setenv("SGLANG_RBLN_EXECUTION_MODE", "host")
     monkeypatch.setattr(placement, "text_encoder_devices", lambda: text_encoder)
     if placed:
         placement.place(upsample_stage.spatial_upsampler, placed)
