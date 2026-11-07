@@ -11,7 +11,11 @@ from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry, HookTy
 
 from sglang_rbln import envs
 from sglang_rbln.compilation import placement, regions, tiling
-from sglang_rbln.compilation.backend import device_set_context, static_compile_kwargs
+from sglang_rbln.compilation.backend import (
+    device_set_context,
+    release_graphs,
+    static_compile_kwargs,
+)
 from sglang_rbln.patches.models import ltx_2_tile_ranks
 from sglang_rbln.patches.stages.ltx_2 import vocoder
 
@@ -24,6 +28,9 @@ HOOK_TARGET = (
 DIFFUSION_DECODE_TARGET = (
     "sglang.multimodal_gen.runtime.pipelines_core.stages.model_specific_stages"
     ".ltx_2.decoding_av.LTX2AVDecodingStage._decode_with_diffusion_decoder"
+)
+DECODE_TARGET = (
+    "sglang.multimodal_gen.runtime.models.vaes.ltx_2_vae.AutoencoderKLLTX2Video.decode"
 )
 COMPILED = "_rbln_decoder_compiled"
 DIFFUSION_DECODER_GRAPHS = ("forward_stage_4", "forward_diffusion_step")
@@ -144,14 +151,18 @@ def compile_video_decoder(forward, stage, batch, server_args, *args, **kwargs):
     return forward(stage, batch, server_args, *args, **kwargs)
 
 
-def decode_within_memory(forward, stage, batch, server_args, *args, **kwargs):
-    """Retry the decode on smaller tiles when its graph does not fit.
+def decode_within_memory(decode, vae, *args, **kwargs):
+    """Retry the VAE decode on smaller tiles when a tile's graph does not fit.
 
-    One tile is one graph, so a decoder cannot be split like a block region;
-    the tile size is its knob.
+    One tile is one graph, so a decoder cannot be split like a block region; the
+    tile size is its knob. Only the VAE decode retries: another graph of the stage
+    that does not fit has nothing to gain from smaller tiles. Before a retry the
+    given-up size's graphs leave the device.
     """
     return tiling.with_smaller_tiles(
-        lambda: forward(stage, batch, server_args, *args, **kwargs), stage.vae
+        lambda: decode(vae, *args, **kwargs),
+        vae,
+        lambda: release_graphs(vae.decoder),
     )
 
 
@@ -160,9 +171,7 @@ def compile_decoders(forward, stage, batch, server_args):
         vocoder.compile_audio,
         functools.partial(vocoder.compile_vocoder, forward),
     )
-    return compile_video_decoder(
-        functools.partial(decode_within_memory, audio), stage, batch, server_args
-    )
+    return compile_video_decoder(audio, stage, batch, server_args)
 
 
 def decode_in_decoder_dtype(decode, stage, decoder, latents, batch, server_args):
@@ -178,7 +187,8 @@ def decode_in_decoder_dtype(decode, stage, decoder, latents, batch, server_args)
 
 def register() -> tuple[str, ...]:
     HookRegistry.register(HOOK_TARGET, compile_decoders, HookType.AROUND)
+    HookRegistry.register(DECODE_TARGET, decode_within_memory, HookType.AROUND)
     HookRegistry.register(
         DIFFUSION_DECODE_TARGET, decode_in_decoder_dtype, HookType.AROUND
     )
-    return HOOK_TARGET, DIFFUSION_DECODE_TARGET
+    return HOOK_TARGET, DECODE_TARGET, DIFFUSION_DECODE_TARGET

@@ -74,11 +74,18 @@ def shrink_tiles(module: Any, error: BaseException) -> bool:
     return True
 
 
-def with_smaller_tiles(call: Callable[[], Any], module: Any) -> Any:
-    """Run `call`, shrinking `module`'s tiles while they do not fit the device."""
+def with_smaller_tiles(
+    call: Callable[[], Any], module: Any, release: Callable[[], None] = lambda: None
+) -> Any:
+    """Run `call`, shrinking `module`'s tiles while they do not fit the device.
+
+    `release` drops what the given-up tile size left on the device (its graphs'
+    runtimes) before the smaller size compiles beside it.
+    """
     while True:
         try:
             return call()
         except Exception as error:
             if not _does_not_fit(error) or not shrink_tiles(module, error):
                 raise
+            release()

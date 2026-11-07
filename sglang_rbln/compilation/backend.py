@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import functools
+import gc
 import itertools
 import logging
 import os
@@ -95,6 +96,17 @@ def static_compile_kwargs(module: torch.nn.Module) -> dict[str, Any]:
 
 
 COMPILED = "_rbln_compiled"
+
+
+def release_graphs(module: torch.nn.Module) -> None:
+    """Drop the graphs compiled for `module`'s forward, so the device memory their
+    runtimes hold is freed; its next call compiles again, from the artifact cache.
+
+    The graphs are cached on the forward of `module`'s class, so every instance of
+    that class loses its graphs too.
+    """
+    torch._dynamo.eval_frame.remove_from_cache(type(module).forward)
+    gc.collect()
 
 
 def compile_once(module: torch.nn.Module, what: str, compile_kwargs: dict) -> None:

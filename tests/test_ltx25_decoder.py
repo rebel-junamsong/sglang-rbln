@@ -45,9 +45,15 @@ def decode_video(stage, batch, server_args, on_frames=None):
 
 def test_registers_around_the_video_decode():
     targets = decoding_av.register()
-    assert targets == (decoding_av.HOOK_TARGET, decoding_av.DIFFUSION_DECODE_TARGET)
+    assert targets == (
+        decoding_av.HOOK_TARGET,
+        decoding_av.DECODE_TARGET,
+        decoding_av.DIFFUSION_DECODE_TARGET,
+    )
     hooks = [hook for _, hook, _ in HookRegistry._hooks[decoding_av.HOOK_TARGET]]
     assert decoding_av.compile_decoders in hooks
+    hooks = [hook for _, hook, _ in HookRegistry._hooks[decoding_av.DECODE_TARGET]]
+    assert decoding_av.decode_within_memory in hooks
     hooks = [
         hook for _, hook, _ in HookRegistry._hooks[decoding_av.DIFFUSION_DECODE_TARGET]
     ]
@@ -338,3 +344,85 @@ def test_video_decoder_runs_on_the_npu(caplog, monkeypatch, tmp_path):
     assert output.shape == reference.shape == (1, 3, 9, 64, 96)
     error = (output.float() - reference.float()).abs().mean() / reference.abs().mean()
     assert error < 2e-2
+
+
+def test_another_graph_that_does_not_fit_leaves_the_tiles_alone(stage):
+    # The vocoder did not fit beside the DiT; the stage-wide retry shrank the VAE
+    # tiles three times over, each time compiling another tile size, and failed.
+    stage.vae.__dict__.update(
+        tile_sample_min_height=512,
+        tile_sample_min_width=512,
+        tile_sample_stride_height=448,
+        tile_sample_stride_width=448,
+    )
+    stage.vae.enable_tiling = lambda **sizes: pytest.fail("tiles shrank")
+    stage.vocoder = None
+
+    def decode(stage, batch, server_args):
+        raise regions.RegionDoesNotFit([941 << 20], [897 << 20])
+
+    batch = SimpleNamespace(use_diffusion_decoder=False)
+    server_args = SimpleNamespace(enable_torch_compile=False)
+    with pytest.raises(regions.RegionDoesNotFit):
+        decoding_av.compile_decoders(decode, stage, batch, server_args)
+
+
+class TiledDecoder(nn.Module):
+    def forward(self, tile):
+        return tile * 2
+
+
+def test_vae_decode_retries_on_smaller_tiles_without_the_old_graphs(monkeypatch):
+    # Each given-up tile size left its graphs' runtimes on the device.
+    released = []
+    monkeypatch.setattr(decoding_av, "release_graphs", released.append)
+    vae = SimpleNamespace(
+        decoder=TiledDecoder(),
+        tile_sample_min_height=512,
+        tile_sample_min_width=512,
+        tile_sample_stride_height=448,
+        tile_sample_stride_width=448,
+    )
+    vae.enable_tiling = lambda **sizes: vae.__dict__.update(sizes)
+    tiles = []
+
+    def decode(vae, latents):
+        tiles.append(vae.tile_sample_min_height)
+        if vae.tile_sample_min_height > 256:
+            raise regions.RegionDoesNotFit([400 << 20], [100 << 20])
+        return "video"
+
+    assert decoding_av.decode_within_memory(decode, vae, "latents") == "video"
+    assert tiles == [512, 256]
+    assert released == [vae.decoder]
+
+
+class Released(nn.Module):
+    def forward(self, x):
+        return x + 1
+
+
+class Kept(nn.Module):
+    def forward(self, x):
+        return x - 1
+
+
+def test_released_graphs_leave_the_cache_and_no_others():
+    from torch._dynamo.eval_frame import _debug_get_cache_entry_list as cached
+
+    compiles = []
+
+    def backend(graph, example_inputs):
+        compiles.append(graph.code)
+        return graph
+
+    released, kept = Released(), Kept()
+    for module in (released, kept):
+        module.compile(backend=backend, dynamic=False)
+        for rows in (2, 3):
+            module(torch.randn(rows, 4))
+    compilation.release_graphs(released)
+    assert len(cached(Released.forward.__code__)) == 0  # its runtimes go with them
+    assert len(cached(Kept.forward.__code__)) == 2
+    assert torch.equal(released(torch.zeros(2, 4)), torch.ones(2, 4))
+    assert len(compiles) == 5  # compiled again, from the artifact cache on a device

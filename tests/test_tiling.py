@@ -80,8 +80,11 @@ def test_retries_the_call_on_smaller_tiles_until_it_fits():
             raise does_not_fit([400 * MiB], [100 * MiB])
         return "decoded"
 
-    assert tiling.with_smaller_tiles(call, coder) == "decoded"
+    released = []
+    release = lambda: released.append(coder.tile_sample_min_height)  # noqa: E731
+    assert tiling.with_smaller_tiles(call, coder, release) == "decoded"
     assert attempts == [512, 256]
+    assert released == [256]  # once, after shrinking and before the retry
 
 
 def test_gives_up_when_the_tile_cannot_shrink_further():
