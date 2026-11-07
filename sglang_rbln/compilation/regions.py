@@ -178,7 +178,8 @@ def _pool_key(compiled_model: Any, nodes: list[int]) -> tuple:
 
 
 def check_fits(compiled_model: Any, device: Any = None) -> None:
-    """Raise RegionDoesNotFit unless the runtime fits the free memory of its NPUs.
+    """Raise RegionDoesNotFit unless the runtime fits the room on its NPUs: their free
+    memory, and what evicting idle graphs' programs would free.
 
     In a sharing session the runtime's own total leaves out the pooled buffers. A
     pooled buffer the runtime needs larger than the session's pool holds grows: the
@@ -195,8 +196,15 @@ def check_fits(compiled_model: Any, device: Any = None) -> None:
             pool = held.get(key, [0] * len(nodes))
             for node, size in enumerate(sizes):
                 needed[node] += max(0, size - pool[node])
-    infos = [rebel.get_device_memory_info(index) for index in nodes]
-    free = [info.free - info.granularity for info in infos]
+    # Loading a graph evicts the programs of graphs not running now; they reload on
+    # their next run. Wheels before the query count none.
+    evictable = getattr(rebel, "get_evictable_memory", lambda index: 0)
+    free = [
+        info.free - info.granularity + evictable(index)
+        for index, info in zip(
+            nodes, map(rebel.get_device_memory_info, nodes), strict=True
+        )
+    ]
     if any(need > room for need, room in zip(needed, free, strict=True)):
         raise RegionDoesNotFit(needed, free)
 

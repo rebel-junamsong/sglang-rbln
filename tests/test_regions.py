@@ -696,3 +696,24 @@ def test_a_region_within_the_shared_pool_needs_no_more(device_memory, no_pools):
     with pytest.raises(regions.RegionDoesNotFit):  # another session's pool is empty
         create_runtime(SessionRegion(BLOCK_BYTES, 5 * BLOCK_BYTES, "t"), device=0)
 
+
+def test_idle_graphs_programs_make_room_once_evictable(device_memory, monkeypatch):
+    # Compared with free memory alone, a region that evicting stage 1's programs
+    # would fit was split: 3 recompiles of 8-15 min each, and nothing evicted.
+    import rebel
+
+    free, _ = device_memory
+    free["bytes"] = 2 * BLOCK_BYTES + BLOCK_BYTES // 10
+    region = SimpleNamespace(get_alloc_per_node=lambda: [5 * BLOCK_BYTES])
+    monkeypatch.delattr(rebel, "get_evictable_memory", raising=False)
+    with pytest.raises(regions.RegionDoesNotFit):  # a wheel without the query
+        regions.check_fits(region, 0)
+    asked = []
+    monkeypatch.setattr(
+        rebel,
+        "get_evictable_memory",
+        lambda index: asked.append(index) or 3 * BLOCK_BYTES,
+        raising=False,
+    )
+    regions.check_fits(region, 0)
+    assert asked == [0]
