@@ -11,7 +11,7 @@ import torch
 from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry
 from torch import nn
 
-from sglang_rbln.compilation import placement, regions, shapes
+from sglang_rbln.compilation import placement, regions, residency, shapes
 
 pytestmark = pytest.mark.usefixtures("rbln_platform")
 
@@ -590,3 +590,27 @@ def test_a_region_runs_on_the_npus_of_its_blocks():
         )
         is None
     )
+
+
+@pytest.mark.device_mode
+def test_kept_outputs_stay_on_the_region_npus(monkeypatch, dummy_device):
+    # The text encoder keeps every layer's output; a host placeholder made each one
+    # cross to the host once the region ran, and back up for the connector.
+    monkeypatch.setenv("SGLANG_RBLN_EXECUTION_MODE", "device")
+    monkeypatch.setenv("SGLANG_RBLN_NUM_DEVICES", "2")
+
+    def backend(graph, example_inputs):
+        return lambda *args: [out.to("rbln:0") for out in graph(*args)]
+
+    model = RecordingModel(depth=4).eval()
+    regions.group_blocks(
+        list(model.blocks), None, {"backend": backend, "dynamic": False}, True
+    )
+    with torch.no_grad():
+        model(torch.randn(2, 8))  # block 0 runs eagerly on the host while learning
+        stage = residency.crossings.stage.get()
+        residency.crossings.clear(stage)
+        with residency.HostBoundary():
+            seen = model(torch.randn(2, 8))
+    assert [out.device.type for out in seen] == ["rbln"] * 4
+    assert residency.crossings.of_stage(stage) == {}

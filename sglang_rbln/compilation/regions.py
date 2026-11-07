@@ -17,7 +17,7 @@ import torch
 from torch import nn
 from torch.utils._pytree import tree_leaves, tree_map
 
-from sglang_rbln import envs
+from sglang_rbln import device, envs
 from sglang_rbln.compilation import placement, shapes
 
 logger = logging.getLogger(__name__)
@@ -368,7 +368,7 @@ class DeferredBlock:
         state["calls"].append(_fill(args, kwargs, slots, empty))
         if self.index < len(self.group.blocks) - 1:
             if self.group.keep_outputs:
-                values = tuple(map(torch.empty_like, values))
+                values = self._placeholders(values)
                 state.setdefault("pending", []).append(values)
             state["returned"] = values
             return _restore(values, len(slots))
@@ -379,11 +379,24 @@ class DeferredBlock:
             return output
         width = len(slots)
         pending = state.pop("pending", [])
-        for placeholder, value in zip(
-            itertools.chain(*pending), output[:-width], strict=True
-        ):
-            placeholder.copy_(value)
+        kept = zip(itertools.chain(*pending), output[:-width], strict=True)
+        for placeholder, value in kept:
+            if device.resident_regions():
+                torch.utils.swap_tensors(placeholder, value)
+            else:
+                placeholder.copy_(value)
         return _restore(output[-width:], width)
+
+    @staticmethod
+    def _placeholders(values: tuple) -> tuple:
+        """What the caller holds for each kept output until the region runs. With
+        resident regions it takes the output itself, which stays on the NPUs."""
+        if not device.resident_regions():
+            return tuple(map(torch.empty_like, values))
+        return tuple(
+            torch.empty(value.shape, dtype=value.dtype, device="meta")
+            for value in values
+        )
 
 
 def consecutive_runs(
