@@ -72,22 +72,27 @@ def on_device(compile_kwargs: dict, device: int) -> dict:
 def compile_diffusion_decoder(model) -> None:
     """Compile the decoder on its component's devices.
 
-    Stages 1-3 compile on the whole device set, one region per stage
-    ModuleList. The stage-4/5 tiles follow upstream's decode-parallel tiling:
-    each NPU of the set is a rank (ltx_2_tile_ranks) whose tile graphs run on
-    that NPU alone, with the decoder weights resident there; the set's one
-    context compiles each tile graph once for all ranks.
+    Stages 1-3 compile on the set's first NPU, one region per stage
+    ModuleList. Split over the set, their attention aborts on the device
+    (rebel_requests/dfr_stage3_rsd_abort.md). The stage-4/5 tiles follow
+    upstream's decode-parallel tiling: each other NPU of the set is a rank
+    (ltx_2_tile_ranks) whose tile graphs run on that NPU alone, with the
+    decoder weights resident there. A set of two keeps both NPUs as ranks,
+    since one rank would serialise the tiles. The set's one context compiles
+    each tile graph once for all ranks.
     """
     compile_kwargs = static_compile_kwargs(model)
     devices = decoder_devices(model)
+    stages_device, tile_devices = split_decoder_devices(devices)
+    stage_kwargs = on_device(compile_kwargs, stages_device)
     decoder = model.decoder
     fit_diffusion_decoder_tiles(model)
-    decoder.conv_in.compile(**compile_kwargs)
+    decoder.conv_in.compile(**stage_kwargs)
     for blocks, upsample in zip(
         decoder.det_stages[:-1], decoder.upsamples[:-1], strict=True
     ):
-        regions.group_blocks(list(blocks), None, compile_kwargs)
-        upsample.compile(**compile_kwargs)
+        regions.group_blocks(list(blocks), None, stage_kwargs)
+        upsample.compile(**stage_kwargs)
     for name in DIFFUSION_DECODER_GRAPHS:
         phase = getattr(decoder, name)
         setattr(
@@ -96,16 +101,23 @@ def compile_diffusion_decoder(model) -> None:
             ltx_2_tile_ranks.RankDispatch(
                 [
                     torch.compile(phase, **on_device(compile_kwargs, device))
-                    for device in devices
+                    for device in tile_devices
                 ]
             ),
         )
-    setattr(model, ltx_2_tile_ranks.TILE_DEVICES, devices)
+    setattr(model, ltx_2_tile_ranks.TILE_DEVICES, tile_devices)
     logger.info(
         "Compiling the LTX-2.5 diffusion decoder: stages 1-3 on %s, tiles on %s",
-        compile_kwargs["options"].get("device", devices),
-        devices,
+        stages_device,
+        tile_devices,
     )
+
+
+def split_decoder_devices(devices: tuple[int, ...]) -> tuple[int, tuple[int, ...]]:
+    """The NPU for stages 1-3 and the NPUs that act as tile ranks."""
+    stages_device = devices[0]
+    tile_devices = devices[1:] if len(devices) > 2 else devices
+    return stages_device, tile_devices
 
 
 def compile_video_decoder(forward, stage, batch, server_args, *args, **kwargs):
