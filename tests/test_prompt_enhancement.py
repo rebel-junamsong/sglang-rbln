@@ -340,7 +340,11 @@ def test_the_cache_is_built_on_the_device_the_step_will_run_on(
 
     placement.place(step, (4, 5, 6, 7))
     monkeypatch.setattr(residency, "logical_device_of", lambda module: 0)
+    monkeypatch.setenv("SGLANG_RBLN_EXECUTION_MODE", "host")
+    assert prompt_enhancement.cache_device(step, tiny_enhancer).type == "cpu"
 
+    monkeypatch.setenv("SGLANG_RBLN_EXECUTION_MODE", "device")
+    monkeypatch.setenv("SGLANG_RBLN_NUM_DEVICES", "4")
     device = prompt_enhancement.cache_device(step, tiny_enhancer)
     assert (device.type, device.index) == ("rbln", 0)
     cache = prompt_enhancement.window_cache(tiny_enhancer, 128, device)

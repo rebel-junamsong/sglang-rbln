@@ -80,9 +80,10 @@ def cache_device(step, model) -> torch.device:
     not happened when the cache is built, so the model's parameters still read cpu.
     Allocating from them leaves the cache on the host and the first device run fails.
     """
+    from sglang_rbln import device
     from sglang_rbln.compilation import placement, residency
 
-    if placement.devices_of(step) is None:
+    if placement.devices_of(step) is None or not device.resident_regions():
         return next(model.parameters()).device
     return torch.device("rbln", residency.logical_device_of(step))
 
