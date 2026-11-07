@@ -14,6 +14,7 @@ and run once; every rank reads their result.
 from __future__ import annotations
 
 import concurrent.futures
+import contextlib
 import contextvars
 import threading
 from collections.abc import Callable, Sequence
@@ -166,12 +167,57 @@ def shared_stages_1_to_3(forward, decoder, hidden_states, *args, **kwargs):
     return ranks.features["value"]
 
 
+class _CompileGate:
+    """Graph runs share the process; a compile has it alone.
+
+    Dynamo's tracing sets process-wide state (``torch.compiler.is_exporting``,
+    ``torch.fx.traceback.current_meta``) that a compiled call on another thread
+    reads and edits: a rank running its graph while another rank compiles fails
+    in ``fx.traceback.annotate`` (``KeyError: 'custom'``). A waiting compile
+    holds off new runs, so the ranks' steady stream of runs cannot starve it.
+    """
+
+    def __init__(self) -> None:
+        self.cond = threading.Condition()
+        self.running = 0
+        self.compiling = False
+        self.waiting = 0
+
+    @contextlib.contextmanager
+    def run(self):
+        with self.cond:
+            self.cond.wait_for(lambda: not self.compiling and not self.waiting)
+            self.running += 1
+        try:
+            yield
+        finally:
+            with self.cond:
+                self.running -= 1
+                self.cond.notify_all()
+
+    @contextlib.contextmanager
+    def compile(self):
+        with self.cond:
+            self.waiting += 1
+            self.cond.wait_for(lambda: not self.compiling and not self.running)
+            self.waiting -= 1
+            self.compiling = True
+        try:
+            yield
+        finally:
+            with self.cond:
+                self.compiling = False
+                self.cond.notify_all()
+
+
+GRAPHS = _CompileGate()
+
+
 class RankDispatch:
     """A decoder phase compiled once per NPU; each rank calls its own NPU's."""
 
     def __init__(self, compiled: Sequence[Callable]) -> None:
         self.compiled = list(compiled)
-        self.lock = threading.Lock()
         self.seen: set[tuple] = set()
 
     def __call__(self, *args, **kwargs):
@@ -180,9 +226,10 @@ class RankDispatch:
         fn = self.compiled[index % len(self.compiled)]
         signature = (index, *_shapes(args), *_shapes(kwargs.values()))
         if signature in self.seen:
-            return fn(*args, **kwargs)
-        # Dynamo compiles a new shape on its first call; keep that one at a time.
-        with self.lock:
+            with GRAPHS.run():
+                return fn(*args, **kwargs)
+        # Dynamo compiles a new shape on its first call.
+        with GRAPHS.compile():
             output = fn(*args, **kwargs)
             self.seen.add(signature)
         return output

@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
+import threading
+import time
+
 import pytest
 import torch
 from sglang.multimodal_gen.configs.models.decoders.ltx_2_5_diffusion_decoder import (
@@ -172,3 +175,42 @@ def test_one_device_keeps_the_upstream_tiled_decode(model):
 
     assert tile_ranks.tiled_decode_over_ranks(tiled_decode, model, None) == "decoded"
     assert calls == [None]
+
+
+def test_a_rank_compiles_while_no_other_rank_runs():
+    """A first call (a compile) never overlaps another rank's graph run."""
+    active = {"run": 0, "compile": 0}
+    overlaps = []
+    guard = threading.Lock()
+    started = threading.Event()
+
+    def phase(kind):
+        def call(x):
+            with guard:
+                active[kind] += 1
+                other = "compile" if kind == "run" else "run"
+                if active[other] or (kind == "compile" and active[kind] > 1):
+                    overlaps.append(kind)
+            started.set()
+            time.sleep(0.2)
+            with guard:
+                active[kind] -= 1
+            return x
+
+        return call
+
+    warm = tile_ranks.RankDispatch([phase("run")])
+    warm(torch.zeros(1))  # its compile: later calls of this shape are runs
+    cold = tile_ranks.RankDispatch([phase("compile")])
+    started.clear()
+    runner = threading.Thread(target=warm, args=(torch.zeros(1),))
+    runner.start()
+    started.wait()
+    compiler = threading.Thread(target=cold, args=(torch.zeros(2),))
+    compiler.start()
+    late_runner = threading.Thread(target=warm, args=(torch.zeros(1),))
+    time.sleep(0.05)
+    late_runner.start()
+    for thread in (runner, compiler, late_runner):
+        thread.join()
+    assert not overlaps
