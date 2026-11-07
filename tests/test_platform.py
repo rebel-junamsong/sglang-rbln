@@ -297,6 +297,25 @@ def test_device_mode_forbids_silent_compile_fallback(monkeypatch, preset, expect
     assert os.environ[platform_module.TORCH_RBLN_FALLBACK_ENV] == expected
 
 
+@pytest.mark.parametrize(
+    ("compile_only", "preset", "expected"),
+    [("1", None, "1"), ("0", None, None), ("1", "0", "0")],
+    ids=["compile-only", "run", "explicit"],
+)
+def test_a_compile_only_device_run_takes_the_dummy_device(
+    monkeypatch, compile_only, preset, expected
+):
+    """It compiles on device tensors as a device run does, with no NPU to open."""
+    monkeypatch.setattr(platform_module, "RUNS_ON_DEVICE", True)
+    monkeypatch.setitem(sys.modules, "torch_rbln", ModuleType("torch_rbln"))
+    monkeypatch.setenv("SGLANG_RBLN_COMPILE_ONLY", compile_only)
+    monkeypatch.delenv(platform_module.DUMMY_DEVICE_ENV, raising=False)
+    if preset is not None:
+        monkeypatch.setenv(platform_module.DUMMY_DEVICE_ENV, preset)
+    RBLNPlatform().init_backend()
+    assert os.environ.get(platform_module.DUMMY_DEVICE_ENV) == expected
+
+
 def test_amp_query_traces_without_a_graph_break():
     torch._dynamo.reset()
     explained = torch._dynamo.explain(

@@ -10,7 +10,7 @@ from sglang.multimodal_gen.runtime.platforms import Platform, PlatformEnum
 from sglang.multimodal_gen.runtime.platforms.cpu import CpuPlatform
 from sglang.multimodal_gen.runtime.platforms.interface import AttentionBackendEnum
 
-from sglang_rbln import device
+from sglang_rbln import device, envs
 from sglang_rbln.compilation import backend as compilation
 from sglang_rbln.compilation import residency
 
@@ -19,6 +19,9 @@ RESIDENT_REGIONS = device.resident_regions()
 RUNS_ON_DEVICE = EXECUTION_MODE is device.ExecutionMode.DEVICE and not RESIDENT_REGIONS
 TORCH_RBLN_FALLBACK_ENV = "TORCH_RBLN_DISABLE_FALLBACK"
 TORCH_RBLN_FALLBACK_DEFAULT = "compile_error"
+# A compile-only run builds the artifacts a device run loads, so it compiles on device
+# tensors as that run does: rbln's dummy device gives them without any NPU.
+DUMMY_DEVICE_ENV = "RBLN_DUMMY_DEVICE"
 OFFLOAD_FLAGS = (
     "dit_cpu_offload",
     "text_encoder_cpu_offload",
@@ -41,6 +44,8 @@ class RBLNPlatform(Platform):
         if not (RUNS_ON_DEVICE or RESIDENT_REGIONS):
             return
         os.environ.setdefault(TORCH_RBLN_FALLBACK_ENV, TORCH_RBLN_FALLBACK_DEFAULT)
+        if envs.SGLANG_RBLN_COMPILE_ONLY:
+            os.environ.setdefault(DUMMY_DEVICE_ENV, "1")
         if RESIDENT_REGIONS:
             residency.configure_device_group()
             return
