@@ -322,3 +322,37 @@ def test_a_cross_set_copy_keeps_only_a_layout_its_reader_reads(
         setattr(tensor, residency.PRODUCER_CONFIG, types.SimpleNamespace(json=config))
     kept_config = residency.layout_to_keep(tensor, torch.device("cpu", 1), read_as)
     assert (kept_config is not None) is kept
+
+
+class _Stage:
+    def __init__(self, work) -> None:
+        self.work = work
+
+
+@pytest.mark.device_mode
+def test_crossings_count_each_stage_download_by_op_and_upload(monkeypatch, caplog):
+    monkeypatch.setenv("SGLANG_RBLN_LOG_CROSSINGS", "1")
+    resident = torch.zeros(4, 8, dtype=torch.bfloat16).to("rbln:0")
+    host = torch.ones(16, dtype=torch.float32)
+
+    def work():
+        resident + 1
+        resident * 2
+        residency._Transfers().to(host, torch.device("rbln:0"))
+        return residency.crossings.of_stage("_Stage")
+
+    with caplog.at_level("INFO", logger=residency.__name__):
+        seen = residency.stage_on_host_boundary(
+            lambda stage: stage.work(), _Stage(work)
+        )
+    assert seen == {("down", "add"): (1, 64), ("up", "host tensor"): (1, 64)}
+    assert residency.crossings.of_stage("_Stage") == {}
+    assert "rbln crossings in _Stage: " in caplog.text
+
+
+@pytest.mark.device_mode
+def test_a_stage_with_no_crossings_reports_none(monkeypatch, caplog):
+    monkeypatch.setenv("SGLANG_RBLN_LOG_CROSSINGS", "1")
+    with caplog.at_level("INFO", logger=residency.__name__):
+        residency.stage_on_host_boundary(lambda stage: torch.ones(2) * 2, _Stage(None))
+    assert "rbln crossings in _Stage: none" in caplog.text

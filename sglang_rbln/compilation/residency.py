@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import collections
 import contextlib
+import contextvars
 import functools
+import logging
 import os
 from collections.abc import Callable
 from typing import Any
@@ -16,6 +19,8 @@ from torch.utils.weak import WeakIdKeyDictionary
 from sglang_rbln import envs
 from sglang_rbln.compilation import placement
 from sglang_rbln.compilation.backend import COMPILE_BACKEND_NAME, static_compile_kwargs
+
+logger = logging.getLogger(__name__)
 
 NPUS_PER_DEVICE_ENV = "RBLN_NPUS_PER_DEVICE"
 DEVICE_MAP_ENV = "RBLN_DEVICE_MAP"
@@ -139,6 +144,11 @@ def copy_across_devices(
     return copied
 
 
+def _upload(tensor: torch.Tensor, device: torch.device) -> torch.Tensor:
+    crossings.record("up", "host tensor", tensor)
+    return tensor.to(device)
+
+
 def _is_resident(value: Any) -> bool:
     return isinstance(value, torch.Tensor) and value.device.type == "rbln"
 
@@ -160,6 +170,48 @@ def resident_module(
     return cache[key]
 
 
+class Crossings:
+    """Every host<->NPU transfer of a tensor, per pipeline stage: the bytes a host op
+    downloaded (by op) and the bytes uploaded from the host."""
+
+    stage: contextvars.ContextVar[str] = contextvars.ContextVar(
+        "rbln_stage", default="outside a stage"
+    )
+
+    def __init__(self) -> None:
+        self.bytes: collections.Counter = collections.Counter()
+        self.counts: collections.Counter = collections.Counter()
+
+    def record(self, direction: str, what: str, tensor: torch.Tensor) -> None:
+        key = (self.stage.get(), direction, what)
+        self.counts[key] += 1
+        self.bytes[key] += tensor.numel() * tensor.element_size()
+
+    def of_stage(self, stage: str) -> dict[tuple[str, str], tuple[int, int]]:
+        return {
+            key[1:]: (count, self.bytes[key])
+            for key, count in self.counts.items()
+            if key[0] == stage
+        }
+
+    def report(self, stage: str) -> str:
+        entries = sorted(self.of_stage(stage).items(), key=lambda kv: -kv[1][1])
+        return (
+            ", ".join(
+                f"{direction} {what} x{count} {size / 2**20:.1f} MiB"
+                for (direction, what), (count, size) in entries
+            )
+            or "none"
+        )
+
+    def clear(self, stage: str) -> None:
+        for key in [key for key in self.counts if key[0] == stage]:
+            del self.counts[key], self.bytes[key]
+
+
+crossings = Crossings()
+
+
 class _Transfers:
     def __init__(self) -> None:
         self.moved: dict[torch.device, WeakIdKeyDictionary] = {}
@@ -174,7 +226,7 @@ class _Transfers:
             config = layout_to_keep(value, device, read_as)
             move = functools.partial(copy_across_devices, value, device, config)
         else:
-            move = functools.partial(value.to, device)
+            move = functools.partial(_upload, value, device)
         # An inference tensor has no version counter to tell an in-place update by.
         if value.is_inference():
             return move()
@@ -186,11 +238,12 @@ class _Transfers:
         moved[value] = (value._version, resident)
         return resident
 
-    def download(self, value: Any) -> Any:
+    def download(self, value: Any, what: str = "host op") -> Any:
         if not _is_resident(value):
             return value
         cached = self.downloads.get(value)
         if cached is None:
+            crossings.record("down", what, value)
             cached = self.downloads[value] = value.cpu()
         return cached
 
@@ -209,7 +262,10 @@ class HostBoundary(TorchFunctionMode):
             for value in flat
             for leaf in torch.utils._pytree.tree_leaves(value)
         ):
-            args, kwargs = tree_map(_transfers.download, (args, kwargs))
+            what = getattr(func, "__name__", repr(func))
+            args, kwargs = tree_map(
+                functools.partial(_transfers.download, what=what), (args, kwargs)
+            )
         return func(*args, **kwargs)
 
 
@@ -292,8 +348,16 @@ def install_after_compile(result, module: torch.nn.Module, *args, **kwargs):
 
 
 def stage_on_host_boundary(call, stage, *args, **kwargs):
-    with HostBoundary():
-        return call(stage, *args, **kwargs)
+    name = type(stage).__name__
+    token = Crossings.stage.set(name)
+    try:
+        with HostBoundary():
+            return call(stage, *args, **kwargs)
+    finally:
+        Crossings.stage.reset(token)
+        if envs.SGLANG_RBLN_LOG_CROSSINGS:
+            logger.info("rbln crossings in %s: %s", name, crossings.report(name))
+        crossings.clear(name)
 
 
 def register() -> tuple[str, ...]:
