@@ -175,6 +175,7 @@ class TestDeviceQueries:
         assert backend_cls.__name__ == "SDPABackend"
         assert backend_cls.__module__.startswith("sglang.")
 
+    @pytest.mark.npu  # reads the memory of a real NPU
     def test_memory_queries_are_positive(self):
         total_bytes = RBLNPlatform.get_device_total_memory(0)
         free_gib = RBLNPlatform.get_available_gpu_memory(0)
