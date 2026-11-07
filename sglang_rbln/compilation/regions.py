@@ -19,6 +19,7 @@ from torch.utils._pytree import tree_leaves, tree_map
 
 from sglang_rbln import device, envs
 from sglang_rbln.compilation import placement, shapes
+from sglang_rbln.compilation.backend import release_graphs
 
 logger = logging.getLogger(__name__)
 
@@ -148,6 +149,7 @@ def _node_devices(device: Any, nodes: int) -> list[int]:
 POOLED_KEYS = ("Intermediate", "Input", "Output")
 # (session, NPUs) -> pooled kind -> bytes per node the session's pool holds now
 _pools: dict[tuple, dict[str, list[int]]] = {}
+runtimes_created = 0
 
 
 def _pooled(compiled_model: Any, needed: list[int]) -> dict[str, list[int]]:
@@ -214,8 +216,10 @@ def _checked_create_runtime(create_runtime: Callable) -> Callable:
     def checked(compiled_model, *args, **kwargs):
         device = kwargs.get("device", args[0] if args else None)
         check_fits(compiled_model, device)
+        global runtimes_created
         runtime = create_runtime(compiled_model, *args, **kwargs)
         _record_pools(compiled_model, device)
+        runtimes_created += 1
         return runtime
 
     return checked
@@ -345,6 +349,18 @@ class Region:
         for part in self.parts[key]:
             part.group.slots = self.group.slots
 
+    def _release(self) -> None:
+        """Drop what an attempt that did not fit left loaded: an abandoned shape kept
+        its runtimes on the DiT's NPUs, and every later request failed.
+
+        A fit-check refusal loads nothing; a runtime that ran out of memory after it
+        was created holds its programs until its graph goes. The groups share their
+        graphs' cache, so every group lets go of its graphs, and this region's other
+        shapes go through the fit check again when next called.
+        """
+        release_graphs(self.group)
+        self.loaded.clear()
+
     def __call__(self, values: tuple, calls: list[tuple[tuple, dict]]) -> Any:
         key = self._key(values, calls)
         if parts := self.parts.get(key):
@@ -360,11 +376,16 @@ class Region:
             return kept if self.keep_outputs else output
         if key in self.loaded:
             return self.group(values, calls)
+        created = runtimes_created
         try:
             with checking_fit():
                 output = self.group(values, calls)
         except Exception as error:
-            if len(self.blocks) == 1 or not _does_not_fit(error):
+            if not _does_not_fit(error):
+                raise
+            if runtimes_created > created:
+                self._release()
+            if len(self.blocks) == 1:
                 raise
             self._split(key, error)
             return self(values, calls)

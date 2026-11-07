@@ -520,6 +520,39 @@ def test_a_block_that_never_fits_raises(monkeypatch, sized_graphs):
     assert compiled == [2, 1]
 
 
+def test_a_region_that_ran_out_after_loading_releases_its_graphs(monkeypatch):
+    # An abandoned attempt kept what it had loaded: one bad shape left the DiT's
+    # NPUs full, and every later request failed, a 2-block region too.
+    monkeypatch.delenv("SGLANG_RBLN_BLOCKS_PER_REGION", raising=False)
+    released = []
+    monkeypatch.setattr(
+        regions, "release_graphs", lambda group: released.append(len(group.blocks))
+    )
+
+    def backend(graph, example_inputs):
+        if _blocks_in(graph) > 1:
+            regions.runtimes_created += 1  # loaded, then out of memory at the run
+            raise RuntimeError("SYS_ENOMEM")
+        return graph
+
+    torch.manual_seed(0)
+    _grouped_run(Model(depth=4).eval(), {"backend": backend, "dynamic": False})
+    assert released == [4, 2, 2]  # each failed group, before its halves
+
+
+def test_a_refusal_that_loaded_nothing_releases_nothing(monkeypatch, sized_graphs):
+    monkeypatch.delenv("SGLANG_RBLN_BLOCKS_PER_REGION", raising=False)
+    released = []
+    monkeypatch.setattr(regions, "release_graphs", released.append)
+    free, _, compile_kwargs = sized_graphs
+    free["bytes"] = BLOCK_BYTES // 2
+    model = Model(depth=2).eval()
+    regions.compile_block_groups(_plain_compile, model, compile_kwargs=compile_kwargs)
+    with torch.no_grad(), pytest.raises(Exception, match="free"):
+        model(torch.randn(2, 8))
+    assert released == []
+
+
 def test_other_compile_errors_do_not_split(monkeypatch):
     monkeypatch.delenv("SGLANG_RBLN_BLOCKS_PER_REGION", raising=False)
     sizes = []
@@ -662,3 +695,4 @@ def test_a_region_within_the_shared_pool_needs_no_more(device_memory, no_pools):
     create_runtime(SessionRegion(BLOCK_BYTES, 5 * BLOCK_BYTES), device=0)
     with pytest.raises(regions.RegionDoesNotFit):  # another session's pool is empty
         create_runtime(SessionRegion(BLOCK_BYTES, 5 * BLOCK_BYTES, "t"), device=0)
+
