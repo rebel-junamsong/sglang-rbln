@@ -21,6 +21,10 @@ HOOK_TARGET = (
     "sglang.multimodal_gen.runtime.pipelines_core.stages.model_specific_stages"
     ".ltx_2.decoding_av.LTX2AVDecodingStage.forward"
 )
+DIFFUSION_DECODE_TARGET = (
+    "sglang.multimodal_gen.runtime.pipelines_core.stages.model_specific_stages"
+    ".ltx_2.decoding_av.LTX2AVDecodingStage._decode_with_diffusion_decoder"
+)
 COMPILED = "_rbln_decoder_compiled"
 DIFFUSION_DECODER_GRAPHS = ("forward_stage_4", "forward_diffusion_step")
 DIFFUSION_DECODER_TILE_TOKENS = 1 << 18
@@ -149,6 +153,20 @@ def compile_decoders(forward, stage, batch, server_args):
     )
 
 
-def register() -> str:
+def decode_in_decoder_dtype(decode, stage, decoder, latents, batch, server_args):
+    """Hand a compiled diffusion decoder its latents in its own dtype.
+
+    Upstream casts them only with autocast off and otherwise leaves the cast to
+    autocast, which does not reach the ops of a compiled graph.
+    """
+    if getattr(decoder, COMPILED, False):
+        latents = latents.to(next(decoder.parameters()).dtype)
+    return decode(stage, decoder, latents, batch, server_args)
+
+
+def register() -> tuple[str, ...]:
     HookRegistry.register(HOOK_TARGET, compile_decoders, HookType.AROUND)
-    return HOOK_TARGET
+    HookRegistry.register(
+        DIFFUSION_DECODE_TARGET, decode_in_decoder_dtype, HookType.AROUND
+    )
+    return HOOK_TARGET, DIFFUSION_DECODE_TARGET

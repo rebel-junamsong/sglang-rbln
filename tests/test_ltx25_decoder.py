@@ -44,10 +44,33 @@ def decode_video(stage, batch, server_args, on_frames=None):
 
 
 def test_registers_around_the_video_decode():
-    target = decoding_av.register()
-    assert target == decoding_av.HOOK_TARGET
-    hooks = [hook for _, hook, _ in HookRegistry._hooks[target]]
+    targets = decoding_av.register()
+    assert targets == (decoding_av.HOOK_TARGET, decoding_av.DIFFUSION_DECODE_TARGET)
+    hooks = [hook for _, hook, _ in HookRegistry._hooks[decoding_av.HOOK_TARGET]]
     assert decoding_av.compile_decoders in hooks
+    hooks = [
+        hook for _, hook, _ in HookRegistry._hooks[decoding_av.DIFFUSION_DECODE_TARGET]
+    ]
+    assert decoding_av.decode_in_decoder_dtype in hooks
+
+
+@pytest.mark.parametrize("compiled", [True, False], ids=["compiled", "eager"])
+def test_a_compiled_diffusion_decoder_gets_latents_in_its_dtype(compiled):
+    decoder = nn.Linear(4, 4).to(torch.bfloat16)
+    if compiled:
+        setattr(decoder, decoding_av.COMPILED, True)
+    seen = []
+
+    def decode(stage, module, latents, batch, server_args):
+        seen.append(latents.dtype)
+        return "video"
+
+    latents = torch.randn(1, 4)
+    output = decoding_av.decode_in_decoder_dtype(
+        decode, None, decoder, latents, None, None
+    )
+    assert output == "video"
+    assert seen == [torch.bfloat16 if compiled else torch.float32]
 
 
 def test_one_hook_compiles_the_decoder_and_the_vocoder(stage, compiled, monkeypatch):
