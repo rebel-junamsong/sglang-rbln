@@ -150,6 +150,32 @@ def test_ranks_compile_under_the_callers_dynamo_config(model):
     assert set(seen) == {1234}
 
 
+class _Marker(torch.overrides.TorchFunctionMode):
+    def __torch_function__(self, func, types, args=(), kwargs=None):
+        return func(*args, **(kwargs or {}))
+
+
+@pytest.mark.usefixtures("ranked")
+def test_ranks_run_under_the_callers_function_modes(model):
+    """The stage's host boundary brings device values to the host for the eager
+    ops of a region learning its blocks; a rank without it ran them on the device."""
+    seen = []
+    for name in ("forward_stage_4", "forward_diffusion_step"):
+        phase = getattr(model.decoder, name)
+
+        def run(*args, _phase=phase, **kwargs):
+            modes = torch.overrides._get_current_function_mode_stack()
+            seen.append(any(isinstance(mode, _Marker) for mode in modes))
+            return _phase(*args, **kwargs)
+
+        setattr(model.decoder, name, run)
+    setattr(model, tile_ranks.TILE_DEVICES, (0, 1))
+    with _Marker(), torch.no_grad():
+        model(torch.randn(1, 128, 2, 4, 6), generator=torch.Generator())
+    assert seen
+    assert all(seen)
+
+
 def test_registers_around_the_upstream_tiling():
     targets = tile_ranks.register()
     for target, hook in zip(
