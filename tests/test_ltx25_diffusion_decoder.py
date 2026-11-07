@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import os
 
 import pytest
 import torch
@@ -63,6 +64,33 @@ def test_matches_the_flex_attention_decoder(monkeypatch, grid, kernel):
         monkeypatch.setattr(ltx_2_5_diffusion_decoder, "_na3d", ltx_2.na3d)
         actual = attention(hidden_states)
     torch.testing.assert_close(actual, expected, atol=2e-6, rtol=1e-5)
+
+
+@pytest.mark.npu
+def test_a_stage_3_attention_split_over_two_npus_runs(monkeypatch, tmp_path):
+    """Split over two NPUs, this attention aborted on its first run
+    (SYS_TASK_ABORTED) on rebel-compiler e4667eda9d. Its tiled kernel takes 135
+    spatial tiles per frame group at this grid, and 90 or more aborted."""
+    visible = [
+        npu for npu in os.environ.get("RBLN_VISIBLE_DEVICES", "").split(",") if npu
+    ]
+    if len(visible) < 2:
+        pytest.skip("needs RBLN_VISIBLE_DEVICES to name two NPUs of its own")
+    compilation.ensure_compile_backend()
+    torch.manual_seed(0)
+    attention = ltx_2_5_diffusion_decoder.LTX2VideoVaeNeighborhoodAttention(
+        512, (3, 5, 5)
+    )
+    attention = attention.to(torch.bfloat16).eval()
+    hidden_states = torch.randn(1, 18, 68, 120, 512, dtype=torch.bfloat16)
+    monkeypatch.setattr(ltx_2_5_diffusion_decoder, "_na3d", ltx_2.na3d)
+    options = {"num_devices": 2, "cache_dir": str(tmp_path), "mode": ["strict"]}
+    with torch.no_grad():
+        reference = attention(hidden_states)
+        compiled = torch.compile(attention, backend="rbln", options=options)
+        output = compiled(hidden_states)
+    error = (output.float() - reference.float()).abs().mean() / reference.abs().mean()
+    assert error < 3e-2
 
 
 @pytest.mark.npu
