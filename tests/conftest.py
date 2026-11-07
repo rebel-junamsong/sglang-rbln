@@ -12,11 +12,15 @@ import torch
 from sglang.multimodal_gen.runtime import platforms
 
 from sglang_rbln import device, envs
+from sglang_rbln.patches.layers import layernorm
 from sglang_rbln.patches.layers.attention import video_sparse_attn
 from sglang_rbln.patches.srt.layers.quantization import fp4_utils
 
 
 def pytest_configure(config: pytest.Config) -> None:
+    # The import-time shims the plugin binds before any model module is imported;
+    # test modules import models at collection, before the plugin registers.
+    layernorm.register()
     video_sparse_attn.register()
     fp4_utils.register()
 
