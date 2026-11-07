@@ -10,9 +10,12 @@ from sglang.multimodal_gen.runtime.models.adapter.ltx_2_connector import (
     LTX2ConnectorTransformer1d,
     LTX2TextConnectors,
 )
+from sglang.multimodal_gen.runtime.pipelines_core.stages.validators import (
+    StageValidators,
+)
 from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry, HookType
 
-from sglang_rbln.compilation import residency
+from sglang_rbln.compilation import placement, residency
 from sglang_rbln.patches.models import ltx_2_text_features as features
 
 POSTPROCESS = configs._gemma_postprocess_func
@@ -120,6 +123,80 @@ def test_the_output_norm_runs_as_a_module_on_the_npus(monkeypatch):
             FORWARD, connector, torch.randn(1, LENGTH, 32), additive
         )
     assert ("norm_out", "Normalize") in built
+
+
+def test_text_features_compile_for_the_connectors_npus(monkeypatch):
+    # Left with no NPUs, they compiled for the DiT's, which they do not fit beside.
+    placed = []
+
+    def resident_module(cache, key, build, tensors, devices=None):
+        placed.append((key[0], devices))
+        return build()
+
+    monkeypatch.delenv("SGLANG_RBLN_COMPONENT_DEVICES", raising=False)
+    monkeypatch.setattr(placement, "spare_devices", lambda module: (4, 5, 6, 7))
+    monkeypatch.setattr(residency, "_is_resident", lambda value: True)
+    monkeypatch.setattr(residency, "resident_module", resident_module)
+    placement.place_component(
+        lambda name, *args: (torch.nn.Linear(2, 2), 1.0), "connectors", "path"
+    )
+    hidden = tuple(torch.randn(1, LENGTH, 8) for _ in range(3))
+    inputs = {"attention_mask": torch.tensor([MASKS["left-padded"]])}
+    outputs = SimpleNamespace(hidden_states=hidden)
+    packed = features.gemma_postprocess(
+        POSTPROCESS, outputs, inputs, pipeline_config(True)
+    )
+    features.rescale_v2_features(RESCALE, packed, 32, 8)
+    assert placed == [("pack", (4, 5, 6, 7)), ("rescale", (4, 5, 6, 7))]
+
+
+@pytest.mark.parametrize(
+    ("placed", "given", "expected"),
+    [
+        ((4, 5, 6, 7), None, torch.device("rbln", 1)),
+        ((4, 5, 6, 7), "cpu", "cpu"),
+        (None, None, None),
+    ],
+    ids=["placed", "explicit", "unplaced"],
+)
+def test_text_features_are_returned_on_the_connectors_npus(
+    monkeypatch, placed, given, expected
+):
+    # Upstream returned them on the platform device, the host: 367 MiB down, and up
+    # again into each connector.
+    monkeypatch.setattr(placement, "_components", {"connectors": placed})
+    monkeypatch.setattr(residency, "logical_device_on", lambda devices: 1)
+    seen = []
+
+    def upstream(stage, text, server_args, **kwargs):
+        seen.append(kwargs.get("device"))
+
+    features.encode_text(upstream, None, "a yak", None, device=given)
+    assert seen == [expected]
+
+
+VALIDATE = StageValidators.__dict__["list_of_tensors_with_min_dims"].__func__
+
+
+@pytest.mark.parametrize("poisoned", [False, True], ids=["clean", "nan"])
+def test_resident_text_features_are_checked_for_nan_on_the_npus(monkeypatch, poisoned):
+    # Upstream's isnan downloaded the whole 367 MiB feature to look.
+    checked = []
+
+    def resident_module(cache, key, build, tensors, devices=None):
+        checked.append(key[0])
+        return build()
+
+    monkeypatch.setattr(residency, "_is_resident", lambda value: True)
+    monkeypatch.setattr(residency, "npus_of", lambda device: (4, 5, 6, 7))
+    monkeypatch.setattr(residency, "resident_module", resident_module)
+    features_ = torch.randn(1, LENGTH, 8)
+    if poisoned:
+        features_[0, 3, 5] = float("nan")
+    valid = features.tensors_with_min_dims(VALIDATE, [features_], 2)
+    assert valid is not poisoned
+    assert valid == VALIDATE([features_], 2)
+    assert checked == ["nan"]
 
 
 def test_host_inputs_take_upstream_and_compile_nothing(monkeypatch):

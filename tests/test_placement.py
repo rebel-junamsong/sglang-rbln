@@ -95,10 +95,14 @@ def npus(monkeypatch):
     ],
     ids=["eight", "twelve", "six", "dit-only"],
 )
-def test_text_encoder_takes_the_npus_beyond_the_dit(npus, count, expected):
+@pytest.mark.parametrize("component_name", ["text_encoder", "connectors"])
+def test_text_encoder_takes_the_npus_beyond_the_dit(
+    npus, count, expected, component_name
+):
     npus(count)
-    encoder, _ = placement.place_component(_load, "text_encoder", "path")
+    encoder, _ = placement.place_component(_load, component_name, "path")
     assert {_placement(module) for module in encoder.modules()} == {expected}
+    assert placement.component_devices(component_name) == expected[0]
 
 
 def test_text_encoder_stays_with_the_dit_when_spare_npus_cannot_hold_it(npus):

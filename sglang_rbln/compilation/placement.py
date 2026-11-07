@@ -18,10 +18,12 @@ HOOK_TARGET = (
 )
 
 _placements: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+_components: dict[str, tuple[int, ...] | None] = {}
 
-# A text encoder runs once per request, before the DiT. With no explicit placement it
-# runs tensor-parallel at the DiT's width on the next visible NPUs, if they hold it.
-SPARE_NPU_COMPONENTS = ("text_encoder",)
+# A text encoder and the connectors that take its output run once per request, before
+# the DiT. With no explicit placement each runs tensor-parallel at the DiT's width on
+# the next visible NPUs, if they hold it, so the text features stay on those NPUs.
+SPARE_NPU_COMPONENTS = ("text_encoder", "connectors")
 RUNTIME_RESERVE = 1536 << 20
 
 
@@ -32,6 +34,11 @@ def place(module: nn.Module, devices: tuple[int, ...]) -> None:
 
 def devices_of(module: nn.Module) -> tuple[int, ...] | None:
     return _placements.get(module)
+
+
+def component_devices(component_name: str) -> tuple[int, ...] | None:
+    """The NPUs the loaded component `component_name` was placed on."""
+    return _components.get(component_name)
 
 
 def visible_npus() -> int:
@@ -89,6 +96,7 @@ def place_component(load_component, component_name: str, *args, **kwargs):
             logger.info("%s runs on the spare NPUs %s", component_name, devices)
     if devices:
         place(module, devices)
+    _components[component_name] = devices
     return module, memory_usage
 
 

@@ -86,7 +86,11 @@ def configure_device_group() -> None:
 
 def logical_device_of(module: torch.nn.Module) -> int:
     """The logical device whose NPUs are the ones `module` is placed on."""
-    devices = placement.devices_of(module)
+    return logical_device_on(placement.devices_of(module))
+
+
+def logical_device_on(devices: tuple[int, ...] | None) -> int:
+    """The logical device that spans `devices`; the DiT's when there are none."""
     if devices is None:
         return 0
     from torch_rbln._internal.rsd_utils import get_physical_device_ids
