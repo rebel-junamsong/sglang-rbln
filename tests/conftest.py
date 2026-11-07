@@ -17,12 +17,41 @@ from sglang_rbln.patches.layers.attention import video_sparse_attn
 from sglang_rbln.patches.srt.layers.quantization import fp4_utils
 
 
+def pin_the_dummy_device_without_an_npu() -> None:
+    """Fix the device count at one dummy device when this process sees no NPU.
+
+    torch-rbln counts its devices once, at the first query, and keeps that count for
+    the process. Whichever test happens to ask first would decide it for every test
+    after: a host test asking with no NPU visible leaves 0 devices, and the
+    `dummy_device` tests that follow cannot name one. Asking here, once, under the
+    dummy flag, makes the count the same for every order. The flag is restored, so a
+    test without `dummy_device` is still held to the host.
+    """
+    if not device.torch_rbln_available():
+        return
+    import torch_rbln  # noqa: F401
+    from torch_rbln import _C
+
+    if _C.physical_device_count():
+        return
+    previous = os.environ.get("RBLN_DUMMY_DEVICE")
+    os.environ["RBLN_DUMMY_DEVICE"] = "1"
+    try:
+        torch.rbln.device_count()
+    finally:
+        if previous is None:
+            del os.environ["RBLN_DUMMY_DEVICE"]
+        else:
+            os.environ["RBLN_DUMMY_DEVICE"] = previous
+
+
 def pytest_configure(config: pytest.Config) -> None:
     # The import-time shims the plugin binds before any model module is imported;
     # test modules import models at collection, before the plugin registers.
     layernorm.register()
     video_sparse_attn.register()
     fp4_utils.register()
+    pin_the_dummy_device_without_an_npu()
 
 
 RBLN_DEVICE = "rbln"
