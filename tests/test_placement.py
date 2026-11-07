@@ -95,7 +95,7 @@ def npus(monkeypatch):
     ],
     ids=["eight", "twelve", "six", "dit-only"],
 )
-@pytest.mark.parametrize("component_name", ["text_encoder", "connectors"])
+@pytest.mark.parametrize("component_name", ["text_encoder", "connectors", "vocoder"])
 def test_text_encoder_takes_the_npus_beyond_the_dit(
     npus, count, expected, component_name
 ):

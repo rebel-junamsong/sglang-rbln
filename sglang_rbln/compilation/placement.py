@@ -21,9 +21,10 @@ _placements: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 _components: dict[str, tuple[int, ...] | None] = {}
 
 # A text encoder and the connectors that take its output run once per request, before
-# the DiT. With no explicit placement each runs tensor-parallel at the DiT's width on
-# the next visible NPUs, if they hold it, so the text features stay on those NPUs.
-SPARE_NPU_COMPONENTS = ("text_encoder", "connectors")
+# the DiT, and the vocoder once after it. With no explicit placement each runs on the
+# next visible NPUs, if they hold it: the text features stay on those NPUs, and the
+# audio graph is not compiled beside both DiT shapes and the VAE.
+SPARE_NPU_COMPONENTS = ("text_encoder", "connectors", "vocoder")
 RUNTIME_RESERVE = 1536 << 20
 
 
