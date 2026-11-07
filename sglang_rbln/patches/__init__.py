@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from sglang_rbln import device
-from sglang_rbln.compilation import placement, regions, residency
+from sglang_rbln import device, envs
+from sglang_rbln.compilation import placement, regions, residency, timeline
 from sglang_rbln.patches import ffmpeg_spawn
 from sglang_rbln.patches.configs import arch_config
 from sglang_rbln.patches.entrypoints import prompt_enhancement
@@ -73,6 +73,8 @@ def register() -> None:
     wanvae.register()
     if device.torch_rbln_available():
         ops_utils.register()
+    if envs.SGLANG_RBLN_LOG_TIMELINE:
+        timeline.register()
     if device.resident_regions():
         residency.register()
         ltx_2_vae_assembly.register()

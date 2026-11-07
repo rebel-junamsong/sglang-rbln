@@ -18,7 +18,7 @@ from typing import Any
 import torch
 
 from sglang_rbln import device, envs
-from sglang_rbln.compilation import device_views, placement, shapes
+from sglang_rbln.compilation import device_views, placement, shapes, timeline
 
 logger = logging.getLogger(__name__)
 
@@ -372,6 +372,10 @@ def _instrumented_backend(backend):
             )
         if envs.SGLANG_RBLN_RUNTIME_REPORTS:
             compiled = _reporting_callable(compiled)
+        if envs.SGLANG_RBLN_LOG_TIMELINE:
+            compiled = timeline.timed_callable(
+                compiled, timeline.graph_label(example_inputs)
+            )
         return compiled
 
     wrapped.__wrapped_backend__ = backend

@@ -144,6 +144,7 @@ the NPU. A compile error fails the request unless `SGLANG_RBLN_COMPILE_STRICT=0`
 | `SGLANG_RBLN_DUMP_GRAPHS=<dir>` | write each graph (readable FX and example inputs) to `<dir>` |
 | `SGLANG_RBLN_RUNTIME_REPORTS=1` | log the runtime's device / host-op / buffer-prep time split every 100 graph runs |
 | `SGLANG_RBLN_LOG_CROSSINGS=1` | log, per pipeline stage, every host↔NPU transfer of a tensor: downloads by the op that read it on the host, and host uploads |
+| `SGLANG_RBLN_LOG_TIMELINE=1` | log, per pipeline stage, its wall time, its compiled graph runs and the time inside them, and the host time between them, the largest stretches first, each named by the graph that ran after it |
 | `SGLANG_RBLN_PROFILE_DIR=<dir>` | write an RBLN Profiler trace (`*.pb`, Perfetto) of one request to `<dir>`; start the server with `RBLN_PROFILER=1` |
 | `SGLANG_RBLN_PROFILE_REQUEST=3` | which request (counting from 1, warmups excluded) `SGLANG_RBLN_PROFILE_DIR` captures |
 | `SGLANG_RBLN_COMPILE_VAE_ENCODER=0` | keep the LTX-2 video VAE encoder that I2V conditioning images go through on the CPU. On by default, across the VAE's devices like the decoder; it falls back to the CPU on its own if it does not fit them |
