@@ -614,3 +614,51 @@ def test_kept_outputs_stay_on_the_region_npus(monkeypatch, dummy_device):
             seen = model(torch.randn(2, 8))
     assert [out.device.type for out in seen] == ["rbln"] * 4
     assert residency.crossings.of_stage(stage) == {}
+
+
+class SessionRegion(SimpleNamespace):
+    """A sharing-session artifact: its own total leaves the pooled buffers out."""
+
+    def __init__(self, counted: int, intermediate: int, session: str = "s") -> None:
+        super().__init__(counted=counted, intermediate=intermediate, session=session)
+
+    def get_alloc_per_node(self):
+        return [self.counted]
+
+    def get_alloc_per_node_by_key(self):
+        return {"Kernel": [self.counted], "Intermediate": [self.intermediate]}
+
+    def select_executor(self):
+        return SimpleNamespace(get_context_id=lambda: self.session)
+
+
+@pytest.fixture
+def no_pools(monkeypatch):
+    monkeypatch.setattr(regions, "_pools", {}, raising=False)
+
+
+def test_a_region_that_grows_the_shared_pool_past_free_memory_does_not_fit(
+    device_memory, no_pools
+):
+    # The resident cookbook's 6-block region: 1.546 GB counted against 2.057 GB free
+    # passed, then grew the session's 2.28 GB Intermediate pool to 3.94 GB at run.
+    free, _ = device_memory
+    create_runtime = regions._checked_create_runtime(lambda model, **kwargs: model)
+    free["bytes"] = 4_000_000_000
+    create_runtime(SessionRegion(0, 2_279_484_288), device=0)
+    free["bytes"] = 2_057_306_112 + BLOCK_BYTES // 10  # the pool now holds 2.28 GB
+    with pytest.raises(regions.RegionDoesNotFit) as error:
+        create_runtime(SessionRegion(1_545_601_024, 3_939_358_336), device=0)
+    assert error.value.needed == [1_545_601_024 + 3_939_358_336 - 2_279_484_288]
+
+
+def test_a_region_within_the_shared_pool_needs_no_more(device_memory, no_pools):
+    # Its Intermediate exceeds the free memory, but the session's pool holds it.
+    free, _ = device_memory
+    create_runtime = regions._checked_create_runtime(lambda model, **kwargs: model)
+    free["bytes"] = 6 * BLOCK_BYTES
+    create_runtime(SessionRegion(0, 5 * BLOCK_BYTES), device=0)
+    free["bytes"] = 2 * BLOCK_BYTES  # the pool now takes its 5 blocks
+    create_runtime(SessionRegion(BLOCK_BYTES, 5 * BLOCK_BYTES), device=0)
+    with pytest.raises(regions.RegionDoesNotFit):  # another session's pool is empty
+        create_runtime(SessionRegion(BLOCK_BYTES, 5 * BLOCK_BYTES, "t"), device=0)

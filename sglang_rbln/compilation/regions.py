@@ -143,23 +143,80 @@ def _node_devices(device: Any, nodes: int) -> list[int]:
     return [(device or 0) + node for node in range(nodes)]
 
 
+# Buffers the runtimes of one sharing session on the same NPUs share: one block per kind
+# and node, as large as the largest runtime that has needed it.
+POOLED_KEYS = ("Intermediate", "Input", "Output")
+# (session, NPUs) -> pooled kind -> bytes per node the session's pool holds now
+_pools: dict[tuple, dict[str, list[int]]] = {}
+
+
+def _pooled(compiled_model: Any, needed: list[int]) -> dict[str, list[int]]:
+    """The pooled buffers the runtime needs per node, when its own total leaves them
+    out; empty when they are counted in it."""
+    by_key = getattr(compiled_model, "get_alloc_per_node_by_key", None)
+    if by_key is None:
+        return {}
+    sizes = {key: list(values) for key, values in by_key().items()}
+    pad = len(needed)
+    totals = [
+        sum(values[node] if node < len(values) else 0 for values in sizes.values())
+        for node in range(pad)
+    ]
+    if all(total <= need for total, need in zip(totals, needed, strict=True)):
+        return {}
+    return {
+        key: [*sizes[key], *[0] * (pad - len(sizes[key]))]
+        for key in POOLED_KEYS
+        if key in sizes
+    }
+
+
+def _pool_key(compiled_model: Any, nodes: list[int]) -> tuple:
+    return compiled_model.select_executor().get_context_id(), tuple(nodes)
+
+
 def check_fits(compiled_model: Any, device: Any = None) -> None:
+    """Raise RegionDoesNotFit unless the runtime fits the free memory of its NPUs.
+
+    In a sharing session the runtime's own total leaves out the pooled buffers. A
+    pooled buffer the runtime needs larger than the session's pool holds grows: the
+    runtime frees the old block and allocates the larger one, so the growth is what
+    it takes beyond its own total.
+    """
     import rebel
 
     needed = list(compiled_model.get_alloc_per_node())
-    infos = [
-        rebel.get_device_memory_info(index)
-        for index in _node_devices(device, len(needed))
-    ]
+    nodes = _node_devices(device, len(needed))
+    if pooled := _pooled(compiled_model, needed):
+        held = _pools.get(_pool_key(compiled_model, nodes), {})
+        for key, sizes in pooled.items():
+            pool = held.get(key, [0] * len(nodes))
+            for node, size in enumerate(sizes):
+                needed[node] += max(0, size - pool[node])
+    infos = [rebel.get_device_memory_info(index) for index in nodes]
     free = [info.free - info.granularity for info in infos]
     if any(need > room for need, room in zip(needed, free, strict=True)):
         raise RegionDoesNotFit(needed, free)
 
 
+def _record_pools(compiled_model: Any, device: Any) -> None:
+    needed = list(compiled_model.get_alloc_per_node())
+    if not (pooled := _pooled(compiled_model, needed)):
+        return
+    nodes = _node_devices(device, len(needed))
+    held = _pools.setdefault(_pool_key(compiled_model, nodes), {})
+    for key, sizes in pooled.items():
+        pool = held.setdefault(key, [0] * len(nodes))
+        held[key] = [max(have, size) for have, size in zip(pool, sizes, strict=True)]
+
+
 def _checked_create_runtime(create_runtime: Callable) -> Callable:
     def checked(compiled_model, *args, **kwargs):
-        check_fits(compiled_model, kwargs.get("device", args[0] if args else None))
-        return create_runtime(compiled_model, *args, **kwargs)
+        device = kwargs.get("device", args[0] if args else None)
+        check_fits(compiled_model, device)
+        runtime = create_runtime(compiled_model, *args, **kwargs)
+        _record_pools(compiled_model, device)
+        return runtime
 
     return checked
 
