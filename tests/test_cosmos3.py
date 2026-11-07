@@ -202,7 +202,7 @@ class TestVaeDecodePlacement:
         assert all(torch.equal(out, expected) for out in outputs)
 
     @pytest.mark.npu  # it decodes device latents, so it holds a device
-    @pytest.mark.device_mode
+    @pytest.mark.resident_mode
     def test_device_latents_decode_on_the_cpu_and_return_to_the_device(self, stage):
         stage.vae.to("rbln:0")
         stage._latents_mean = torch.zeros(1)
@@ -253,7 +253,7 @@ class TestVaeEncodePlacement:
         assert not getattr(tiny_wan_codec, "_rbln_regions_compiled", False)
 
     @pytest.mark.npu  # it encodes a device video, so it holds a device
-    @pytest.mark.device_mode
+    @pytest.mark.resident_mode
     def test_device_video_encodes_on_the_cpu_and_returns_to_the_device(
         self, tiny_wan_codec
     ):
@@ -334,7 +334,7 @@ class TestVaeRegions:
         assert all(o["num_devices"] == 1 for o in options)
         assert [o["device"] for o in options] == [i % 4 for i in range(len(options))]
 
-    @pytest.mark.device_mode
+    @pytest.mark.resident_mode
     @pytest.mark.xfail(
         strict=True,
         reason="rebel: a Wan VAE region gets a device-memory physical view "
@@ -361,7 +361,9 @@ class TestVaeRegions:
         torch.testing.assert_close(out.cpu(), expected, atol=0.05, rtol=0.05)
 
 
-@pytest.mark.parametrize("execution_mode", [ExecutionMode.HOST, ExecutionMode.DEVICE])
+@pytest.mark.parametrize(
+    "execution_mode", [ExecutionMode.STAGED, ExecutionMode.RESIDENT]
+)
 def test_cosmos3_import_chain_applies_the_hook(run_probe, execution_mode):
     assert run_probe(COSMOS3_IMPORT_PROBE, execution_mode) == {
         "execution_mode": execution_mode,

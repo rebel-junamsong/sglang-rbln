@@ -39,7 +39,7 @@ def test_compile_strict_is_on_unless_turned_off(monkeypatch, value, expected):
             {"text_encoder": (4, 5, 6, 7), "vae": (8,)},
         ),
         ("SGLANG_RBLN_DUMP_GRAPHS", "/tmp/graphs", Path("/tmp/graphs")),
-        ("SGLANG_RBLN_EXECUTION_MODE", " Device ", "device"),
+        ("SGLANG_RBLN_EXECUTION_MODE", " Resident ", "resident"),
         ("SGLANG_RBLN_PROFILE_DIR", "/tmp/trace", Path("/tmp/trace")),
         ("SGLANG_RBLN_PROFILE_REQUEST", "5", 5),
     ],

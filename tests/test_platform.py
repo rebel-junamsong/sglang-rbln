@@ -69,14 +69,33 @@ class TestActivate:
 
 
 class TestExecutionMode:
-    @pytest.mark.parametrize("requested", ["host", "device"])
+    @pytest.mark.parametrize("requested", ["staged", "resident"])
     def test_explicit_mode_wins(self, monkeypatch, requested):
         monkeypatch.setenv("SGLANG_RBLN_EXECUTION_MODE", requested)
         assert device.execution_mode() == requested
 
     @pytest.mark.parametrize(
+        ("former", "mode"),
+        [
+            ("host", device.ExecutionMode.STAGED),
+            ("device", device.ExecutionMode.RESIDENT),
+        ],
+    )
+    def test_former_mode_names_still_select_their_mode(
+        self, monkeypatch, caplog, former, mode
+    ):
+        # "host" read as CPU execution; both modes run the graphs on the NPUs.
+        device._log_deprecated_mode.cache_clear()
+        monkeypatch.setenv("SGLANG_RBLN_EXECUTION_MODE", former)
+        with caplog.at_level("WARNING", logger=device.__name__):
+            assert device.execution_mode() is mode
+            assert device.execution_mode() is mode
+        assert caplog.text.count("is deprecated") == 1
+        assert f"use {mode.value}" in caplog.text
+
+    @pytest.mark.parametrize(
         ("torch_rbln_installed", "expected"),
-        [(False, device.ExecutionMode.HOST), (True, device.ExecutionMode.DEVICE)],
+        [(False, device.ExecutionMode.STAGED), (True, device.ExecutionMode.RESIDENT)],
         ids=["without-torch-rbln", "with-torch-rbln"],
     )
     def test_auto_follows_torch_rbln(self, monkeypatch, torch_rbln_installed, expected):
@@ -97,14 +116,14 @@ class TestExecutionMode:
         assert platform.is_out_of_tree()
         assert platform.get_dispatch_key_name() == "rbln"
         if RUNS_ON_DEVICE:
-            assert platform.execution_mode == "device"
+            assert platform.execution_mode == "resident"
             assert (platform.device_type, platform.dispatch_key) == (
                 "rbln",
                 "PrivateUse1",
             )
             assert not platform.is_cpu()
         else:
-            assert platform.execution_mode == "host"
+            assert platform.execution_mode == "staged"
             assert (platform.device_type, platform.dispatch_key) == ("cpu", "CPU")
             assert platform.is_cpu()
             assert platform.get_local_torch_device() == torch.device("cpu")
@@ -187,7 +206,7 @@ class TestDeviceQueries:
         monkeypatch.delenv("RBLN_FORCE_NPU_NAME", raising=False)
         assert RBLNPlatform.get_device_name(0).startswith("RBLN")
 
-    @pytest.mark.device_mode
+    @pytest.mark.resident_mode
     def test_local_torch_device_is_rbln(self, monkeypatch):
         monkeypatch.setenv("LOCAL_RANK", "1")
         local_device = RBLNPlatform.get_local_torch_device()

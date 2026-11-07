@@ -99,16 +99,18 @@ covers the full request options for both models.
 
 ## Execution modes
 
-`SGLANG_RBLN_EXECUTION_MODE` picks where activations live between compiled
-graphs:
+Compiled graphs run on the NPU in both NPU modes; `SGLANG_RBLN_EXECUTION_MODE`
+picks where tensors live between them.
 
-- `host`: activations are CPU tensors; each compiled graph copies its inputs to
-  the NPU and its outputs back. Needs only `rebel-compiler`.
-- `device`: activations are `torch-rbln` tensors that stay on the NPU, and
-  eager operations between graphs run through `torch-rbln`. With
-  `SGLANG_RBLN_NUM_DEVICES` > 1, compiled regions keep activations resident on
-  the tensor-parallel NPUs.
-- `auto` (default): `device` when `torch-rbln` is installed, otherwise `host`.
+| mode | where the graphs run | tensors between graphs | needs |
+|---|---|---|---|
+| CPU eager: `staged` with `--disable-torch-compile` | CPU | CPU tensors | — |
+| `staged`: NPU, host-staged I/O | NPU | CPU tensors: each graph call uploads its inputs and downloads its outputs | `rebel-compiler` |
+| `resident`: NPU, device-resident | NPU | `torch-rbln` tensors that stay on the NPU for the next graph; eager ops between graphs run through `torch-rbln`. With `SGLANG_RBLN_NUM_DEVICES` > 1, compiled regions keep them on the tensor-parallel NPUs | `torch-rbln` |
+
+`auto` (default) is `resident` when `torch-rbln` is installed, otherwise `staged`.
+The former names `host` (= `staged`) and `device` (= `resident`) are still
+accepted, with a deprecation warning.
 
 ## Compiled graphs
 
@@ -149,7 +151,7 @@ the NPU. A compile error fails the request unless `SGLANG_RBLN_COMPILE_STRICT=0`
 | `SGLANG_RBLN_PROFILE_REQUEST=3` | which request (counting from 1, warmups excluded) `SGLANG_RBLN_PROFILE_DIR` captures |
 | `SGLANG_RBLN_COMPILE_VAE_ENCODER=0` | keep the LTX-2 video VAE encoder that I2V conditioning images go through on the CPU. On by default, across the VAE's devices like the decoder; it falls back to the CPU on its own if it does not fit them |
 | `SGLANG_RBLN_DURATION_HEAD_ON_NPU=0` | keep the LTX-2.5 duration head (`auto_duration` requests) on the CPU. On by default, on one NPU: its own if `SGLANG_RBLN_COMPONENT_DEVICES` places it, else the text encoder's last, else the last tensor-parallel one |
-| `SGLANG_RBLN_UPSAMPLER_ON_NPU=1` | compile the LTX-2 latent upsampler (`LTX2TwoStagePipeline`) on the text encoder's NPUs (or its own if `SGLANG_RBLN_COMPONENT_DEVICES` places it, else the DiT's): the DiT's set has no room for it beside both DiT shapes and the VAE decoder. In device mode its latents cross between the two sets on the device |
+| `SGLANG_RBLN_UPSAMPLER_ON_NPU=1` | compile the LTX-2 latent upsampler (`LTX2TwoStagePipeline`) on the text encoder's NPUs (or its own if `SGLANG_RBLN_COMPONENT_DEVICES` places it, else the DiT's): the DiT's set has no room for it beside both DiT shapes and the VAE decoder. In resident mode its latents cross between the two sets on the device |
 | `SGLANG_RBLN_LTX2_DETAILING_LORA=<file>` | experimental: run stage 2 of `LTX2TwoStagePipeline` as the official DFR does, with this detailing IC-LoRA (e.g. `ltx-2.5-22b-ic-lora-pixel-spatial-upscaler-x2-1.0.safetensors`) at strength 0.5 and the stage-1 latent as in-context reference tokens. The LoRA stays dynamic in both stages (strength 0 in stage 1), so both share one copy of the DiT weights on the NPUs |
 | `SGLANG_RBLN_COMPILE_DIFFUSION_DECODER=1` | compile the LTX-2.5 diffusion decoder (`use_diffusion_decoder` requests), one region per stage `ModuleList`, on the DiT's device set or the one `SGLANG_RBLN_COMPONENT_DEVICES` names for `diffusion_decoder`: its ~16 GiB of fixed graph memory does not fit one NPU, so the compiler shards it across that set and shares its compile context. Off by default, which runs the decoder eagerly as upstream does |
 | `SGLANG_RBLN_VOCODER_ON_NPU=1` | compile the LTX-2 vocoder for one NPU, the last tensor-parallel one. Off by default: the NPU's convolutions accumulate with an upward gain that compounds through the vocoder's ~100 convs, so its waveform lands below CPU bf16 (12.9 vs 16.6 dB SNR against float32 at 5 s of audio) |

@@ -16,7 +16,9 @@ from sglang_rbln.compilation import residency
 
 EXECUTION_MODE = device.execution_mode()
 RESIDENT_REGIONS = device.resident_regions()
-RUNS_ON_DEVICE = EXECUTION_MODE is device.ExecutionMode.DEVICE and not RESIDENT_REGIONS
+RUNS_ON_DEVICE = (
+    EXECUTION_MODE is device.ExecutionMode.RESIDENT and not RESIDENT_REGIONS
+)
 TORCH_RBLN_FALLBACK_ENV = "TORCH_RBLN_DISABLE_FALLBACK"
 TORCH_RBLN_FALLBACK_DEFAULT = "compile_error"
 # A compile-only run builds the artifacts a device run loads, so it compiles on device
@@ -53,7 +55,7 @@ class RBLNPlatform(Platform):
             import torch_rbln  # noqa: F401
         except ImportError as e:
             raise RuntimeError(
-                "torch-rbln is required for execution mode 'device' "
+                "torch-rbln is required for execution mode 'resident' "
                 "(pip install 'sglang-rbln[device]')."
             ) from e
 

@@ -592,11 +592,11 @@ def test_a_region_runs_on_the_npus_of_its_blocks():
     )
 
 
-@pytest.mark.device_mode
+@pytest.mark.resident_mode
 def test_kept_outputs_stay_on_the_region_npus(monkeypatch, dummy_device):
     # The text encoder keeps every layer's output; a host placeholder made each one
     # cross to the host once the region ran, and back up for the connector.
-    monkeypatch.setenv("SGLANG_RBLN_EXECUTION_MODE", "device")
+    monkeypatch.setenv("SGLANG_RBLN_EXECUTION_MODE", "resident")
     monkeypatch.setenv("SGLANG_RBLN_NUM_DEVICES", "2")
 
     def backend(graph, example_inputs):

@@ -21,7 +21,7 @@ HEALTH_PROBE_TIMEOUT_SEC = 30
 REQUEST_TIMEOUT_SEC = 900
 SHUTDOWN_TIMEOUT_SEC = 60
 # These tests carry no npu marker, and the host's NPUs belong to other sessions:
-# the server runs in host mode and sees no NPU (there is no NPU 99), with or
+# the server runs in staged mode and sees no NPU (there is no NPU 99), with or
 # without torch-rbln in the environment.
 HIDDEN_NPUS = "99"
 
@@ -84,7 +84,7 @@ def serve_url(npu_name, tmp_path_factory):
         **os.environ,
         "SGLANG_DIFFUSION_PLATFORM_OVERRIDE": "rbln",
         "RBLN_VISIBLE_DEVICES": HIDDEN_NPUS,
-        "SGLANG_RBLN_EXECUTION_MODE": "host",
+        "SGLANG_RBLN_EXECUTION_MODE": "staged",
     }
     serve_env.setdefault("RBLN_FORCE_NPU_NAME", npu_name)
     serve_cmd = [

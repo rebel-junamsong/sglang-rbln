@@ -144,11 +144,12 @@ def pytest_runtest_call(item: pytest.Item):
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     unmet = {
         "npu": (not device.device_nodes(), "no RBLN device nodes on host"),
-        "device_mode": (
-            device.execution_mode() is not device.ExecutionMode.DEVICE,
-            "execution mode is host",
+        "resident_mode": (
+            device.execution_mode() is not device.ExecutionMode.RESIDENT,
+            "execution mode is staged",
         ),
     }
+    unmet["device_mode"] = unmet["resident_mode"]  # its former name
     for item in items:
         for marker, (missing, reason) in unmet.items():
             if missing and item.get_closest_marker(marker):
