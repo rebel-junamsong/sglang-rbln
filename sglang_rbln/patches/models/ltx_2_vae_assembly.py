@@ -13,9 +13,12 @@ of video comes down once, into one buffer.
 
 from __future__ import annotations
 
+import concurrent.futures
 from typing import Any
 
+import numpy as np
 import torch
+from diffusers.image_processor import VaeImageProcessor
 from diffusers.models.autoencoders.vae import DecoderOutput
 from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry, HookType
 from torch import nn
@@ -26,6 +29,8 @@ VAE = "sglang.multimodal_gen.runtime.models.vaes.ltx_2_vae.AutoencoderKLLTX2Vide
 TILED_DECODE = f"{VAE}.tiled_decode"
 TEMPORAL_TILED_DECODE = f"{VAE}._temporal_tiled_decode"
 ASSEMBLIES = "_rbln_tile_assemblies"
+POSTPROCESS_VIDEO = "diffusers.video_processor.VideoProcessor.postprocess_video"
+POSTPROCESSED = "_rbln_postprocessed_frames"
 
 
 def blend(a: torch.Tensor, b: torch.Tensor, extent: int, dim: int) -> torch.Tensor:
@@ -99,6 +104,53 @@ class TemporalStep(nn.Module):
     def forward(self, previous: torch.Tensor, decoded: torch.Tensor):
         tile = blend(previous, decoded[:, :, :-1], self.blend, 2)
         return tile[:, :, : self.stride], tile
+
+
+class FramePostprocess:
+    """Upstream's ``postprocess_video(video, output_type="np")`` of a decoded video,
+    computed chunk by chunk on a worker thread while the NPUs decode the next chunk.
+
+    Its ops (denormalize, then channels last in float32) act frame by frame, so the
+    chunks give the same array bit for bit. Run after the decode, it held up the
+    stage on the host before the audio graph (1.7 s at 1280x704x121 on one thread).
+    """
+
+    def __init__(self, shape: torch.Size) -> None:
+        batch, channels, frames, height, width = shape
+        self.array = np.empty((batch, frames, height, width, channels), np.float32)
+        self.jobs: list[concurrent.futures.Future] = []
+
+    def add(self, frames: torch.Tensor, start: int) -> None:
+        self.jobs.append(_postprocess_worker.submit(self._write, frames, start))
+
+    def _write(self, frames: torch.Tensor, start: int) -> None:
+        for index, video in enumerate(frames):
+            images = VaeImageProcessor.denormalize(video.permute(1, 0, 2, 3))
+            end = start + images.shape[0]
+            self.array[index, start:end] = VaeImageProcessor.pt_to_numpy(images)
+
+    def result(self) -> np.ndarray:
+        for job in self.jobs:
+            job.result()
+        return self.array
+
+
+# One thread for every decode: the host side of a chunk runs beside the NPUs' next.
+_postprocess_worker = concurrent.futures.ThreadPoolExecutor(1, "rbln-postprocess")
+
+
+def postprocess_video(postprocess, processor, video, output_type="np", **kwargs):
+    """The array computed while the video decoded, when upstream would compute the
+    same one: numpy output, denormalized, nothing else asked."""
+    ready = getattr(video, POSTPROCESSED, None)
+    if (
+        ready is None
+        or output_type != "np"
+        or kwargs
+        or not processor.config.do_normalize
+    ):
+        return postprocess(processor, video, output_type, **kwargs)
+    return ready.result()
 
 
 def _resident(value: Any) -> bool:
@@ -192,9 +244,12 @@ def temporal_tiled_decode(self, z, temb, causal=None, return_dict=True):
             output = frames.new_empty(
                 (*frames.shape[:2], num_sample_frames, *frames.shape[3:])
             )
+            postprocessed = FramePostprocess(output.shape)
         output[:, :, written : written + count] = frames[:, :, :count]
+        postprocessed.add(output[:, :, written : written + count], written)
         written += count
 
+    setattr(output, POSTPROCESSED, postprocessed)
     return DecoderOutput(sample=output) if return_dict else (output,)
 
 
@@ -204,4 +259,5 @@ TARGETS = {TILED_DECODE: tiled_decode, TEMPORAL_TILED_DECODE: temporal_tiled_dec
 def register() -> tuple[str, ...]:
     for target, replacement in TARGETS.items():
         HookRegistry.register(target, replacement, HookType.REPLACE)
-    return tuple(TARGETS)
+    HookRegistry.register(POSTPROCESS_VIDEO, postprocess_video, HookType.AROUND)
+    return (*TARGETS, POSTPROCESS_VIDEO)

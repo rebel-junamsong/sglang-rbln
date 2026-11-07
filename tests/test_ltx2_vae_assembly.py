@@ -3,8 +3,10 @@ from __future__ import annotations
 
 from types import MethodType, SimpleNamespace
 
+import numpy as np
 import pytest
 import torch
+from diffusers.video_processor import VideoProcessor
 from sglang.multimodal_gen.runtime.models.vaes.ltx_2_vae import AutoencoderKLLTX2Video
 from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry, HookType
 
@@ -132,6 +134,45 @@ def test_a_chunk_left_with_no_frames_is_not_joined(monkeypatch):
         shapes for shapes in joined if len(shapes) == 2 and shapes[0][3] == shapes[1][3]
     ]
     assert temporal and all(shapes[1][2] > 1 for shapes in temporal)
+
+
+POSTPROCESS = VideoProcessor.postprocess_video
+
+
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
+def test_the_video_is_postprocessed_while_it_decodes(dtype):
+    # Run after the decode, upstream's postprocess held the stage on the host for
+    # 1.7 s at 1280x704x121 before the audio graph.
+    ours = fake_vae(dtype, assembly.tiled_decode, assembly.temporal_tiled_decode)
+    video = ours._temporal_tiled_decode(latent(dtype, 13), None).sample
+    processor = VideoProcessor(vae_scale_factor=32)
+    expected = POSTPROCESS(processor, video, output_type="np")
+    called = []
+
+    def upstream(*args, **kwargs):
+        called.append(args)
+        return POSTPROCESS(*args, **kwargs)
+
+    actual = assembly.postprocess_video(upstream, processor, video, output_type="np")
+    assert called == []
+    assert actual.dtype == expected.dtype and np.array_equal(actual, expected)
+
+
+@pytest.mark.parametrize("output_type", ["pt", "np"])
+def test_any_other_postprocess_is_upstreams(output_type):
+    ours = fake_vae(
+        torch.float32, assembly.tiled_decode, assembly.temporal_tiled_decode
+    )
+    video = ours._temporal_tiled_decode(latent(torch.float32, 9), None).sample
+    processor = VideoProcessor(vae_scale_factor=32)
+    # "np" with its own denormalize choice per frame is not the precomputed array
+    extra = {} if output_type == "pt" else {"do_denormalize": [False] * video.shape[2]}
+    actual = assembly.postprocess_video(
+        POSTPROCESS, processor, video, output_type, **extra
+    )
+    expected = POSTPROCESS(processor, video, output_type, **extra)
+    assert type(actual) is type(expected)
+    assert np.array_equal(np.asarray(actual), np.asarray(expected))
 
 
 def test_host_tiles_are_not_compiled(monkeypatch):
