@@ -111,6 +111,17 @@ def test_text_encoder_stays_with_the_dit_when_spare_npus_cannot_hold_it(npus):
     assert {_placement(module) for module in encoder.modules()} == {(None, 4)}
 
 
+def test_a_compile_only_run_places_on_the_spare_npus_without_asking_them(
+    npus, monkeypatch
+):
+    """It has no NPU to ask for free memory: the dummy device reports none."""
+    npus(8)
+    monkeypatch.setenv("SGLANG_RBLN_COMPILE_ONLY", "1")
+    monkeypatch.setattr(device, "npu_memory_info", lambda index: None)
+    encoder, _ = placement.place_component(_load, "vocoder", "path")
+    assert {_placement(module) for module in encoder.modules()} == {((4, 5, 6, 7), 4)}
+
+
 def test_explicit_placement_wins_over_spare_npus(npus, monkeypatch):
     npus(8)
     monkeypatch.setenv("SGLANG_RBLN_COMPONENT_DEVICES", "text_encoder=6,7")

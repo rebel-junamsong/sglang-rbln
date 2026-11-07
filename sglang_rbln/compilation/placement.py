@@ -66,6 +66,9 @@ def spare_devices(module: nn.Module) -> tuple[int, ...] | None:
     spare = spare_set()
     if spare is None:
         return None
+    if envs.SGLANG_RBLN_COMPILE_ONLY:
+        # No NPU to ask: build what a run takes when the spare set holds it.
+        return spare
     share = weight_bytes(module) // len(spare) + RUNTIME_RESERVE
     free = min(device.npu_memory_info(index).free for index in spare)
     if share > free:

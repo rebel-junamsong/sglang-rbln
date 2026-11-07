@@ -15,6 +15,7 @@ from typing import Any
 
 import torch
 from torch import nn
+from torch._subclasses.fake_tensor import FakeTensor, FakeTensorMode
 from torch.utils._pytree import tree_leaves, tree_map
 
 from sglang_rbln import device, envs
@@ -112,6 +113,27 @@ def call_sandboxed(function: Callable, args: tuple, kwargs: dict) -> Any:
                 var.value = value
 
     return contextvars.copy_context().run(run)
+
+
+def _stand_in(value: Any) -> Any:
+    if not isinstance(value, FakeTensor):
+        return value
+    return torch.empty(value.shape, dtype=value.dtype, device=value.device)
+
+
+def call_to_learn(function: Callable, args: tuple, kwargs: dict) -> Any:
+    """Run a region's first block once, to learn where its outputs go next.
+
+    A compile-only run cannot execute it: on the dummy device it has no NPU. It
+    runs on fake tensors instead, and hands on empty tensors of the same shape,
+    dtype and device: they reach the next block as a run's would, and a kept
+    output takes the compiled region's output as a run's does.
+    """
+    if not envs.SGLANG_RBLN_COMPILE_ONLY:
+        return call_sandboxed(function, args, kwargs)
+    with FakeTensorMode(allow_non_fake_inputs=True):
+        output = call_sandboxed(function, args, kwargs)
+    return tree_map(_stand_in, output)
 
 
 class BlockGroup(nn.Module):
@@ -326,7 +348,7 @@ class DeferredBlock:
         if self.index == 0:
             state["first"] = (args, kwargs)
             state["calls"].append(None)
-            output = call_sandboxed(state["eager"][0], args, kwargs)
+            output = call_to_learn(state["eager"][0], args, kwargs)
             state["returned"] = _leading(output)
             return output
         slots = _find_slots(state["returned"], args, kwargs)

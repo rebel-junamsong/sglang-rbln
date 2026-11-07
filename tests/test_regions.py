@@ -10,6 +10,8 @@ import pytest
 import torch
 from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry
 from torch import nn
+from torch._subclasses.fake_tensor import FakeTensor
+from torch.utils._pytree import tree_leaves
 
 from sglang_rbln.compilation import placement, regions, residency, shapes
 
@@ -139,6 +141,39 @@ def test_first_call_returns_the_compiled_region_output(keep_outputs):
         assert all(map(torch.equal, first, second))
     else:
         assert torch.equal(first, second)
+
+
+@pytest.mark.parametrize("keep_outputs", [False, True], ids=["last", "kept"])
+def test_a_compile_only_region_learns_without_running_a_block(
+    monkeypatch, keep_outputs
+):
+    """On the dummy device a block cannot run: the first call learns on fakes."""
+    monkeypatch.setenv("SGLANG_RBLN_COMPILE_ONLY", "1")
+    torch.manual_seed(0)
+    model = (RecordingModel if keep_outputs else Model)(depth=4).eval()
+    first, seen = model.blocks[0], []
+    forward = first.forward
+
+    def recording(x, *args, **kwargs):
+        seen.append(isinstance(x, FakeTensor))
+        return forward(x, *args, **kwargs)
+
+    first.forward = recording
+    regions.group_blocks(
+        list(model.blocks), None, {"backend": _ones, "dynamic": False}, keep_outputs
+    )
+    x = torch.randn(2, 8)
+    with torch.no_grad():
+        output = model(x)
+    assert seen[0], "the learning call ran a block on real tensors"
+    leaves = tree_leaves(output)
+    assert not any(isinstance(leaf, FakeTensor) for leaf in leaves)
+    if keep_outputs:
+        assert all(torch.equal(leaf, torch.ones(2, 8)) for leaf in leaves)
+
+
+def _ones(graph, example_inputs):
+    return lambda *args: [torch.ones_like(output) for output in graph(*args)]
 
 
 _steps: contextvars.ContextVar[list] = contextvars.ContextVar("steps")
