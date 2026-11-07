@@ -125,3 +125,54 @@ def test_dit_forward_traces_as_one_graph(model):
     assert ltx_2_patch.ROTARY_TABLES in model.rope.__dict__
     for output, reference in zip(outputs, expected, strict=True):
         torch.testing.assert_close(output, reference)
+
+
+class _ServerArgs(SimpleNamespace):
+    def is_arg_explicitly_set(self, name: str) -> bool:
+        return name in self.explicit
+
+
+@pytest.mark.parametrize(
+    ("module", "explicit", "regional"),
+    [
+        (
+            dit.LTX2VideoTransformer3DModel.__new__(dit.LTX2VideoTransformer3DModel),
+            (),
+            False,
+        ),
+        (
+            dit.LTX2VideoTransformer3DModel.__new__(dit.LTX2VideoTransformer3DModel),
+            ("regional_compile",),
+            True,
+        ),
+        (torch.nn.Linear(2, 2), (), True),
+    ],
+    ids=["ltx-dit", "explicit-regional", "other-module"],
+)
+def test_resident_regions_compile_the_ltx_dit_whole(module, explicit, regional):
+    # Per block, every step took the hidden states to the host for the output norm.
+    stage = SimpleNamespace(
+        server_args=_ServerArgs(regional_compile=True, explicit=set(explicit))
+    )
+    seen = []
+
+    def compile_module(stage, module):
+        seen.append(stage.server_args.regional_compile)
+        return "compiled"
+
+    assert (
+        ltx_2_patch.compile_the_dit_whole(compile_module, stage, module) == "compiled"
+    )
+    assert seen == [regional]
+    assert stage.server_args.regional_compile is True  # the server's choice is back
+
+
+def test_the_whole_dit_compile_wraps_the_denoising_stage():
+    from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry, HookType
+
+    target = ltx_2_patch.register_resident()
+    assert target.endswith("DenoisingStage._maybe_torch_compile")
+    assert any(
+        hook is ltx_2_patch.compile_the_dit_whole and kind is HookType.AROUND
+        for kind, hook, _ in HookRegistry._hooks[target]
+    )

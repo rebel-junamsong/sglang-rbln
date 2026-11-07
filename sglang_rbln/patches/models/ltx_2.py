@@ -20,6 +20,10 @@ VAE = f"{MODELS}.vaes.ltx_2_vae.AutoencoderKLLTX2Video"
 DIFFUSION_DECODER = f"{MODELS}.decoders.ltx_2_5_diffusion_decoder"
 DIFFUSION_DECODER_NA3D = f"{DIFFUSION_DECODER}._na3d"
 DIFFUSION_DECODER_INIT = f"{DIFFUSION_DECODER}.LTX2VideoDiffusionDecoder3d.__init__"
+DIT_COMPILE = (
+    "sglang.multimodal_gen.runtime.pipelines_core.stages.denoising."
+    "DenoisingStage._maybe_torch_compile"
+)
 
 
 ROTARY_TABLES = "_rbln_rotary_tables"
@@ -121,6 +125,37 @@ BLENDS = {
     f"{VAE}.blend_h": blend_h,
     f"{VAE}.blend_t": blend_t,
 }
+
+
+def compile_the_dit_whole(compile_module, stage, module):
+    """With resident regions, compile the LTX-2 DiT's whole forward as one graph.
+
+    Compiled per block, its patchify and output norm ran on the host: every step
+    brought the hidden states down (884 MiB a request at 1280x704x121) and the
+    next step's input up again. Whole, a step takes the latents and returns the
+    velocities on the NPUs. An explicit --regional-compile keeps the blocks; other
+    modules and models are compiled as they were.
+    """
+    from sglang.multimodal_gen.runtime.models.dits.ltx_2 import (
+        LTX2VideoTransformer3DModel,
+    )
+
+    server_args = stage.server_args
+    if not isinstance(
+        module, LTX2VideoTransformer3DModel
+    ) or server_args.is_arg_explicitly_set("regional_compile"):
+        return compile_module(stage, module)
+    regional = server_args.regional_compile
+    server_args.regional_compile = False
+    try:
+        return compile_module(stage, module)
+    finally:
+        server_args.regional_compile = regional
+
+
+def register_resident() -> str:
+    HookRegistry.register(DIT_COMPILE, compile_the_dit_whole, HookType.AROUND)
+    return DIT_COMPILE
 
 
 def register() -> tuple[str, ...]:
