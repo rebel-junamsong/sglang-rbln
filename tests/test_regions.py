@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import contextlib
 import contextvars
+import gc
 import math
+import weakref
 from types import SimpleNamespace
 
 import pytest
@@ -538,6 +540,34 @@ def test_a_region_that_ran_out_after_loading_releases_its_graphs(monkeypatch):
     torch.manual_seed(0)
     _grouped_run(Model(depth=4).eval(), {"backend": backend, "dynamic": False})
     assert released == [4, 2, 2]  # each failed group, before its halves
+
+
+def test_a_released_attempt_holds_no_runtime(monkeypatch):
+    # The failed call's frames held its runtime while the caught error lived, so
+    # releasing the group freed nothing: the abandoned attempts' buffers piled up on
+    # the device beside the smaller graphs (1.4 GiB of DRAM tensors on node 0).
+    monkeypatch.delenv("SGLANG_RBLN_BLOCKS_PER_REGION", raising=False)
+    runtimes, alive = [], []
+
+    class Runtime:
+        pass
+
+    def backend(graph, example_inputs):
+        if _blocks_in(graph) > 1:
+            runtime = Runtime()
+            runtimes.append(weakref.ref(runtime))
+            regions.runtimes_created += 1
+            raise RuntimeError("SYS_ENOMEM")
+        return graph
+
+    def release(group):
+        gc.collect()
+        alive.append(runtimes[-1]() is not None)
+
+    monkeypatch.setattr(regions, "release_graphs", release)
+    torch.manual_seed(0)
+    _grouped_run(Model(depth=4).eval(), {"backend": backend, "dynamic": False})
+    assert alive == [False, False, False]
 
 
 def test_a_refusal_that_loaded_nothing_releases_nothing(monkeypatch, sized_graphs):

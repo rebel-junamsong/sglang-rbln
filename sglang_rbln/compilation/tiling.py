@@ -7,6 +7,7 @@ import math
 from collections.abc import Callable
 from typing import Any
 
+from sglang_rbln.compilation.backend import forget_frames
 from sglang_rbln.compilation.regions import RegionDoesNotFit, _does_not_fit
 
 logger = logging.getLogger(__name__)
@@ -136,4 +137,5 @@ def with_smaller_tiles(
             shrunk = frames is not None and shrink_window(module, error, frames)
             if not (shrunk or shrink_tiles(module, error)):
                 raise
+            forget_frames(error)
             release()

@@ -9,6 +9,7 @@ import logging
 import os
 import pickle
 import sys
+import traceback
 import types
 import weakref
 from dataclasses import dataclass, field
@@ -96,6 +97,20 @@ def static_compile_kwargs(module: torch.nn.Module) -> dict[str, Any]:
 
 
 COMPILED = "_rbln_compiled"
+
+
+def forget_frames(error: BaseException) -> None:
+    """Drop the locals of the frames an error's traceback holds, and its causes'.
+
+    A graph that did not fit fails inside its own call, so the frames of that call
+    hold its runtime: while the caught error lives, releasing the graph frees
+    nothing, and the given-up size's buffers stay on the device beside the next.
+    """
+    seen = set()
+    while error is not None and id(error) not in seen:
+        seen.add(id(error))
+        traceback.clear_frames(error.__traceback__)
+        error = error.__cause__ or error.__context__
 
 
 def release_graphs(module: torch.nn.Module) -> None:

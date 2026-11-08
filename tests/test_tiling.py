@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
+import gc
+import weakref
 from types import SimpleNamespace
 
 import pytest
@@ -214,3 +216,30 @@ def test_an_eager_tensor_without_room_shrinks_the_window():
 
     assert tiling.with_smaller_tiles(call, coder, frames=121) == "video"
     assert attempts == [None, (64, 56)]
+
+
+def test_a_given_up_size_is_released_free_of_its_frames():
+    # The given-up decode's frames held its runtime while the caught error lived, so
+    # its buffers stayed on the device beside every smaller window tried after it.
+    coder = VideoCoder()
+    runtimes, alive = [], []
+
+    class Runtime:
+        pass
+
+    def decode():
+        runtime = Runtime()
+        runtimes.append(weakref.ref(runtime))
+        raise RuntimeError("SYS_ENOMEM")
+
+    def call():
+        if not coder.use_framewise_decoding:
+            decode()
+        return "video"
+
+    def release():
+        gc.collect()
+        alive.append(runtimes[-1]() is not None)
+
+    assert tiling.with_smaller_tiles(call, coder, release, frames=121) == "video"
+    assert alive == [False]

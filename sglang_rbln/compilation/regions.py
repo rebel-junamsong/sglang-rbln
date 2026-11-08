@@ -19,7 +19,7 @@ from torch.utils._pytree import tree_leaves, tree_map
 
 from sglang_rbln import device, envs
 from sglang_rbln.compilation import placement, shapes
-from sglang_rbln.compilation.backend import release_graphs
+from sglang_rbln.compilation.backend import forget_frames, release_graphs
 
 logger = logging.getLogger(__name__)
 
@@ -416,6 +416,7 @@ class Region:
             if not _does_not_fit(error):
                 raise
             if runtimes_created > created:
+                forget_frames(error)
                 self._release()
             if len(self.blocks) == 1:
                 raise
