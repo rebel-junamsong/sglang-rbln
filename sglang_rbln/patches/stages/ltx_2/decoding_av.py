@@ -145,7 +145,6 @@ def compile_video_decoder(forward, stage, batch, server_args, *args, **kwargs):
         else:
             compile_kwargs = static_compile_kwargs(module.decoder)
             module.decoder.compile(**compile_kwargs)
-            module.use_framewise_decoding = True
             logger.info("Compiling the LTX-2 video decoder: %s", compile_kwargs)
         setattr(module, COMPILED, True)
     return forward(stage, batch, server_args, *args, **kwargs)
@@ -155,14 +154,20 @@ def decode_within_memory(decode, vae, *args, **kwargs):
     """Retry the VAE decode on smaller tiles when a tile's graph does not fit.
 
     One tile is one graph, so a decoder cannot be split like a block region; the
-    tile size is its knob. Only the VAE decode retries: another graph of the stage
-    that does not fit has nothing to gain from smaller tiles. Before a retry the
-    given-up size's graphs leave the device.
+    tile size is its knob. The decode starts on all of the video's frames at once,
+    as upstream's does: a temporal window costs detail in every frame it blends.
+    Only when that does not fit does it take the largest window that does, and only
+    past the smallest window do the spatial tiles shrink. Only the VAE decode
+    retries: another graph of the stage that does not fit has nothing to gain from
+    smaller tiles. Before a retry the given-up size's graphs leave the device.
     """
+    z = args[0] if args else kwargs["z"]
+    frames = (z.shape[2] - 1) * vae.temporal_compression_ratio + 1
     return tiling.with_smaller_tiles(
         lambda: decode(vae, *args, **kwargs),
         vae,
         lambda: release_graphs(vae.decoder),
+        frames,
     )
 
 

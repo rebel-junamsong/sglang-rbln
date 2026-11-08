@@ -22,23 +22,33 @@ TILE_ATTRIBUTES = (
 # Below this the tiles stop paying for themselves: the seams cost more than the
 # graph saves, and upstream's own minimum is 256.
 MIN_TILE = 128
+# The temporal windows a video decoder falls back to, in sample frames, largest
+# first. Each blends into the next over OVERLAP frames. Every blended frame is an
+# average of two decodes and loses detail (upstream's 16/8 windows blend half the
+# frames: 0.77x the Laplacian variance of an untiled decode), so a decode starts
+# untiled and takes the largest window that fits. A fixed ladder keeps the window,
+# and so the graphs, the same from one request to the next.
+WINDOWS = (64, 32, 16)
+OVERLAP = 8
 
 
-def _shrink_factor(error: BaseException) -> float:
-    """How much smaller the tile has to be, from what the fit check measured.
-
-    A tile's activations scale with its area, so the side shrinks by the square
-    root of the memory ratio. Without numbers (a bare SYS_ENOMEM from the
-    runtime) fall back to halving the area.
-    """
+def _shortfall(error: BaseException) -> float | None:
+    """How many times the room the graph needed, on its tightest node; None when
+    the error carries no numbers (a bare SYS_ENOMEM from the runtime)."""
     if not isinstance(error, RegionDoesNotFit):
-        return math.sqrt(2)
+        return None
     ratios = [
         need / room
         for need, room in zip(error.needed, error.free, strict=True)
         if room > 0 and need > room
     ]
-    return math.sqrt(max(ratios, default=2.0))
+    return max(ratios, default=None)
+
+
+def _shrink_factor(error: BaseException) -> float:
+    """How much smaller the tile's side has to be: its activations scale with its
+    area, so by the square root of the shortfall, or of 2 without one."""
+    return math.sqrt(_shortfall(error) or 2.0)
 
 
 def _rounded(value: float) -> int:
@@ -74,18 +84,56 @@ def shrink_tiles(module: Any, error: BaseException) -> bool:
     return True
 
 
+def shrink_window(module: Any, error: BaseException, frames: int) -> bool:
+    """Decode `module`'s `frames` sample frames in a smaller temporal window.
+
+    It is the largest of WINDOWS the shortfall allows, as activations scale with
+    the frames, or without a shortfall the next smaller. Returns False when the
+    window is already the smallest, or the module does not decode in windows.
+    """
+    if not hasattr(module, "use_framewise_decoding"):
+        return False
+    current = (
+        module.tile_sample_min_num_frames if module.use_framewise_decoding else frames
+    )
+    smaller = [window for window in WINDOWS if window < current]
+    if not smaller:
+        return False
+    shortfall = _shortfall(error)
+    target = current / shortfall if shortfall else smaller[0]
+    window = next((window for window in smaller if window <= target), smaller[-1])
+    module.use_framewise_decoding = True
+    module.tile_sample_min_num_frames = window
+    module.tile_sample_stride_num_frames = window - OVERLAP
+    logger.info(
+        "%s frames did not fit (%s); decoding in %s-frame windows",
+        current,
+        error,
+        window,
+    )
+    return True
+
+
 def with_smaller_tiles(
-    call: Callable[[], Any], module: Any, release: Callable[[], None] = lambda: None
+    call: Callable[[], Any],
+    module: Any,
+    release: Callable[[], None] = lambda: None,
+    frames: int | None = None,
 ) -> Any:
     """Run `call`, shrinking `module`'s tiles while they do not fit the device.
 
-    `release` drops what the given-up tile size left on the device (its graphs'
+    A video decode of `frames` sample frames gives up frames before area: its
+    temporal window shrinks to the smallest of WINDOWS before its spatial tiles do.
+    `release` drops what the given-up size left on the device (its graphs'
     runtimes) before the smaller size compiles beside it.
     """
     while True:
         try:
             return call()
         except Exception as error:
-            if not _does_not_fit(error) or not shrink_tiles(module, error):
+            if not _does_not_fit(error):
+                raise
+            shrunk = frames is not None and shrink_window(module, error, frames)
+            if not (shrunk or shrink_tiles(module, error)):
                 raise
             release()

@@ -102,7 +102,9 @@ def test_compiles_the_decoder_once(stage, compiled):
     assert [module for module, _ in compiled] == [stage.vae.decoder]
     assert compiled[0][1]["backend"] == "rbln"
     assert compiled[0][1]["dynamic"] is False
-    assert stage.vae.use_framewise_decoding
+    # Every frame in one window, as upstream decodes; a window is taken only when
+    # the decode does not fit (decode_within_memory).
+    assert not stage.vae.use_framewise_decoding
     assert compiled[0][1]["options"]["compile_context"].state.use_weight_sharing
 
 
@@ -378,6 +380,7 @@ def test_vae_decode_retries_on_smaller_tiles_without_the_old_graphs(monkeypatch)
     monkeypatch.setattr(decoding_av, "release_graphs", released.append)
     vae = SimpleNamespace(
         decoder=TiledDecoder(),
+        temporal_compression_ratio=8,
         tile_sample_min_height=512,
         tile_sample_min_width=512,
         tile_sample_stride_height=448,
@@ -392,9 +395,39 @@ def test_vae_decode_retries_on_smaller_tiles_without_the_old_graphs(monkeypatch)
             raise regions.RegionDoesNotFit([400 << 20], [100 << 20])
         return "video"
 
-    assert decoding_av.decode_within_memory(decode, vae, "latents") == "video"
+    latents = torch.zeros(1, 128, 16, 22, 40)
+    assert decoding_av.decode_within_memory(decode, vae, latents) == "video"
     assert tiles == [512, 256]
     assert released == [vae.decoder]
+
+
+def test_vae_decode_gives_up_frames_before_area(monkeypatch):
+    """121 frames (16 latent) that do not fit decode in a 64-frame window, and the
+    spatial tiles stay as they were."""
+    monkeypatch.setattr(decoding_av, "release_graphs", lambda decoder: None)
+    vae = SimpleNamespace(
+        decoder=TiledDecoder(),
+        temporal_compression_ratio=8,
+        use_framewise_decoding=False,
+        tile_sample_min_num_frames=16,
+        tile_sample_stride_num_frames=8,
+        tile_sample_min_height=512,
+        tile_sample_min_width=512,
+        tile_sample_stride_height=448,
+        tile_sample_stride_width=448,
+    )
+    vae.enable_tiling = lambda **sizes: pytest.fail("tiles shrank")
+    windows = []
+
+    def decode(vae, z):
+        windows.append(vae.use_framewise_decoding and vae.tile_sample_min_num_frames)
+        if not vae.use_framewise_decoding:
+            raise regions.RegionDoesNotFit([150 << 20], [100 << 20])
+        return "video"
+
+    latents = torch.zeros(1, 128, 16, 22, 40)
+    assert decoding_av.decode_within_memory(decode, vae, z=latents) == "video"
+    assert windows == [False, 64]
 
 
 class Released(nn.Module):

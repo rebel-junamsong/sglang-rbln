@@ -106,3 +106,91 @@ def test_lets_an_unrelated_failure_through():
     with pytest.raises(ValueError):
         tiling.with_smaller_tiles(call, coder)
     assert coder.enabled == []
+
+
+class VideoCoder(Coder):
+    """A coder that also decodes in temporal windows, as the LTX-2 VAE does."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.use_framewise_decoding = False
+        self.tile_sample_min_num_frames = 16
+        self.tile_sample_stride_num_frames = 8
+
+
+def window(coder: VideoCoder) -> tuple[int, int] | None:
+    if not coder.use_framewise_decoding:
+        return None
+    return coder.tile_sample_min_num_frames, coder.tile_sample_stride_num_frames
+
+
+def test_a_decode_that_fits_keeps_every_frame_in_one_window():
+    coder = VideoCoder()
+    assert tiling.with_smaller_tiles(lambda: "video", coder, frames=121) == "video"
+    assert window(coder) is None
+
+
+def test_takes_the_largest_window_the_shortfall_allows():
+    coder = VideoCoder()
+    # 121 frames needed 1.5x the room: 80 would fit, the ladder's largest is 64.
+    assert tiling.shrink_window(coder, does_not_fit([150 * MiB], [100 * MiB]), 121)
+    assert window(coder) == (64, 56)
+    # 4x: 30 frames would fit, so 16, not the next rung down.
+    coder = VideoCoder()
+    assert tiling.shrink_window(coder, does_not_fit([400 * MiB], [100 * MiB]), 121)
+    assert window(coder) == (16, 8)
+
+
+@pytest.mark.parametrize(
+    ("start", "after"), [(None, (64, 56)), ((64, 56), (32, 24)), ((32, 24), (16, 8))]
+)
+def test_a_window_that_does_not_fit_takes_the_next_rung(start, after):
+    coder = VideoCoder()
+    if start is not None:
+        coder.use_framewise_decoding = True
+        coder.tile_sample_min_num_frames, coder.tile_sample_stride_num_frames = start
+    # A bare SYS_ENOMEM carries no shortfall: one rung at a time.
+    assert tiling.shrink_window(coder, RuntimeError("SYS_ENOMEM"), 121)
+    assert window(coder) == after
+
+
+def test_frames_shrink_before_the_spatial_tiles():
+    coder = VideoCoder()
+    attempts = []
+
+    def call():
+        attempts.append((window(coder), coder.tile_sample_min_height))
+        if coder.tile_sample_min_height > 256:
+            raise RuntimeError("SYS_ENOMEM")
+        return "video"
+
+    assert tiling.with_smaller_tiles(call, coder, frames=121) == "video"
+    assert attempts == [
+        (None, 512),
+        ((64, 56), 512),
+        ((32, 24), 512),
+        ((16, 8), 512),
+        ((16, 8), 352),
+        ((16, 8), 224),
+    ]
+
+
+def test_the_window_holds_for_the_next_request():
+    coder = VideoCoder()
+    sizes = iter([does_not_fit([150 * MiB], [100 * MiB])])
+
+    def call():
+        error = next(sizes, None)
+        if error is not None:
+            raise error
+        return window(coder)
+
+    assert tiling.with_smaller_tiles(call, coder, frames=121) == (64, 56)
+    assert tiling.with_smaller_tiles(call, coder, frames=121) == (64, 56)
+
+
+def test_a_short_video_never_takes_a_window_as_long_as_itself():
+    coder = VideoCoder()
+    # 33 frames: only the 32 and 16 rungs are shorter.
+    assert tiling.shrink_window(coder, does_not_fit([150 * MiB], [100 * MiB]), 33)
+    assert window(coder) == (16, 8)
