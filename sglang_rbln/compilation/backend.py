@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 import torch
+from torch._dynamo.eval_frame import _debug_get_cache_entry_list
 
 from sglang_rbln import device, envs
 from sglang_rbln.compilation import device_views, placement, shapes, timeline
@@ -120,8 +121,33 @@ def release_graphs(module: torch.nn.Module) -> None:
     The graphs are cached on the forward of `module`'s class, so every instance of
     that class loses its graphs too.
     """
-    torch._dynamo.eval_frame.remove_from_cache(type(module).forward)
+    forward = type(module).forward
+    _release_code(forward.__code__, forward.__globals__, set())
     gc.collect()
+
+
+def _release_code(code: types.CodeType, scope: dict, released: set) -> None:
+    """Drop the graphs cached on `code` and on the functions its graph breaks resume in.
+
+    Dynamo keeps each compiled graph, and the resume function a graph break leaves the
+    rest of the forward to, in the module's globals under a name only the cached code
+    refers to. Resetting the forward's cache alone kept them, and their runtimes held
+    their device buffers for good.
+    """
+    if code in released:
+        return
+    released.add(code)
+    names = {
+        name
+        for entry in _debug_get_cache_entry_list(code)
+        for name in entry.code.co_names
+        if name.startswith(("__compiled_fn", "__resume_at"))
+    }
+    torch._dynamo.eval_frame.remove_from_cache(code)
+    for name in names:
+        value = scope.pop(name, None)
+        if name.startswith("__resume_at") and value is not None:
+            _release_code(value.__code__, scope, released)
 
 
 def compile_once(module: torch.nn.Module, what: str, compile_kwargs: dict) -> None:

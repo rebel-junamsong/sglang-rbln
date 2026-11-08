@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 import logging
+import weakref
 from types import SimpleNamespace
 
 import pytest
@@ -459,3 +460,37 @@ def test_released_graphs_leave_the_cache_and_no_others():
     assert len(cached(Kept.forward.__code__)) == 2
     assert torch.equal(released(torch.zeros(2, 4)), torch.ones(2, 4))
     assert len(compiles) == 5  # compiled again, from the artifact cache on a device
+
+
+class BreakingDecoder(nn.Module):
+    """A forward with a graph break: the rest of it runs in a resume function."""
+
+    def forward(self, x):
+        y = x + 1
+        torch._dynamo.graph_break()
+        return y * 2
+
+
+def test_released_graphs_include_those_after_a_graph_break():
+    # The graphs cached on the resume function stayed, and with them the runtimes
+    # of every given-up decode: 2.3 GiB of device outputs on the DiT's first NPU.
+    runtimes = []
+
+    class Runtime:
+        def __init__(self, graph):
+            self.graph = graph
+
+        def __call__(self, *args):
+            return self.graph(*args)
+
+    def backend(graph, example_inputs):
+        runtime = Runtime(graph)
+        runtimes.append(weakref.ref(runtime))
+        return runtime
+
+    decoder = BreakingDecoder()
+    decoder.compile(backend=backend, dynamic=False)
+    decoder(torch.randn(2, 4))
+    assert len(runtimes) == 2
+    compilation.release_graphs(decoder)
+    assert [runtime() for runtime in runtimes] == [None, None]
