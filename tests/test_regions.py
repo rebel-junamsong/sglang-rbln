@@ -745,3 +745,35 @@ def test_a_split_region_compiles_in_its_parents_sharing_session(monkeypatch):
     with torch.no_grad():
         model(torch.randn(2, 8))
     assert len(compiled) == 3 and all(each is context for each in compiled)
+
+
+def test_roll_blocks_calls_each_block_as_one_nested_region(monkeypatch):
+    blocks = [Block(8) for _ in range(3)]
+    x, y = torch.randn(2, 8), torch.randn(2, 8)
+    calls = [((x, y, 2.0), {"shift": 0.5}) for _ in blocks]
+
+    def group(roll: bool) -> regions.BlockGroup:
+        monkeypatch.setenv("SGLANG_RBLN_ROLL_BLOCKS", "1" if roll else "0")
+        monkeypatch.setattr(regions, "_layer_regions", {})
+        built = regions.BlockGroup(blocks)
+        built.slots = (0, 1)
+        return built
+
+    graphs = []
+
+    def backend(gm, example_inputs):
+        graphs.append(gm)
+        return gm.forward
+
+    rolled = torch.compile(group(roll=True), backend=backend, fullgraph=True)
+    with torch._dynamo.config.patch(inline_single_use_invoke_subgraph=False):
+        out = rolled((x, y), calls)
+
+    calls_of_region = [
+        node
+        for graph in graphs
+        for node in graph.graph.nodes
+        if node.target is torch.ops.higher_order.invoke_subgraph
+    ]
+    assert len(calls_of_region) == len(blocks)
+    torch.testing.assert_close(out, group(roll=False)((x, y), calls))

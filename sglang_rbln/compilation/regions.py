@@ -115,18 +115,36 @@ def call_sandboxed(function: Callable, args: tuple, kwargs: dict) -> Any:
     return contextvars.copy_context().run(run)
 
 
+# One nested compile region per block class, made outside tracing: Dynamo
+# inlines a region it creates while tracing (functools caches included).
+_layer_regions: dict[Callable, Callable] = {}
+
+
 class BlockGroup(nn.Module):
     def __init__(self, blocks: Sequence[nn.Module], keep_outputs: bool = False) -> None:
         super().__init__()
         self.blocks = nn.ModuleList(blocks)
         self.keep_outputs = keep_outputs
         self.slots: tuple[Slot, ...] = ()
+        if envs.SGLANG_RBLN_ROLL_BLOCKS:
+            for forward in {type(block).forward for block in blocks}:
+                if forward not in _layer_regions:
+                    _layer_regions[forward] = torch.compiler.nested_compile_region(
+                        forward
+                    )
+
+    def _call_block(self, block: nn.Module, args: tuple, kwargs: dict) -> Any:
+        # As calls of one region, the blocks reach the compiler as a layer loop
+        # it can compile once (RBLN_EXP_ROLL_LAYERS_ANY_DEVICE on CA22/CA25).
+        if region := _layer_regions.get(type(block).forward):
+            return region(block, *args, **kwargs)
+        return block(*args, **kwargs)
 
     def forward(self, values: tuple, calls: list[tuple[tuple, dict]]) -> Any:
         kept: tuple = ()
         for block, (args, kwargs) in zip(self.blocks, calls, strict=True):
             args, kwargs = _fill(args, kwargs, self.slots, values)
-            values = _leading(block(*args, **kwargs))
+            values = _leading(self._call_block(block, args, kwargs))
             kept += values
         return kept if self.keep_outputs else _restore(values, len(self.slots))
 

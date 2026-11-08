@@ -123,6 +123,13 @@ The plugin compiles a model in the largest units the NPU can hold:
   free memory, it is halved and retried, down to single blocks, and the split
   is logged.
 
+With `SGLANG_RBLN_ROLL_BLOCKS=1` and the compiler's
+`RBLN_EXP_ROLL_LAYERS_ANY_DEVICE=1` (both experimental), a region's identical
+blocks compile once as a loop. On the LTX-2.5 DiT (TP4 on RBLN-CA22) the region
+compiles about 6x faster and its artifacts are 22% smaller, while warm steps
+are 6% slower; its outputs are as close to an fp32 reference as the flat
+graph's, though not bit-equal to them.
+
 `SGLANG_RBLN_BLOCKS_PER_REGION` caps the region size instead. Each request
 shape compiles once per process and is cached on disk under
 `SGLANG_RBLN_CACHE_DIR`. Later shapes of the same module share its weights on
@@ -157,6 +164,7 @@ the NPU. A compile error fails the request unless `SGLANG_RBLN_COMPILE_STRICT=0`
 | `SGLANG_RBLN_VOCODER_ON_NPU=1` | compile the LTX-2 vocoder for one NPU, the last tensor-parallel one. Off by default: the NPU's convolutions accumulate with an upward gain that compounds through the vocoder's ~100 convs, so its waveform lands below CPU bf16 (12.9 vs 16.6 dB SNR against float32 at 5 s of audio) |
 | `SGLANG_RBLN_COMPILE_AUDIO=1` | compile the LTX-2 audio VAE decoder and the vocoder as one graph on one NPU: the vocoder's own if `SGLANG_RBLN_COMPONENT_DEVICES` places it (`vocoder=8`), else the last tensor-parallel one. Audio latent in, waveform out with nothing on the host: the latent denormalization runs in the graph, the latent goes in flat and the waveform comes out padded to whole device tiles, so no edge needs a host pad, transpose or crop. 0.34 s against 2.2-3.2 s on the CPU at 5 s of audio; its precision is the vocoder's (see `SGLANG_RBLN_VOCODER_ON_NPU`). Takes the place of `SGLANG_RBLN_VOCODER_ON_NPU` |
 | `SGLANG_RBLN_BLOCKS_PER_REGION=7` | cap the blocks compiled as one region graph (see [Compiled graphs](#compiled-graphs); 1 compiles each block alone, and for FLUX 3 Action any value replaces the one-graph step with block regions). Set it only when one graph does not fit or does not compile |
+| `SGLANG_RBLN_ROLL_BLOCKS=1` | experimental: compile a region's identical blocks once, as a loop (needs `RBLN_EXP_ROLL_LAYERS_ANY_DEVICE=1` on RBLN-CA22/CA25; see [Compiled graphs](#compiled-graphs)) |
 | `SGLANG_RBLN_PROMPT_ENHANCER=1` | serve a request's `enhance_prompt` with the checkpoint's own `prompt_enhancer/` component (LTX-2.5: a Gemma-4 instruct model) when no `--prompt-enhancer-config` endpoint is set: its decoder layers compile as one region on `SGLANG_RBLN_COMPONENT_DEVICES` `prompt_enhancer=…` and it decodes greedily with a static KV cache (one prefill graph, one decode graph). Text prompts only |
 | `SGLANG_RBLN_PROMPT_ENHANCER_WHOLE_GRAPH=0` | compile the prompt enhancer's decoder layers region by region instead of its whole forward from the token ids. The default compiles the forward, so embeddings, masks and rotary run on the device and a decode step is one device function rather than one per layer (LTX-2.5's Gemma-4 enhancer on one CA22, 855 prompt tokens: 28.7 ms a token against 34 ms on the host). Set it to 0 only if a checkpoint's decoder will not compile whole |
 | `SGLANG_RBLN_PROMPT_ENHANCER_MAX_SEQ_LEN=2048` | the static KV cache the prompt enhancer compiles for (default 2048). It is the prefill and decode graphs' shape, so every request that fits runs the same two graphs instead of a new pair per prompt length; a prompt and rewrite needing more still runs, on graphs of its own. Each step attends over the whole length; measured on one CA22 with LTX-2.5's Gemma-4 enhancer, a 2048 cache costs nothing against a prompt-shaped 896 one (28.7 ms a step against 30.8 ms) |
