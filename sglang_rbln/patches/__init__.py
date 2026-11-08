@@ -22,6 +22,7 @@ from sglang_rbln.patches.models import (
 )
 from sglang_rbln.patches.srt.layers.quantization import fp4_utils
 from sglang_rbln.patches.stages import (
+    compile_only,
     cosmos3,
     flux3_action,
     flux3_action_step,
@@ -73,6 +74,8 @@ def register() -> None:
     wanvae.register()
     if device.torch_rbln_available():
         ops_utils.register()
+    if envs.SGLANG_RBLN_COMPILE_ONLY:
+        compile_only.register()
     if envs.SGLANG_RBLN_LOG_TIMELINE:
         timeline.register()
     if device.resident_regions():
