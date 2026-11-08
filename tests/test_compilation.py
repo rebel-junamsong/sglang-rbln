@@ -299,3 +299,25 @@ def test_compiled_module_runs_on_the_npu(monkeypatch, tmp_path):
     assert torch.equal(first, second)
     assert torch.allclose(first.float(), eager.float(), atol=2e-2, rtol=2e-2)
     assert list(tmp_path.glob("*.rbln")), "the compiled graph was not persisted"
+
+
+@pytest.mark.resident_mode
+def test_compile_only_stands_an_empty_tensor_in_for_a_device_view(
+    monkeypatch, dummy_device
+):
+    # contiguous() is an eager graph run, which a dummy device refuses: a compile-only
+    # resident run stopped at the DiT's first strided input.
+    monkeypatch.setenv("SGLANG_RBLN_COMPILE_ONLY", "1")
+    view = torch.zeros(4, 6).to("rbln:0")[:, ::2]
+
+    def runs_a_graph(*args, **kwargs):
+        raise AssertionError("a dummy device runs no graph")
+
+    monkeypatch.setattr(torch.Tensor, "contiguous", runs_a_graph)
+    (stand_in,) = compilation.contiguous_device_inputs([view])
+    assert stand_in.is_contiguous()
+    assert (stand_in.shape, stand_in.dtype, stand_in.device) == (
+        view.shape,
+        view.dtype,
+        view.device,
+    )

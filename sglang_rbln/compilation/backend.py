@@ -304,8 +304,13 @@ def _checking_callable(compiled, graph: torch.fx.GraphModule, name: str):
 
 
 def contiguous_device_inputs(args):
+    # A dummy device runs no graph, the eager copy behind contiguous() included; a
+    # compile-only run reads only the shape, so an empty tensor of it stands in.
+    contiguous = (
+        torch.empty_like if envs.SGLANG_RBLN_COMPILE_ONLY else torch.Tensor.contiguous
+    )
     return [
-        value.contiguous()
+        contiguous(value, memory_format=torch.contiguous_format)
         if isinstance(value, torch.Tensor)
         and value.device.type == "rbln"
         and not value.is_contiguous()
