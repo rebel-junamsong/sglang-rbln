@@ -717,3 +717,31 @@ def test_idle_graphs_programs_make_room_once_evictable(device_memory, monkeypatc
     )
     regions.check_fits(region, 0)
     assert asked == [0]
+
+
+def test_a_split_region_compiles_in_its_parents_sharing_session(monkeypatch):
+    # The halves must join the session (compile context) whose weight pool the whole
+    # region filled, not open one of their own.
+    monkeypatch.delenv("SGLANG_RBLN_BLOCKS_PER_REGION", raising=False)
+    context = object()
+
+    def backend(graph, example_inputs):
+        if _blocks_in(graph) > 2:
+            raise regions.RegionDoesNotFit([4 * BLOCK_BYTES], [2 * BLOCK_BYTES])
+        return graph
+
+    compiled = []
+    original = nn.Module.compile
+
+    def compile_recording(module, **kwargs):
+        compiled.append(kwargs["options"]["compile_context"])
+        return original(module, backend=backend, dynamic=False)
+
+    monkeypatch.setattr(nn.Module, "compile", compile_recording)
+    model = Model(depth=4).eval()
+    regions.group_blocks(
+        list(model.blocks), None, {"options": {"compile_context": context}}
+    )
+    with torch.no_grad():
+        model(torch.randn(2, 8))
+    assert len(compiled) == 3 and all(each is context for each in compiled)
