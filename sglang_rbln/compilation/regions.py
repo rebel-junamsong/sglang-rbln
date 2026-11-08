@@ -294,7 +294,13 @@ def checking_fit() -> Iterator[None]:
         RBLNCompiledModel.create_runtime = create_runtime
 
 
-OUT_OF_DEVICE_MEMORY = ("Lack of device memory", "SYS_ENOMEM")
+# How the runtime reports a device allocation that did not fit. torch-rbln reports
+# an eager tensor the caching allocator found no room for by its failed check.
+OUT_OF_DEVICE_MEMORY = (
+    "Lack of device memory",
+    "SYS_ENOMEM",
+    "RBLNCachingAllocator::malloc block != nullptr",
+)
 
 
 def _does_not_fit(error: BaseException | None) -> bool:

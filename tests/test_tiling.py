@@ -194,3 +194,23 @@ def test_a_short_video_never_takes_a_window_as_long_as_itself():
     # 33 frames: only the 32 and 16 rungs are shorter.
     assert tiling.shrink_window(coder, does_not_fit([150 * MiB], [100 * MiB]), 33)
     assert window(coder) == (16, 8)
+
+
+def test_an_eager_tensor_without_room_shrinks_the_window():
+    # The LTX 1280x704 decode failed this way: an eager tensor of the untiled decode
+    # found no room even after the runtime evicted idle programs.
+    error = RuntimeError(
+        "(Runtime) code=202 INIT_INVALID_ARGUMENT "
+        "(RBLNCachingAllocator::malloc block != nullptr)"
+    )
+    coder = VideoCoder()
+    attempts = []
+
+    def call():
+        attempts.append(window(coder))
+        if not coder.use_framewise_decoding:
+            raise error
+        return "video"
+
+    assert tiling.with_smaller_tiles(call, coder, frames=121) == "video"
+    assert attempts == [None, (64, 56)]
