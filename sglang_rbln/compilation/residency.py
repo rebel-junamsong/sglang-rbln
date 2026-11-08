@@ -152,8 +152,10 @@ def copy_across_devices(
 
 
 def _upload(tensor: torch.Tensor, device: torch.device) -> torch.Tensor:
+    # Dense on the host first: a strided upload keeps its strides, and the graph that
+    # reads it lays it out with a transpose graph of its own on one NPU.
     crossings.record("up", "host tensor", tensor)
-    return tensor.to(device)
+    return tensor.contiguous().to(device)
 
 
 def _is_resident(value: Any) -> bool:

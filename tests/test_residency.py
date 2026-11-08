@@ -351,6 +351,19 @@ def test_crossings_count_each_stage_download_by_op_and_upload(monkeypatch, caplo
 
 
 @pytest.mark.resident_mode
+def test_a_strided_host_tensor_uploads_dense():
+    # LTX-2 packs its latents as a transposed view. Uploaded with its strides, the
+    # graph that reads it ran a one-NPU transpose first, compiled on the first step,
+    # whose output view made the DiT's cache key differ from compile-only's.
+    host = (
+        torch.arange(128 * 60, dtype=torch.float32).reshape(1, 128, 60).transpose(1, 2)
+    )
+    uploaded = residency._Transfers().to(host, torch.device("rbln:0"))
+    assert uploaded.device.type == "rbln"
+    assert uploaded.is_contiguous()
+
+
+@pytest.mark.resident_mode
 def test_a_stage_with_no_crossings_reports_none(monkeypatch, caplog):
     monkeypatch.setenv("SGLANG_RBLN_LOG_CROSSINGS", "1")
     with caplog.at_level("INFO", logger=residency.__name__):
