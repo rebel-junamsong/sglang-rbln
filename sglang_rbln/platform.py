@@ -56,7 +56,7 @@ class RBLNPlatform(Platform):
         except ImportError as e:
             raise RuntimeError(
                 "torch-rbln is required for execution mode 'resident' "
-                "(pip install 'sglang-rbln[device]')."
+                "(pip install torch-rbln)."
             ) from e
 
     def apply_server_args_defaults(self, server_args) -> None:

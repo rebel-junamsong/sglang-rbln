@@ -2702,12 +2702,10 @@ source = { editable = "." }
 dependencies = [
     { name = "rebel-compiler" },
     { name = "sglang", extra = ["diffusion"] },
+    { name = "torch-rbln" },
 ]
 
 [package.optional-dependencies]
-device = [
-    { name = "torch-rbln" },
-]
 test = [
     { name = "pytest" },
     { name = "requests" },
@@ -2719,9 +2717,9 @@ requires-dist = [
     { name = "rebel-compiler", specifier = ">=0.12.0", index = "https://pypi.rebellions.in/simple" },
     { name = "requests", marker = "extra == 'test'" },
     { name = "sglang", extras = ["diffusion"], specifier = "==0.5.21" },
-    { name = "torch-rbln", marker = "extra == 'device'", index = "https://pypi.rebellions.in/simple" },
+    { name = "torch-rbln", index = "https://pypi.rebellions.in/simple" },
 ]
-provides-extras = ["device", "test"]
+provides-extras = ["test"]
 
 [[package]]
 name = "shellingham"

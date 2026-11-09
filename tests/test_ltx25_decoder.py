@@ -81,6 +81,7 @@ def test_a_compiled_diffusion_decoder_gets_latents_in_its_dtype(compiled):
 
 
 def test_one_hook_compiles_the_decoder_and_the_vocoder(stage, compiled, monkeypatch):
+    monkeypatch.setenv("SGLANG_RBLN_COMPILE_AUDIO", "0")
     monkeypatch.setenv("SGLANG_RBLN_VOCODER_ON_NPU", "1")
     stage.vocoder = nn.Linear(4, 4)
     batch = SimpleNamespace(use_diffusion_decoder=False)

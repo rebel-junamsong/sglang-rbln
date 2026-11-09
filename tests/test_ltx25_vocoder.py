@@ -25,6 +25,8 @@ def stage():
 
 @pytest.fixture
 def compiled(monkeypatch):
+    # The standalone vocoder graph only stands in when the audio chain is off.
+    monkeypatch.setenv("SGLANG_RBLN_COMPILE_AUDIO", "0")
     monkeypatch.setenv("SGLANG_RBLN_VOCODER_ON_NPU", "1")
     calls = []
     monkeypatch.setattr(
@@ -165,8 +167,8 @@ def test_chain_runs_on_the_vocoders_placed_npu(audio_stage, chained):
 
 @pytest.mark.parametrize(
     ("requested", "enable_torch_compile"),
-    [("", True), ("1", False)],
-    ids=["not-requested", "compile-disabled"],
+    [("0", True), ("1", False)],
+    ids=["opted-out", "compile-disabled"],
 )
 def test_leaves_the_audio_modules_eager(
     audio_stage, chained, monkeypatch, requested, enable_torch_compile
