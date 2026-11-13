@@ -330,8 +330,7 @@ class _Stage:
 
 
 @pytest.mark.resident_mode
-def test_crossings_count_each_stage_download_by_op_and_upload(monkeypatch, caplog):
-    monkeypatch.setenv("SGLANG_RBLN_LOG_CROSSINGS", "1")
+def test_crossings_count_each_stage_download_by_op_and_upload():
     resident = torch.zeros(4, 8, dtype=torch.bfloat16).to("rbln:0")
     host = torch.ones(16, dtype=torch.float32)
 
@@ -341,13 +340,9 @@ def test_crossings_count_each_stage_download_by_op_and_upload(monkeypatch, caplo
         residency._Transfers().to(host, torch.device("rbln:0"))
         return residency.crossings.of_stage("_Stage")
 
-    with caplog.at_level("INFO", logger=residency.__name__):
-        seen = residency.stage_on_host_boundary(
-            lambda stage: stage.work(), _Stage(work)
-        )
+    seen = residency.stage_on_host_boundary(lambda stage: stage.work(), _Stage(work))
     assert seen == {("down", "add"): (1, 64), ("up", "host tensor"): (1, 64)}
     assert residency.crossings.of_stage("_Stage") == {}
-    assert "rbln crossings in _Stage: " in caplog.text
 
 
 @pytest.mark.resident_mode
@@ -361,14 +356,6 @@ def test_a_strided_host_tensor_uploads_dense():
     uploaded = residency._Transfers().to(host, torch.device("rbln:0"))
     assert uploaded.device.type == "rbln"
     assert uploaded.is_contiguous()
-
-
-@pytest.mark.resident_mode
-def test_a_stage_with_no_crossings_reports_none(monkeypatch, caplog):
-    monkeypatch.setenv("SGLANG_RBLN_LOG_CROSSINGS", "1")
-    with caplog.at_level("INFO", logger=residency.__name__):
-        residency.stage_on_host_boundary(lambda stage: torch.ones(2) * 2, _Stage(None))
-    assert "rbln crossings in _Stage: none" in caplog.text
 
 
 @pytest.mark.resident_mode

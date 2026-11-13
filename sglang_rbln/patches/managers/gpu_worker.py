@@ -39,9 +39,7 @@ def profile_request(execute_forward, worker, batch, *args, **kwargs):
 
 
 def key_request_shape(execute_forward, worker, batch, *args, **kwargs):
-    token = shapes.current_shape_key.set(
-        shapes.shape_key(worker.pipeline, worker.server_args.pipeline_config, batch[0])
-    )
+    token = shapes.current_shape_key.set(shapes.shape_key(worker.pipeline, batch[0]))
     try:
         return execute_forward(worker, batch, *args, **kwargs)
     finally:

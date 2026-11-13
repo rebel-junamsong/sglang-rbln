@@ -1,6 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
 import os
-import threading
 
 import pytest
 import torch
@@ -62,102 +61,6 @@ def test_describe_graph_lists_ops_and_inputs():
     assert described == "3 ops, inputs [2x0x8:bfloat16]"
 
 
-def test_runtime_report_totals_split_device_and_host():
-    totals = compilation.RuntimeReportTotals()
-    totals.add(
-        [
-            {
-                "type": "timer",
-                "seq": 1,
-                "host_pad": 70,
-                "main_0": 292,
-                "total_device": 292,
-                "total_host": 70,
-                "total_ccl": 0,
-            },
-            {"type": "prep", "seq": 1, "prepare_input_us": 134, "prepare_output_us": 6},
-            {
-                "type": "timer",
-                "seq": 2,
-                "host_pad": 13,
-                "main_0": 133,
-                "total_device": 133,
-                "total_host": 13,
-                "total_ccl": 0,
-            },
-        ]
-    )
-    assert (totals.calls, totals.device_us, totals.host_us, totals.prepare_us) == (
-        2,
-        425,
-        83,
-        140,
-    )
-    assert totals.node_us == {"host_pad": 83, "main_0": 425}
-    assert totals.top_nodes(1) == [("main_0", 425)]
-    assert "device share 65.6%" in totals.summary()
-
-
-def test_dump_graph_round_trips(tmp_path):
-    graph = torch.fx.symbolic_trace(_TinyMlp())
-    stem = compilation.dump_graph(graph, [torch.zeros(2, 64)], tmp_path)
-    assert "gelu" in stem.with_suffix(".txt").read_text()
-    inputs = torch.load(stem.with_suffix(".inputs.pt"))
-    module = torch.load(stem.with_suffix(".module.pt"), weights_only=False)
-    assert torch.equal(module(*inputs), graph(*inputs))
-    assert torch.load(stem.with_suffix(".state.pt")).keys() == graph.state_dict().keys()
-
-
-def test_dump_graph_drops_process_groups(tmp_path, monkeypatch):
-    lock_type = type(threading.Lock())
-    monkeypatch.setattr(compilation, "_dropped_on_dump", lambda: (lock_type,))
-    graph = torch.fx.symbolic_trace(_TinyMlp())
-    graph.process_group = threading.Lock()
-    stem = compilation.dump_graph(graph, [torch.zeros(2, 64)], tmp_path)
-    module = torch.load(stem.with_suffix(".module.pt"), weights_only=False)
-    assert module.process_group is None
-    hidden = torch.zeros(2, 64)
-    assert torch.equal(module(hidden), graph(hidden))
-
-
-def test_dump_graph_keeps_weights_of_unpicklable_graphs(tmp_path, caplog):
-    graph = torch.fx.symbolic_trace(_TinyMlp())
-    graph.process_group = threading.Lock()
-    stem = compilation.dump_graph(graph, [torch.zeros(2, 64)], tmp_path)
-    assert not stem.with_suffix(".module.pt").exists()
-    assert torch.load(stem.with_suffix(".state.pt")).keys() == graph.state_dict().keys()
-    assert "kept without its module" in caplog.text
-
-
-class TestGraphCheck:
-    @pytest.mark.parametrize(
-        ("offset", "expected"),
-        [(0.0, (0.0, 0.0)), (0.5, (0.5, 0.25))],
-        ids=["exact", "shifted"],
-    )
-    def test_output_deviation(self, offset, expected):
-        reference = (torch.tensor([2.0, -1.0]), 3)
-        actual = (reference[0] + offset, 3)
-        assert compilation.output_deviation(actual, reference) == expected
-
-    def test_checks_only_the_first_run(self, caplog):
-        graph = torch.fx.symbolic_trace(_TinyMlp())
-        calls = []
-
-        def compiled(x):
-            calls.append(x)
-            return graph(x) + 1.0
-
-        run = compilation._checking_callable(compiled, graph, "tiny")
-        x = torch.ones(2, 64)
-        with caplog.at_level("INFO", logger=compilation.__name__):
-            run(x)
-            run(x)
-        checks = [r for r in caplog.records if "graph check tiny" in r.message]
-        assert len(calls) == 2 and len(checks) == 1
-        assert "max abs 1" in checks[0].message
-
-
 def test_contiguous_device_inputs_leave_host_tensors_alone():
     cpu_view = torch.zeros(4, 6)[:, ::2]
     plain = torch.zeros(3)
@@ -165,10 +68,9 @@ def test_contiguous_device_inputs_leave_host_tensors_alone():
     assert passed[0] is cpu_view and passed[1] is plain and passed[2] == 7
 
 
-def test_log_graphs_wraps_the_registered_backend(monkeypatch, caplog):
+def test_wraps_the_registered_backend_once(monkeypatch):
     from torch._dynamo.backends import registry
 
-    monkeypatch.setenv("SGLANG_RBLN_LOG_GRAPHS", "1")
     original = getattr(
         registry._COMPILER_FNS["rbln"],
         "__wrapped_backend__",

@@ -6,7 +6,6 @@ import collections
 import contextlib
 import contextvars
 import functools
-import logging
 import os
 from collections.abc import Callable
 from typing import Any
@@ -19,8 +18,6 @@ from torch.utils.weak import WeakIdKeyDictionary
 from sglang_rbln import envs
 from sglang_rbln.compilation import placement
 from sglang_rbln.compilation.backend import COMPILE_BACKEND_NAME, static_compile_kwargs
-
-logger = logging.getLogger(__name__)
 
 NPUS_PER_DEVICE_ENV = "RBLN_NPUS_PER_DEVICE"
 DEVICE_MAP_ENV = "RBLN_DEVICE_MAP"
@@ -203,16 +200,6 @@ class Crossings:
             if key[0] == stage
         }
 
-    def report(self, stage: str) -> str:
-        entries = sorted(self.of_stage(stage).items(), key=lambda kv: -kv[1][1])
-        return (
-            ", ".join(
-                f"{direction} {what} x{count} {size / 2**20:.1f} MiB"
-                for (direction, what), (count, size) in entries
-            )
-            or "none"
-        )
-
     def clear(self, stage: str) -> None:
         for key in [key for key in self.counts if key[0] == stage]:
             del self.counts[key], self.bytes[key]
@@ -367,8 +354,6 @@ def stage_on_host_boundary(call, stage, *args, **kwargs):
             return call(stage, *args, **kwargs)
     finally:
         Crossings.stage.reset(token)
-        if envs.SGLANG_RBLN_LOG_CROSSINGS:
-            logger.info("rbln crossings in %s: %s", name, crossings.report(name))
         crossings.clear(name)
 
 

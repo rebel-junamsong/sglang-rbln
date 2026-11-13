@@ -93,7 +93,6 @@ markers = [
     "e2e: launches sglang serve and generates through the HTTP API",
     "npu: needs an RBLN NPU on the host; xfails strictly without one",
     "resident_mode: needs execution mode 'resident' (torch-rbln); xfails strictly in staged mode",
-    "device_mode: former name of resident_mode",
 ]
 
 [tool.ruff]

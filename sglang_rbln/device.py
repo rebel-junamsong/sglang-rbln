@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import functools
 import importlib.util
-import logging
 from enum import StrEnum
 from pathlib import Path
 from typing import NamedTuple
@@ -12,8 +10,6 @@ from typing import NamedTuple
 import psutil
 
 from sglang_rbln import envs
-
-logger = logging.getLogger(__name__)
 
 DEVICE_NODE_DIR = Path("/dev")
 DEVICE_NODE_PATTERN = "rbln[0-9]*"
@@ -36,26 +32,6 @@ class ExecutionMode(StrEnum):
     AUTO = "auto"
     STAGED = "staged"
     RESIDENT = "resident"
-
-    @classmethod
-    def _missing_(cls, value: object) -> ExecutionMode | None:
-        if (mode := DEPRECATED_MODES.get(value)) is None:
-            return None
-        _log_deprecated_mode(value, mode)
-        return mode
-
-
-# The modes' former names, read by "host" as CPU execution.
-DEPRECATED_MODES = {"host": ExecutionMode.STAGED, "device": ExecutionMode.RESIDENT}
-
-
-@functools.cache
-def _log_deprecated_mode(name: str, mode: ExecutionMode) -> None:
-    logger.warning(
-        "SGLANG_RBLN_EXECUTION_MODE=%s is deprecated; use %s (same behaviour)",
-        name,
-        mode.value,
-    )
 
 
 def device_nodes() -> list[Path]:
@@ -84,7 +60,7 @@ def execution_mode() -> ExecutionMode:
     try:
         mode = ExecutionMode(requested)
     except ValueError:
-        choices = ", ".join([*ExecutionMode, *DEPRECATED_MODES])
+        choices = ", ".join(ExecutionMode)
         raise ValueError(
             f"SGLANG_RBLN_EXECUTION_MODE={requested!r}; expected one of {choices}"
         ) from None

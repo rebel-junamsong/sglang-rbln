@@ -172,10 +172,7 @@ def decode_within_memory(decode, vae, *args, **kwargs):
 
 
 def compile_decoders(forward, stage, batch, server_args):
-    audio = functools.partial(
-        vocoder.compile_audio,
-        functools.partial(vocoder.compile_vocoder, forward),
-    )
+    audio = functools.partial(vocoder.compile_audio, forward)
     return compile_video_decoder(audio, stage, batch, server_args)
 
 

@@ -22,20 +22,6 @@ def audio_devices(vocoder: nn.Module) -> tuple[int, ...] | None:
     return placement.text_encoder_devices() if device.resident_regions() else None
 
 
-def compile_vocoder(forward, stage, batch, server_args):
-    vocoder = stage.vocoder
-    if (
-        envs.SGLANG_RBLN_VOCODER_ON_NPU
-        and not envs.SGLANG_RBLN_COMPILE_AUDIO
-        and server_args.enable_torch_compile
-        and not getattr(vocoder, COMPILED, False)
-    ):
-        if devices := audio_devices(vocoder):
-            placement.place(vocoder, devices)
-        compile_on_one_device(vocoder, "vocoder")
-    return forward(stage, batch, server_args)
-
-
 TILE = 64  # elements per device tile of the last axis
 
 

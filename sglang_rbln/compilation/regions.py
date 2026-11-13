@@ -9,7 +9,6 @@ import itertools
 import logging
 import math
 import pickle
-import weakref
 from collections.abc import Callable, Iterator, Sequence
 from typing import Any
 
@@ -72,13 +71,6 @@ def _find_slots(previous: tuple, args: tuple, kwargs: dict) -> tuple[Slot, ...]:
     return tuple(slots)
 
 
-_state_vars: weakref.WeakSet = weakref.WeakSet()
-
-
-def register_state(var: Any) -> None:
-    _state_vars.add(var)
-
-
 def _copied_leaf(leaf: Any) -> Any:
     if isinstance(leaf, torch.Tensor):
         return leaf.clone()
@@ -102,22 +94,10 @@ def call_sandboxed(function: Callable, args: tuple, kwargs: dict) -> Any:
     def run() -> Any:
         for var, value in contextvars.copy_context().items():
             var.set(_copied_state(value))
-        originals = [(var, var.value) for var in _state_vars]
-        for var, value in originals:
-            var.value = _copied_state(value)
-        try:
-            copied_args, copied_kwargs = tree_map(_copied_leaf, (args, kwargs))
-            return function(*copied_args, **copied_kwargs)
-        finally:
-            for var, value in originals:
-                var.value = value
+        copied_args, copied_kwargs = tree_map(_copied_leaf, (args, kwargs))
+        return function(*copied_args, **copied_kwargs)
 
     return contextvars.copy_context().run(run)
-
-
-# One nested compile region per block class, made outside tracing: Dynamo
-# inlines a region it creates while tracing (functools caches included).
-_layer_regions: dict[Callable, Callable] = {}
 
 
 class BlockGroup(nn.Module):
@@ -126,25 +106,12 @@ class BlockGroup(nn.Module):
         self.blocks = nn.ModuleList(blocks)
         self.keep_outputs = keep_outputs
         self.slots: tuple[Slot, ...] = ()
-        if envs.SGLANG_RBLN_ROLL_BLOCKS:
-            for forward in {type(block).forward for block in blocks}:
-                if forward not in _layer_regions:
-                    _layer_regions[forward] = torch.compiler.nested_compile_region(
-                        forward
-                    )
-
-    def _call_block(self, block: nn.Module, args: tuple, kwargs: dict) -> Any:
-        # As calls of one region, the blocks reach the compiler as a layer loop
-        # it can compile once (RBLN_EXP_ROLL_LAYERS_ANY_DEVICE on CA22/CA25).
-        if region := _layer_regions.get(type(block).forward):
-            return region(block, *args, **kwargs)
-        return block(*args, **kwargs)
 
     def forward(self, values: tuple, calls: list[tuple[tuple, dict]]) -> Any:
         kept: tuple = ()
         for block, (args, kwargs) in zip(self.blocks, calls, strict=True):
             args, kwargs = _fill(args, kwargs, self.slots, values)
-            values = _leading(self._call_block(block, args, kwargs))
+            values = _leading(block(*args, **kwargs))
             kept += values
         return kept if self.keep_outputs else _restore(values, len(self.slots))
 

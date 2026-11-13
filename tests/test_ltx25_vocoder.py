@@ -18,62 +18,8 @@ from sglang_rbln.patches.stages.ltx_2 import decoding_av, vocoder
 pytestmark = pytest.mark.usefixtures("rbln_platform")
 
 
-@pytest.fixture
-def stage():
-    return SimpleNamespace(vocoder=nn.Linear(4, 4))
-
-
-@pytest.fixture
-def compiled(monkeypatch):
-    # The standalone vocoder graph only stands in when the audio chain is off.
-    monkeypatch.setenv("SGLANG_RBLN_COMPILE_AUDIO", "0")
-    monkeypatch.setenv("SGLANG_RBLN_VOCODER_ON_NPU", "1")
-    calls = []
-    monkeypatch.setattr(
-        nn.Module, "compile", lambda module, **kwargs: calls.append((module, kwargs))
-    )
-    return calls
-
-
 def forward(stage, batch, server_args):
     return "output"
-
-
-def test_compiles_the_vocoder_once(stage, compiled):
-    server_args = SimpleNamespace(enable_torch_compile=True)
-    outputs = [
-        vocoder.compile_vocoder(forward, stage, None, server_args) for _ in range(2)
-    ]
-    assert outputs == ["output", "output"]
-    assert [module for module, _ in compiled] == [stage.vocoder]
-    kwargs = compiled[0][1]
-    assert (kwargs["backend"], kwargs["dynamic"]) == ("rbln", False)
-    assert kwargs["options"]["compile_context"].state.use_weight_sharing
-
-
-def test_runs_the_vocoder_on_the_last_tensor_parallel_device(
-    stage, compiled, monkeypatch
-):
-    monkeypatch.setenv("SGLANG_RBLN_EXECUTION_MODE", "staged")
-    monkeypatch.setenv("SGLANG_RBLN_NUM_DEVICES", "4")
-    server_args = SimpleNamespace(enable_torch_compile=True)
-    vocoder.compile_vocoder(forward, stage, None, server_args)
-    options = compiled[0][1]["options"]
-    assert (options["num_devices"], options["device"]) == (1, 3)
-
-
-@pytest.mark.parametrize(
-    ("on_npu", "enable_torch_compile"),
-    [("", True), ("1", False)],
-    ids=["not-requested", "compile-disabled"],
-)
-def test_leaves_the_vocoder_eager(
-    stage, compiled, monkeypatch, on_npu, enable_torch_compile
-):
-    monkeypatch.setenv("SGLANG_RBLN_VOCODER_ON_NPU", on_npu)
-    server_args = SimpleNamespace(enable_torch_compile=enable_torch_compile)
-    vocoder.compile_vocoder(forward, stage, None, server_args)
-    assert compiled == []
 
 
 class Decoder(nn.Module):
@@ -255,8 +201,8 @@ def test_vocoder_runs_on_the_npu(caplog, monkeypatch, tmp_path):
 
 @pytest.mark.parametrize(
     ("mode", "devices"),
-    [("device", (4, [4, 5, 6, 7])), ("host", (1, 3))],
-    ids=["resident", "host"],
+    [("resident", (4, [4, 5, 6, 7])), ("staged", (1, 3))],
+    ids=["resident", "staged"],
 )
 def test_the_audio_chain_compiles_beside_the_text_encoder_when_resident(
     audio_stage, chained, monkeypatch, mode, devices

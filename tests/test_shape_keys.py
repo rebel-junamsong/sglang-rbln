@@ -7,9 +7,6 @@ from types import SimpleNamespace
 
 import pytest
 import torch
-from sglang.multimodal_gen.configs.pipeline_configs.flux3_action import (
-    Flux3ActionPipelineConfig,
-)
 from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry, HookType
 from torch import nn
 
@@ -19,10 +16,6 @@ from sglang_rbln.patches.managers import gpu_worker
 
 
 class LTX2Pipeline:
-    pass
-
-
-class Flux3ActionPipeline:
     pass
 
 
@@ -37,7 +30,7 @@ class Flux3ActionPipeline:
 )
 def test_request_pipelines_key_on_the_requested_size(height, width, num_frames):
     request = SimpleNamespace(height=height, width=width, num_frames=num_frames)
-    key = shapes.shape_key(LTX2Pipeline(), SimpleNamespace(), request)
+    key = shapes.shape_key(LTX2Pipeline(), request)
     assert key == ShapeKey(
         "LTX2Pipeline",
         (("height", height), ("width", width), ("num_frames", num_frames)),
@@ -47,27 +40,9 @@ def test_request_pipelines_key_on_the_requested_size(height, width, num_frames):
     )
 
 
-@pytest.mark.parametrize(
-    ("canvas_hw", "horizon"),
-    [((544, 736), 32), ((480, 352), 16), ((500, 370), 7)],
-    ids=["default", "portrait", "unaligned"],
-)
-def test_action_pipeline_keys_on_its_config(canvas_hw, horizon):
-    config = Flux3ActionPipelineConfig(canvas_hw=canvas_hw, action_horizon=horizon)
-    request = SimpleNamespace(height=None, width=None, num_frames=None)
-    key = shapes.shape_key(Flux3ActionPipeline(), config, request)
-    assert key.dims == (
-        ("height", canvas_hw[0]),
-        ("width", canvas_hw[1]),
-        ("action_horizon", horizon),
-    )
-
-
 @pytest.fixture
 def worker() -> SimpleNamespace:
-    return SimpleNamespace(
-        pipeline=LTX2Pipeline(), server_args=SimpleNamespace(pipeline_config=None)
-    )
+    return SimpleNamespace(pipeline=LTX2Pipeline())
 
 
 def test_request_runs_under_its_key(worker):
@@ -79,7 +54,7 @@ def test_request_runs_under_its_key(worker):
         return output
 
     assert gpu_worker.run_request(execute_forward, worker, [request]) is output
-    assert execute_forward.key == shapes.shape_key(worker.pipeline, None, request)
+    assert execute_forward.key == shapes.shape_key(worker.pipeline, request)
     assert shapes.current_shape_key.get() is None
 
 
@@ -163,8 +138,6 @@ def test_a_stride_recompile_at_the_same_key_is_a_repeat(recording):
 
 def test_backend_warns_on_a_repeat_with_the_key(monkeypatch, caplog):
     monkeypatch.setattr(shapes, "_compiled", set())
-    for flag in ("SGLANG_RBLN_RUNTIME_REPORTS", "SGLANG_RBLN_CHECK_GRAPHS"):
-        monkeypatch.delenv(flag, raising=False)
     instrumented = backend._instrumented_backend(lambda graph, inputs: graph.forward)
     graph = torch.fx.symbolic_trace(_Block())
     inputs = [torch.randn(1, 8, 16)]

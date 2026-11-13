@@ -75,25 +75,6 @@ class TestExecutionMode:
         assert device.execution_mode() == requested
 
     @pytest.mark.parametrize(
-        ("former", "mode"),
-        [
-            ("host", device.ExecutionMode.STAGED),
-            ("device", device.ExecutionMode.RESIDENT),
-        ],
-    )
-    def test_former_mode_names_still_select_their_mode(
-        self, monkeypatch, caplog, former, mode
-    ):
-        # "host" read as CPU execution; both modes run the graphs on the NPUs.
-        device._log_deprecated_mode.cache_clear()
-        monkeypatch.setenv("SGLANG_RBLN_EXECUTION_MODE", former)
-        with caplog.at_level("WARNING", logger=device.__name__):
-            assert device.execution_mode() is mode
-            assert device.execution_mode() is mode
-        assert caplog.text.count("is deprecated") == 1
-        assert f"use {mode.value}" in caplog.text
-
-    @pytest.mark.parametrize(
         ("torch_rbln_installed", "expected"),
         [(False, device.ExecutionMode.STAGED), (True, device.ExecutionMode.RESIDENT)],
         ids=["without-torch-rbln", "with-torch-rbln"],

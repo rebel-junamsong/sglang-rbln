@@ -12,8 +12,8 @@ from sglang_rbln import envs
     [("1", True), ("true", True), (" YES ", True), ("0", False), ("", False)],
 )
 def test_flags_accept_truthy_spellings(monkeypatch, value, expected):
-    monkeypatch.setenv("SGLANG_RBLN_LOG_GRAPHS", value)
-    assert envs.SGLANG_RBLN_LOG_GRAPHS is expected
+    monkeypatch.setenv("SGLANG_RBLN_STATIC_OUTPUT", value)
+    assert envs.SGLANG_RBLN_STATIC_OUTPUT is expected
 
 
 @pytest.mark.parametrize(
@@ -38,7 +38,7 @@ def test_compile_strict_is_on_unless_turned_off(monkeypatch, value, expected):
             "text_encoder=4,5,6,7; vae=8;",
             {"text_encoder": (4, 5, 6, 7), "vae": (8,)},
         ),
-        ("SGLANG_RBLN_DUMP_GRAPHS", "/tmp/graphs", Path("/tmp/graphs")),
+        ("SGLANG_RBLN_LTX2_DETAILING_LORA", "/tmp/lora", Path("/tmp/lora")),
         ("SGLANG_RBLN_EXECUTION_MODE", " Resident ", "resident"),
         ("SGLANG_RBLN_PROFILE_DIR", "/tmp/trace", Path("/tmp/trace")),
         ("SGLANG_RBLN_PROFILE_REQUEST", "5", 5),
@@ -55,7 +55,7 @@ def test_values_are_parsed(monkeypatch, name, value, expected):
         ("RBLN_FORCE_NPU_NAME", None),
         ("SGLANG_RBLN_NUM_DEVICES", None),
         ("SGLANG_RBLN_COMPONENT_DEVICES", {}),
-        ("SGLANG_RBLN_DUMP_GRAPHS", None),
+        ("SGLANG_RBLN_LTX2_DETAILING_LORA", None),
         ("SGLANG_RBLN_EXECUTION_MODE", "auto"),
         ("SGLANG_RBLN_PROFILE_DIR", None),
         ("SGLANG_RBLN_PROFILE_REQUEST", 3),

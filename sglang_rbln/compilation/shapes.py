@@ -27,16 +27,8 @@ current_shape_key: contextvars.ContextVar[ShapeKey | None] = contextvars.Context
 )
 
 
-def shape_key(pipeline: Any, pipeline_config: Any, request: Any) -> ShapeKey:
-    if canvas_hw := getattr(pipeline_config, "canvas_hw", None):
-        height, width = canvas_hw
-        dims = (
-            ("height", height),
-            ("width", width),
-            ("action_horizon", pipeline_config.action_horizon),
-        )
-    else:
-        dims = tuple((name, getattr(request, name, None)) for name in REQUEST_DIMS)
+def shape_key(pipeline: Any, request: Any) -> ShapeKey:
+    dims = tuple((name, getattr(request, name, None)) for name in REQUEST_DIMS)
     return ShapeKey(type(pipeline).__name__, dims)
 
 

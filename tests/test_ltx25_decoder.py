@@ -80,17 +80,6 @@ def test_a_compiled_diffusion_decoder_gets_latents_in_its_dtype(compiled):
     assert seen == [torch.bfloat16 if compiled else torch.float32]
 
 
-def test_one_hook_compiles_the_decoder_and_the_vocoder(stage, compiled, monkeypatch):
-    monkeypatch.setenv("SGLANG_RBLN_COMPILE_AUDIO", "0")
-    monkeypatch.setenv("SGLANG_RBLN_VOCODER_ON_NPU", "1")
-    stage.vocoder = nn.Linear(4, 4)
-    batch = SimpleNamespace(use_diffusion_decoder=False)
-    server_args = SimpleNamespace(enable_torch_compile=True)
-    output = decoding_av.compile_decoders(decode_video, stage, batch, server_args)
-    assert output == ("video", None)
-    assert [module for module, _ in compiled] == [stage.vae.decoder, stage.vocoder]
-
-
 def test_compiles_the_decoder_once(stage, compiled):
     batch = SimpleNamespace(use_diffusion_decoder=False)
     server_args = SimpleNamespace(enable_torch_compile=True)

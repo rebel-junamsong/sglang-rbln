@@ -11,24 +11,13 @@ from sglang_rbln.patches.layers import layernorm
 from sglang_rbln.patches.layers.attention import video_sparse_attn
 from sglang_rbln.patches.managers import gpu_worker
 from sglang_rbln.patches.models import (
-    cosmos3video,
-    flux3,
-    flux3_video_vae,
     ltx_2,
     ltx_2_text_features,
     ltx_2_tile_ranks,
     ltx_2_vae_assembly,
-    wanvae,
 )
 from sglang_rbln.patches.srt.layers.quantization import fp4_utils
-from sglang_rbln.patches.stages import (
-    compile_only,
-    cosmos3,
-    flux3_action,
-    flux3_action_step,
-    flux3_action_video,
-    text_encoding,
-)
+from sglang_rbln.patches.stages import compile_only, text_encoding
 from sglang_rbln.patches.stages.ltx_2 import (
     decoding_av,
     detailing,
@@ -53,13 +42,6 @@ def register() -> None:
     regions.register()
     fp4_utils.register()
     layernorm.register()
-    cosmos3.register()
-    cosmos3video.register()
-    flux3.register()
-    flux3_action_step.register()
-    flux3_action.register()
-    flux3_action_video.register()
-    flux3_video_vae.register()
     ltx_2.register()
     ltx_2_tile_ranks.register()
     text_encoding.register()
@@ -71,7 +53,6 @@ def register() -> None:
     gpu_worker.register()
     prompt_enhancement.register()
     ffmpeg_spawn.register()
-    wanvae.register()
     if device.torch_rbln_available():
         ops_utils.register()
     if envs.SGLANG_RBLN_COMPILE_ONLY:
