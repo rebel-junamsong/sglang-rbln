@@ -199,9 +199,10 @@ def greedy_decode(
         layer.cumulative_length.fill_(prompt)
     history, tokens = input_ids[0].tolist(), []
     for position in range(prompt, prompt + max_new_tokens):
-        logits = head(hidden).float().cpu()[0, -1]
+        logits = head(hidden).cpu()[0, -1]
         if softcap:
             logits = torch.tanh(logits / softcap) * softcap
+        logits = logits.float()
         if banned := _banned_by_ngram(history, no_repeat_ngram):
             logits[banned] = float("-inf")
         token = int(logits.argmax())

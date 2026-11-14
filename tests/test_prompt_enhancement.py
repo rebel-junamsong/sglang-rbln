@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 import asyncio
+import copy
 import json
 import threading
 from types import SimpleNamespace
@@ -58,6 +59,41 @@ def test_static_cache_decode_matches_generate(
     tokens = prompt_enhancement.greedy_decode(
         tiny_enhancer, input_ids, max_new_tokens=40, no_repeat_ngram=no_repeat_ngram
     )
+
+    assert tokens == expected
+
+
+class Bf16Head(torch.nn.Linear):
+    """An output head that computes its logits in bf16."""
+
+    def forward(self, hidden_states):
+        return super().forward(hidden_states.to(torch.bfloat16))
+
+
+@pytest.mark.parametrize("prompt_tokens", [5, 20])
+def test_bf16_softcap_ties_break_as_generate(tiny_enhancer, prompt_tokens):
+    """Logits past the softcap tie once softcapped in bf16; the model softcaps in its
+    own dtype, so the first of the tied tokens wins, as in `generate`."""
+    model = copy.deepcopy(tiny_enhancer)
+    direction = torch.nn.functional.normalize(
+        torch.randn(
+            model.config.hidden_size, generator=torch.Generator().manual_seed(3)
+        ),
+        dim=0,
+    )
+    gains = torch.logspace(1, 4, model.config.vocab_size // 2)
+    head = Bf16Head(model.config.hidden_size, model.config.vocab_size, bias=False)
+    with torch.no_grad():
+        head.weight.copy_(torch.cat([gains, -gains])[:, None] * direction)
+    model.lm_head = head.to(torch.bfloat16)
+    input_ids = torch.randint(
+        1, 500, (1, prompt_tokens), generator=torch.Generator().manual_seed(2)
+    )
+    expected = model.generate(input_ids, do_sample=False, max_new_tokens=4)[
+        0, prompt_tokens:
+    ].tolist()
+
+    tokens = prompt_enhancement.greedy_decode(model, input_ids, max_new_tokens=4)
 
     assert tokens == expected
 
