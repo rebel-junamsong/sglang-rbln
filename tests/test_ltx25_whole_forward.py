@@ -1,0 +1,178 @@
+# SPDX-License-Identifier: Apache-2.0
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+import pytest
+import torch
+from sglang.multimodal_gen.configs.models.base import ArchConfig
+from sglang.multimodal_gen.configs.models.dits.ltx_2 import LTX2Config
+from sglang.multimodal_gen.configs.models.dits.ltx_2_5 import LTX25ArchConfig
+from sglang.multimodal_gen.runtime.distributed.parallel_state import (
+    maybe_init_distributed_environment_and_model_parallel,
+    model_parallel_is_initialized,
+)
+from sglang.multimodal_gen.runtime.managers.forward_context import set_forward_context
+from sglang.multimodal_gen.runtime.models.dits import ltx_2 as dit
+from sglang.multimodal_gen.runtime.server_args import server_args as server_args_module
+from sglang.srt.utils.network import get_open_port
+
+from sglang_rbln.patches.configs import arch_config
+from sglang_rbln.patches.models import ltx_2 as ltx_2_patch
+
+pytestmark = pytest.mark.usefixtures("rbln_platform")
+
+FRAMES, HEIGHT, WIDTH, AUDIO_FRAMES, TEXT = 2, 4, 4, 8, 6
+
+
+def install_dit_hooks(monkeypatch):
+    """The plugin's hooks on the DiT, as the rbln platform registers them."""
+    monkeypatch.setattr(ArchConfig, "__getattr__", arch_config.extra_attr)
+    rope = dit.LTX2AudioVideoRotaryPosEmbed
+    forward = rope.forward
+    monkeypatch.setattr(
+        rope,
+        "forward",
+        lambda self, *args, **kwargs: ltx_2_patch.cached_rotary_tables(
+            forward, self, *args, **kwargs
+        ),
+    )
+    monkeypatch.setattr(
+        dit, "_ltx2_try_fused_ada_values9", ltx_2_patch.without_triton_ada_values
+    )
+
+
+@pytest.fixture
+def model(monkeypatch):
+    install_dit_hooks(monkeypatch)
+    monkeypatch.setattr(
+        server_args_module,
+        "_global_server_args",
+        SimpleNamespace(
+            attention_backend="torch_sdpa",
+            attention_backend_config=None,
+            comfyui_mode=False,
+            disable_autocast=False,
+            enable_cfg_parallel=False,
+            enable_breakable_cuda_graph=False,
+            enable_layerwise_nvtx_marker=False,
+            enable_torch_compile=False,
+            kv_gather_degree=1,
+            sp_split_auto=False,
+            model_loaded={},
+            model_paths={},
+            pipeline_config=SimpleNamespace(dit_precision="bfloat16"),
+        ),
+    )
+    if not model_parallel_is_initialized():
+        for key, value in dict(
+            MASTER_ADDR="127.0.0.1",
+            MASTER_PORT=str(get_open_port()),
+            RANK="0",
+            LOCAL_RANK="0",
+            WORLD_SIZE="1",
+        ).items():
+            monkeypatch.setenv(key, value)
+        maybe_init_distributed_environment_and_model_parallel(tp_size=1, sp_size=1)
+    arch = LTX25ArchConfig(
+        num_attention_heads=2,
+        attention_head_dim=64,
+        num_layers=2,
+        cross_attention_dim=128,
+        caption_channels=64,
+        audio_num_attention_heads=2,
+        audio_attention_head_dim=64,
+        audio_cross_attention_dim=128,
+    )
+    torch.manual_seed(0)
+    transformer = dit.LTX2VideoTransformer3DModel(
+        LTX2Config(arch_config=arch), hf_config={}
+    )
+    transformer = transformer.bfloat16().eval()
+    for parameter in transformer.parameters():
+        torch.nn.init.normal_(parameter, std=0.05)
+    return transformer
+
+
+def test_dit_forward_traces_as_one_graph(model):
+    """--regional-compile false compiles the whole DiT: latents in, velocities
+    out, with the patchify, adaLN, rotary tables and output layers on the device.
+    The eager reference fills the plugin's rotary-table cache first; the compiled
+    forward builds its tables in the graph instead of reading that cache."""
+    inputs = dict(
+        hidden_states=torch.randn(1, FRAMES * HEIGHT * WIDTH, 128).bfloat16(),
+        audio_hidden_states=torch.randn(1, AUDIO_FRAMES, 128).bfloat16(),
+        encoder_hidden_states=torch.randn(1, TEXT, 128).bfloat16(),
+        audio_encoder_hidden_states=torch.randn(1, TEXT, 128).bfloat16(),
+        timestep=torch.full((1,), 0.5),
+        num_frames=FRAMES,
+        height=HEIGHT,
+        width=WIDTH,
+        audio_num_frames=AUDIO_FRAMES,
+    )
+    graphs = []
+
+    def backend(graph, example_inputs):
+        graphs.append(graph)
+        return graph
+
+    torch._dynamo.reset()
+    with set_forward_context(current_timestep=0, attn_metadata=None), torch.no_grad():
+        expected = model(**inputs)
+        compiled = torch.compile(model, backend=backend, fullgraph=True, dynamic=False)
+        outputs = compiled(**inputs)
+    assert len(graphs) == 1
+    assert ltx_2_patch.ROTARY_TABLES in model.rope.__dict__
+    for output, reference in zip(outputs, expected, strict=True):
+        torch.testing.assert_close(output, reference)
+
+
+class _ServerArgs(SimpleNamespace):
+    def is_arg_explicitly_set(self, name: str) -> bool:
+        return name in self.explicit
+
+
+@pytest.mark.parametrize(
+    ("module", "explicit", "regional"),
+    [
+        (
+            dit.LTX2VideoTransformer3DModel.__new__(dit.LTX2VideoTransformer3DModel),
+            (),
+            False,
+        ),
+        (
+            dit.LTX2VideoTransformer3DModel.__new__(dit.LTX2VideoTransformer3DModel),
+            ("regional_compile",),
+            True,
+        ),
+        (torch.nn.Linear(2, 2), (), True),
+    ],
+    ids=["ltx-dit", "explicit-regional", "other-module"],
+)
+def test_resident_regions_compile_the_ltx_dit_whole(module, explicit, regional):
+    # Per block, every step took the hidden states to the host for the output norm.
+    stage = SimpleNamespace(
+        server_args=_ServerArgs(regional_compile=True, explicit=set(explicit))
+    )
+    seen = []
+
+    def compile_module(stage, module):
+        seen.append(stage.server_args.regional_compile)
+        return "compiled"
+
+    assert (
+        ltx_2_patch.compile_the_dit_whole(compile_module, stage, module) == "compiled"
+    )
+    assert seen == [regional]
+    assert stage.server_args.regional_compile is True  # the server's choice is back
+
+
+def test_the_whole_dit_compile_wraps_the_denoising_stage():
+    from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry, HookType
+
+    target = ltx_2_patch.register_resident()
+    assert target.endswith("DenoisingStage._maybe_torch_compile")
+    assert any(
+        hook is ltx_2_patch.compile_the_dit_whole and kind is HookType.AROUND
+        for kind, hook, _ in HookRegistry._hooks[target]
+    )
