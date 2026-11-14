@@ -37,14 +37,6 @@ class _RankDone(BaseException):
     """A rank other than 0 has handed over its tiles: the rest is rank 0's."""
 
 
-def hand_over(tile: torch.Tensor) -> torch.Tensor:
-    """Bring a rank's tile to where rank 0 blends; host tensors need no move.
-
-    The one place a device-to-device copy goes once tiles stay on their NPU.
-    """
-    return tile
-
-
 class TileRanks:
     """One tiled decode, shared by the threads that act as its ranks."""
 
@@ -60,10 +52,7 @@ class TileRanks:
         self, rank: int, local_tiles: Sequence, local_indices: Sequence, total: int
     ):
         with self.lock:
-            self.tiles.update(
-                (index, hand_over(tile))
-                for index, tile in zip(local_indices, local_tiles, strict=True)
-            )
+            self.tiles.update(zip(local_indices, local_tiles, strict=True))
         self.barrier.wait()
         # Only rank 0 returns the decode. Upstream blends the gathered tiles in
         # place, so a second rank blending them too would corrupt rank 0's.
