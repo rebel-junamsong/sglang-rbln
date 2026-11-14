@@ -53,18 +53,18 @@ plugins are installed.
 
 ## Quick start
 
+The upstream command, plus one RBLN setting: how many NPUs each model is split
+across.
+
 ```bash
-RBLN_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
-SGLANG_RBLN_NUM_DEVICES=4 \
-sglang serve \
-  --model-path Lightricks/LTX-2.5-Diffusers \
-  --pipeline-class-name LTX2Pipeline
+SGLANG_RBLN_NUM_DEVICES=4 sglang serve --model-path Lightricks/LTX-2.5-Diffusers
 ```
 
 The DiT and the video decoder run tensor-parallel on NPUs 0–3. The Gemma text
 encoder does not fit next to the DiT, so it runs tensor-parallel on the next
-four visible NPUs, here 4–7. With fewer than eight NPUs visible, pass
-`--text-encoder-cpu-offload` to keep it on the CPU.
+four NPUs, 4–7. With fewer than eight NPUs, pass `--text-encoder-cpu-offload`
+to keep it on the CPU. To pick the NPUs, set `RBLN_VISIBLE_DEVICES`
+(for example `0,1,2,3,4,5,6,7`); by default every NPU on the host is used.
 
 ```python
 from openai import OpenAI
