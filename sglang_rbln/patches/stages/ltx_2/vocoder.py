@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import torch
 import torch.nn.functional as F
+from sglang.multimodal_gen.runtime.utils.precision import align_tensor_to_module_dtype
 from torch import nn
 from torch._subclasses.fake_tensor import FakeTensorMode
 
@@ -51,9 +52,9 @@ class AudioChain(nn.Module):
         latents = latents * self.latents_std.view(stats).to(
             self.latent_dtype
         ) + self.latents_mean.view(stats).to(self.latent_dtype)
-        spectrogram = self.decoder(latents)
+        spectrogram = align_tensor_to_module_dtype(self.decoder(latents), self.vocoder)
         # The class forward: the instance's own is the compiled chain.
-        return type(self.vocoder).forward(self.vocoder, spectrogram.float())
+        return type(self.vocoder).forward(self.vocoder, spectrogram)
 
     def forward(self, flat: torch.Tensor) -> torch.Tensor:
         waveform = self.waveform(flat)
