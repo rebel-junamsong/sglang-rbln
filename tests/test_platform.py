@@ -250,24 +250,17 @@ class TestServerArgDefaults:
         assert server_args.component_precisions == {"vocoder": "bf16"}
 
     @pytest.mark.parametrize(
-        ("resident", "on_device", "explicit", "expected"),
-        [
-            (False, False, False, False),
-            (False, True, False, False),
-            (True, False, False, True),
-            (True, False, True, False),
-        ],
-        ids=["host", "device", "resident-regions", "explicit"],
+        ("resident", "on_device"),
+        [(False, False), (True, False), (False, True)],
+        ids=["host", "resident-regions", "device"],
     )
-    def test_only_resident_regions_turn_autocast_off(
-        self, server_args, monkeypatch, resident, on_device, explicit, expected
+    def test_autocast_stays_as_upstream_sets_it(
+        self, server_args, monkeypatch, resident, on_device
     ):
         monkeypatch.setattr(platform_module, "resident_regions", lambda: resident)
         monkeypatch.setattr(platform_module, "runs_on_device", lambda: on_device)
-        if explicit:
-            server_args.explicit_args = {"disable_autocast"}
         RBLNPlatform().apply_server_args_defaults(server_args)
-        assert server_args.disable_autocast is expected
+        assert server_args.disable_autocast is False
 
     @pytest.mark.parametrize("on_host", [False], indirect=True)
     def test_device_mode_keeps_components_resident(self, server_args, on_host):

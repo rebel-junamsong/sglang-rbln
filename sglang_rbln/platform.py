@@ -113,12 +113,6 @@ class RBLNPlatform(Platform):
             server_args.enable_torch_compile = True
         if not server_args.is_arg_explicitly_set("regional_compile"):
             server_args.regional_compile = True
-        if resident_regions() and not server_args.is_arg_explicitly_set(
-            "disable_autocast"
-        ):
-            # Upstream opens autocast on the platform's device type, the host's here,
-            # while resident regions take rbln tensors, which only rbln autocast casts.
-            server_args.disable_autocast = True
         if self.is_cpu():
             # Upstream's LTX2VocoderWithBWE.forward opens its float32 autocast region
             # only off the CPU, so on the host its bf16 weights meet a float32 input.

@@ -29,6 +29,14 @@ PATCH_DEBTS = [
         upstream_fix="read extra_attrs through self.__dict__ so dynamo can trace it",
     ),
     PatchDebt(
+        patch="utils/precision",
+        module="sglang.multimodal_gen.runtime.utils.precision",
+        upstream_pattern=(
+            "return torch.autocast(\n        device_type=current_platform.device_type,"
+        ),
+        upstream_fix="let the platform name every device type autocast covers",
+    ),
+    PatchDebt(
         patch="layers/layernorm",
         module="sglang.multimodal_gen.runtime.layers.layernorm",
         upstream_pattern=(
