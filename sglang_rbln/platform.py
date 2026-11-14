@@ -113,12 +113,11 @@ class RBLNPlatform(Platform):
             server_args.enable_torch_compile = True
         if not server_args.is_arg_explicitly_set("regional_compile"):
             server_args.regional_compile = True
-        if (
-            resident_regions() or runs_on_device()
-        ) and not server_args.is_arg_explicitly_set("disable_autocast"):
-            # Autocast does not reach the ops of a region compiled on rbln tensors (a
-            # bf16 VAE fed fp32 latents fails to trace); upstream's own casts to the
-            # component dtype, which it applies with autocast off, do.
+        if resident_regions() and not server_args.is_arg_explicitly_set(
+            "disable_autocast"
+        ):
+            # Upstream opens autocast on the platform's device type, the host's here,
+            # while resident regions take rbln tensors, which only rbln autocast casts.
             server_args.disable_autocast = True
         if self.is_cpu():
             server_args.component_precisions.setdefault("vocoder", "fp32")

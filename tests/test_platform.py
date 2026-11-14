@@ -253,13 +253,13 @@ class TestServerArgDefaults:
         ("resident", "on_device", "explicit", "expected"),
         [
             (False, False, False, False),
+            (False, True, False, False),
             (True, False, False, True),
-            (False, True, False, True),
             (True, False, True, False),
         ],
-        ids=["host", "resident-regions", "device", "explicit"],
+        ids=["host", "device", "resident-regions", "explicit"],
     )
-    def test_regions_on_device_tensors_turn_autocast_off(
+    def test_only_resident_regions_turn_autocast_off(
         self, server_args, monkeypatch, resident, on_device, explicit, expected
     ):
         monkeypatch.setattr(platform_module, "resident_regions", lambda: resident)
