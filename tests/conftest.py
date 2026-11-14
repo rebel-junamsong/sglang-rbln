@@ -14,7 +14,6 @@ from sglang.multimodal_gen.runtime import platforms
 from sglang_rbln import device, envs
 from sglang_rbln.patches.layers import layernorm
 from sglang_rbln.patches.layers.attention import video_sparse_attn
-from sglang_rbln.patches.srt.layers.quantization import fp4_utils
 
 
 def pin_the_dummy_device_without_an_npu() -> None:
@@ -50,7 +49,6 @@ def pytest_configure(config: pytest.Config) -> None:
     # test modules import models at collection, before the plugin registers.
     layernorm.register()
     video_sparse_attn.register()
-    fp4_utils.register()
     pin_the_dummy_device_without_an_npu()
 
 

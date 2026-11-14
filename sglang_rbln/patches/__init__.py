@@ -16,7 +16,6 @@ from sglang_rbln.patches.models import (
     ltx_2_tile_ranks,
     ltx_2_vae_assembly,
 )
-from sglang_rbln.patches.srt.layers.quantization import fp4_utils
 from sglang_rbln.patches.stages import compile_only, text_encoding
 from sglang_rbln.patches.stages.ltx_2 import (
     decoding_av,
@@ -40,7 +39,6 @@ def register() -> None:
     placement.register()
     video_sparse_attn.register()
     regions.register()
-    fp4_utils.register()
     layernorm.register()
     ltx_2.register()
     ltx_2_tile_ranks.register()

@@ -13,7 +13,6 @@ from sglang_rbln.patches import cuda_imports
 from sglang_rbln.patches.layers import layernorm
 from sglang_rbln.patches.layers.attention import video_sparse_attn
 from sglang_rbln.patches.models import ltx_2
-from sglang_rbln.patches.srt.layers.quantization import fp4_utils
 from sglang_rbln.patches.torch_rbln import ops_utils
 
 
@@ -44,37 +43,21 @@ class TestCudaImportGuard:
                 if not isinstance(finder, cuda_imports._BlockedImportFinder)
             ],
         )
-        for name in ("vsa", "flashinfer"):
-            monkeypatch.delitem(sys.modules, name, raising=False)
+        monkeypatch.delitem(sys.modules, "vsa", raising=False)
 
-    @pytest.mark.parametrize(
-        ("patch", "blocked"),
-        [(video_sparse_attn, "vsa"), (fp4_utils, "flashinfer")],
-        ids=["vsa", "flashinfer"],
-    )
-    def test_blocks_the_cuda_only_module(self, monkeypatch, patch, blocked):
+    def test_blocks_the_cuda_only_module(self, monkeypatch):
         monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
         monkeypatch.setattr(cuda_imports, "_imports_cleanly", lambda module: False)
-        assert patch.register()
+        assert video_sparse_attn.register()
         with pytest.raises(ImportError, match="blocked on rbln"):
-            importlib.import_module(blocked)
-        assert importlib.util.find_spec(blocked) is not None
-        assert blocked not in sys.modules
-        assert patch.register()
+            importlib.import_module("vsa")
+        assert importlib.util.find_spec("vsa") is not None
+        assert "vsa" not in sys.modules
+        assert video_sparse_attn.register()
         finders = [
             f for f in sys.meta_path if isinstance(f, cuda_imports._BlockedImportFinder)
         ]
-        assert len(finders) == 1 and blocked in finders[0].modules
-
-    def test_one_finder_serves_both_modules(self, monkeypatch):
-        monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
-        monkeypatch.setattr(cuda_imports, "_imports_cleanly", lambda module: False)
-        video_sparse_attn.register()
-        fp4_utils.register()
-        finders = [
-            f for f in sys.meta_path if isinstance(f, cuda_imports._BlockedImportFinder)
-        ]
-        assert len(finders) == 1 and finders[0].modules == {"vsa", "flashinfer"}
+        assert len(finders) == 1 and finders[0].modules == {"vsa"}
 
     def test_leaves_cuda_hosts_alone(self, monkeypatch):
         monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
@@ -85,8 +68,8 @@ class TestCudaImportGuard:
 
     def test_leaves_importable_modules_alone(self, monkeypatch):
         monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
-        monkeypatch.setattr(fp4_utils, "BLOCKED_MODULE", "json")
-        assert not fp4_utils.register()
+        monkeypatch.setattr(video_sparse_attn, "BLOCKED_MODULE", "json")
+        assert not video_sparse_attn.register()
 
     def test_does_not_shadow_an_imported_module(self, monkeypatch):
         monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
