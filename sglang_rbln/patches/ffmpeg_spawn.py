@@ -27,7 +27,7 @@ def spawn_in_own_group(popen_kwargs: Callable[..., dict[str, Any]]):
 
 
 def register() -> tuple[str, ...]:
-    if sys.version_info < (3, 11) or sys.platform.startswith("win"):
+    if sys.platform.startswith("win"):
         return ()
     try:
         modules = [import_module(name) for name in PATCHED_MODULES]

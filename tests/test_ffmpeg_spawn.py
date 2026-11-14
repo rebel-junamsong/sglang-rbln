@@ -10,9 +10,6 @@ import pytest
 from sglang_rbln.patches import ffmpeg_spawn
 
 imageio_ffmpeg = pytest.importorskip("imageio_ffmpeg")
-pytestmark = pytest.mark.skipif(
-    sys.version_info < (3, 11), reason="process_group needs Python 3.11"
-)
 
 
 @pytest.fixture
