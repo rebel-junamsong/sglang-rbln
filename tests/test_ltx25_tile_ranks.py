@@ -157,8 +157,8 @@ class _Marker(torch.overrides.TorchFunctionMode):
 
 @pytest.mark.usefixtures("ranked")
 def test_ranks_run_under_the_callers_function_modes(model):
-    """The stage's host boundary brings device values to the host for the eager
-    ops of a region learning its blocks; a rank without it ran them on the device."""
+    """The stage's device boundary decides where each eager op on resident tensors
+    runs; a rank without it would mix host and device operands."""
     seen = []
     for name in ("forward_stage_4", "forward_diffusion_step"):
         phase = getattr(model.decoder, name)

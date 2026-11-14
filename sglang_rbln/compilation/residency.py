@@ -176,7 +176,6 @@ def resident_module(
 class _Transfers:
     def __init__(self) -> None:
         self.moved: dict[torch.device, WeakIdKeyDictionary] = {}
-        self.downloads: WeakIdKeyDictionary = WeakIdKeyDictionary()
 
     def to(self, value: Any, device: torch.device, read_as: str | None = None) -> Any:
         if not isinstance(value, torch.Tensor) or value.device == device:
@@ -199,39 +198,72 @@ class _Transfers:
         moved[value] = (value._version, resident)
         return resident
 
-    def download(self, value: Any) -> Any:
-        if not _is_resident(value):
-            return value
-        cached = self.downloads.get(value)
-        if cached is None:
-            cached = self.downloads[value] = value.cpu()
-        return cached
-
 
 _transfers = _Transfers()
 
 
-class HostBoundary(TorchFunctionMode):
+def _writes_into_self(func, args, kwargs) -> bool:
+    name = getattr(func, "__name__", "")
+    in_place = name == "__setitem__" or (name.endswith("_") and not name.endswith("__"))
+    return "out" in kwargs or (in_place and bool(args))
+
+
+def _target_device(func, args, kwargs) -> torch.device | None:
+    """Where an eager op on resident tensors runs: the device of the tensor it
+    writes into, else of its first resident operand."""
+    if _writes_into_self(func, args, kwargs):
+        written = kwargs.get("out", args[0] if args else None)
+        leaves = torch.utils._pytree.tree_leaves(written)
+        return next(
+            (leaf.device for leaf in leaves if isinstance(leaf, torch.Tensor)), None
+        )
+    leaves = torch.utils._pytree.tree_leaves((args, kwargs))
+    return next((leaf.device for leaf in leaves if _is_resident(leaf)), None)
+
+
+class DeviceBoundary(TorchFunctionMode):
+    """Run an eager op that touches resident tensors where they live.
+
+    The platform's device is the host while regions keep their tensors on the NPUs,
+    so upstream allocates its own tensors on the host: an op that meets one of them
+    and a resident tensor takes the host operand up (cached, so a weight goes up
+    once), or brings one from another NPU set across. A 0-dim host tensor is a
+    scalar to torch and stays.
+    """
+
     def __torch_function__(self, func, types, args=(), kwargs=None):
         kwargs = kwargs or {}
         if (
-            func in _TENSOR_QUERIES
+            torch.compiler.is_compiling()  # a graph's inputs are placed for it
+            or func in _TENSOR_QUERIES
             or getattr(func, "__name__", None) in _PASSED_BY_NAME
         ):
             return func(*args, **kwargs)
-        flat = (*args, *kwargs.values())
-        if any(
+        device = _target_device(func, args, kwargs)
+        if device is None or not any(
             _is_resident(leaf)
-            for value in flat
-            for leaf in torch.utils._pytree.tree_leaves(value)
+            for leaf in torch.utils._pytree.tree_leaves((args, kwargs))
         ):
-            args, kwargs = tree_map(_transfers.download, (args, kwargs))
+            return func(*args, **kwargs)
+
+        def move(value):
+            if not isinstance(value, torch.Tensor) or value.device == device:
+                return value
+            if value.device.type not in ("cpu", "rbln"):  # meta placeholders
+                return value
+            if value.device.type == "cpu" and value.dim() == 0:
+                return value
+            if device.type == "cpu":
+                return value.cpu()
+            return _transfers.to(value, device)
+
+        args, kwargs = tree_map(move, (args, kwargs))
         return func(*args, **kwargs)
 
 
 def _outside_boundary() -> contextlib.AbstractContextManager:
     stack = torch.overrides._get_current_function_mode_stack()
-    if stack and isinstance(stack[-1], HostBoundary):
+    if stack and isinstance(stack[-1], DeviceBoundary):
         return _pop_mode_temporarily()
     return contextlib.nullcontext()
 
@@ -307,8 +339,8 @@ def install_after_compile(result, module: torch.nn.Module, *args, **kwargs):
     return result
 
 
-def stage_on_host_boundary(call, stage, *args, **kwargs):
-    with HostBoundary():
+def stage_on_device_boundary(call, stage, *args, **kwargs):
+    with DeviceBoundary():
         return call(stage, *args, **kwargs)
 
 
@@ -316,7 +348,7 @@ def register() -> tuple[str, ...]:
     from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry, HookType
 
     HookRegistry.register(COMPILE_TARGET, install_after_compile, HookType.AFTER)
-    HookRegistry.register(STAGE_TARGET, stage_on_host_boundary, HookType.AROUND)
+    HookRegistry.register(STAGE_TARGET, stage_on_device_boundary, HookType.AROUND)
     HookRegistry.register(MOVE_TARGET, keep_resident_placement, HookType.AROUND)
     HookRegistry.register(READY_TARGET, resident_is_ready, HookType.AROUND)
     return COMPILE_TARGET, STAGE_TARGET, MOVE_TARGET, READY_TARGET

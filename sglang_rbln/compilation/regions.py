@@ -180,13 +180,14 @@ def check_fits(compiled_model: Any, device: Any = None) -> None:
             pool = held.get(key, [0] * len(nodes))
             for node, size in enumerate(sizes):
                 needed[node] += max(0, size - pool[node])
+    infos = list(map(rebel.get_device_memory_info, nodes))
+    if None in infos:  # a dummy device reports no memory: nothing to check against
+        return
     # Loading a graph evicts the programs of graphs not running now; they reload on
     # their next run.
     free = [
         info.free - info.granularity + rebel.get_evictable_memory(index)
-        for index, info in zip(
-            nodes, map(rebel.get_device_memory_info, nodes), strict=True
-        )
+        for index, info in zip(nodes, infos, strict=True)
     ]
     if any(need > room for need, room in zip(needed, free, strict=True)):
         raise RegionDoesNotFit(needed, free)

@@ -673,7 +673,7 @@ def test_kept_outputs_stay_on_the_region_npus(monkeypatch, dummy_device):
     )
     with torch.no_grad():
         model(torch.randn(2, 8))  # block 0 runs eagerly on the host while learning
-        with residency.HostBoundary():
+        with residency.DeviceBoundary():
             seen = model(torch.randn(2, 8))
     assert [out.device.type for out in seen] == ["rbln"] * 4
 
@@ -744,6 +744,16 @@ def test_idle_graphs_programs_make_room_once_evictable(device_memory, monkeypatc
     )
     regions.check_fits(region, 0)
     assert asked == [0]
+
+
+def test_a_device_without_memory_info_has_nothing_to_check(monkeypatch):
+    # The dummy device of a compile-only run: torch-rbln runs each eager device op
+    # as a graph of its own, whose runtime this check sees too.
+    import rebel
+
+    monkeypatch.setattr(rebel, "get_device_memory_info", lambda index: None)
+    region = SimpleNamespace(get_alloc_per_node=lambda: [5 * BLOCK_BYTES])
+    assert regions.check_fits(region, 0) is None
 
 
 def test_a_split_region_compiles_in_its_parents_sharing_session(monkeypatch):

@@ -17,6 +17,21 @@ from sglang_rbln.compilation.backend import COMPILE_BACKEND_NAME
 pytestmark = pytest.mark.usefixtures("dummy_device")
 
 
+@pytest.fixture
+def transfers(monkeypatch):
+    """(from, to) device types of every tensor the boundary moved, in order."""
+    seen = []
+    move = residency._transfers.to
+
+    def recording(value, device, *args, **kwargs):
+        if isinstance(value, torch.Tensor) and value.device != device:
+            seen.append((value.device.type, device.type))
+        return move(value, device, *args, **kwargs)
+
+    monkeypatch.setattr(residency._transfers, "to", recording)
+    return seen
+
+
 @pytest.mark.parametrize(
     ("mode", "num_devices", "expected"),
     [
@@ -70,22 +85,35 @@ def test_only_rbln_compiles_become_resident(backend, wrapped):
 
 def test_boundary_leaves_host_values_alone():
     hidden = torch.arange(6.0)
-    with residency.HostBoundary():
+    with residency.DeviceBoundary():
         doubled = hidden * 2
     assert doubled.device.type == "cpu"
     torch.testing.assert_close(doubled, torch.arange(0.0, 12.0, 2.0))
 
 
 @pytest.mark.resident_mode
-def test_boundary_brings_device_values_to_the_host():
+def test_boundary_takes_host_operands_to_the_resident_one(transfers):
     hidden = torch.arange(6.0, dtype=torch.bfloat16)
     resident = hidden.to("rbln:0")
-    with residency.HostBoundary():
+    with residency.DeviceBoundary():
         shape = resident.shape
         summed = resident + hidden
+        scaled = resident * torch.tensor(2.0)
     assert shape == hidden.shape
-    assert summed.device.type == "cpu"
-    torch.testing.assert_close(summed, hidden * 2)
+    assert summed.device.type == scaled.device.type == "rbln"
+    assert transfers == [("cpu", "rbln")]  # the 0-dim scalar stays on the host
+
+
+@pytest.mark.resident_mode
+def test_boundary_writes_into_a_host_buffer_on_the_host():
+    buffer = torch.zeros(4, dtype=torch.bfloat16)
+    resident = torch.ones(2, dtype=torch.bfloat16).to("rbln:0")
+    with residency.DeviceBoundary():
+        buffer[1:3] = resident
+    assert buffer.device.type == "cpu"
+    assert residency._target_device(
+        torch.Tensor.__setitem__, (buffer, slice(1, 3), resident), {}
+    ) == torch.device("cpu")
 
 
 @pytest.mark.resident_mode
@@ -96,7 +124,7 @@ def test_a_resident_call_moves_module_and_inputs_under_the_boundary():
         block,
         lambda hidden: seen.append((hidden.device.type, block.weight.device.type)),
     )
-    with residency.HostBoundary():
+    with residency.DeviceBoundary():
         wrapped(torch.ones(4))
     assert seen == [("rbln", "rbln")]
 
@@ -324,29 +352,6 @@ def test_a_cross_set_copy_keeps_only_a_layout_its_reader_reads(
     assert (kept_config is not None) is kept
 
 
-@pytest.fixture
-def downloads(monkeypatch):
-    """The resident tensors a host op brought down, in order."""
-    seen = []
-    download = residency._transfers.download
-
-    def recording(value):
-        if residency._is_resident(value):
-            seen.append(value)
-        return download(value)
-
-    monkeypatch.setattr(residency._transfers, "download", recording)
-    return seen
-
-
-@pytest.mark.resident_mode
-def test_a_host_op_in_a_stage_downloads_its_resident_input(downloads):
-    resident = torch.zeros(4, 8, dtype=torch.bfloat16).to("rbln:0")
-    result = residency.stage_on_host_boundary(lambda stage: resident + 1, None)
-    assert result.device.type == "cpu"
-    assert downloads == [resident]
-
-
 @pytest.mark.resident_mode
 def test_a_strided_host_tensor_uploads_dense():
     # LTX-2 packs its latents as a transposed view. Uploaded with its strides, the
@@ -361,10 +366,10 @@ def test_a_strided_host_tensor_uploads_dense():
 
 
 @pytest.mark.resident_mode
-def test_casting_a_resident_module_downloads_no_parameter(downloads):
-    # Upstream casts the VAE around each decode: it brought the whole decoder down
-    # (776.6 MiB) to compare tensor types.
+def test_casting_a_resident_module_moves_no_parameter(transfers):
+    # Upstream casts the VAE around each decode: under the old host boundary it
+    # brought the whole decoder down (776.6 MiB) to compare tensor types.
     module = nn.Linear(8, 8).to("rbln:0")
-    residency.stage_on_host_boundary(lambda stage: module.to(torch.float32), None)
-    assert downloads == []
+    residency.stage_on_device_boundary(lambda stage: module.to(torch.float32), None)
+    assert transfers == []
     assert module.weight.device.type == "rbln"

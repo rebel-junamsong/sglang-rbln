@@ -80,8 +80,8 @@ def tiled_decode_over_ranks(tiled_decode, model, hidden_states, *args, **kwargs)
     # Grad and inference mode are per thread: carry the caller's to each rank.
     grad_enabled = torch.is_grad_enabled()
     inference = torch.is_inference_mode_enabled()
-    # So are torch function modes: the stage's host boundary, which brings device
-    # values to the host for the eager ops of a region learning its blocks.
+    # So are torch function modes: the stage's device boundary, which runs each
+    # eager op on resident tensors where they live.
     function_modes = torch.overrides._get_current_function_mode_stack()
 
     def rank_call(rank: int):
