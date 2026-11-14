@@ -14,7 +14,6 @@ of video comes down once, into one buffer.
 from __future__ import annotations
 
 import concurrent.futures
-from typing import Any
 
 import numpy as np
 import torch
@@ -153,10 +152,6 @@ def postprocess_video(postprocess, processor, video, output_type="np", **kwargs)
     return ready.result()
 
 
-def _resident(value: Any) -> bool:
-    return isinstance(value, torch.Tensor) and value.device.type == "rbln"
-
-
 def _assembly(vae, key: tuple, build, *tensors: torch.Tensor) -> nn.Module:
     """``build()``, compiled for the decoder's NPUs when the tensors live there."""
     return residency.resident_module(
@@ -238,7 +233,7 @@ def temporal_tiled_decode(self, z, temb, causal=None, return_dict=True):
             key = ("temporal", tuple(previous.shape), tuple(decoded.shape))
             step = _assembly(self, key, lambda: TemporalStep(self), previous, decoded)
             frames, previous = step(previous, decoded)
-        frames = frames.cpu() if _resident(frames) else frames
+        frames = frames.cpu() if residency._is_resident(frames) else frames
         count = min(frames.shape[2], num_sample_frames - written)
         if output is None:
             output = frames.new_empty(
