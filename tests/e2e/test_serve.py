@@ -16,6 +16,10 @@ from PIL import Image
 pytestmark = pytest.mark.e2e
 
 SMOKE_MODEL_ID = "hf-internal-testing/tiny-sdxl-pipe"
+# Two budgets: starting up (imports and model load, which take minutes on a cold
+# shared filesystem under load) until /liveness answers, then the warmup until
+# /health does. One budget for both timed a slow start out mid-warmup.
+SERVER_LIVE_TIMEOUT_SEC = 1800
 SERVER_READY_TIMEOUT_SEC = 900
 HEALTH_PROBE_TIMEOUT_SEC = 30
 REQUEST_TIMEOUT_SEC = 900
@@ -113,26 +117,31 @@ def serve_url(npu_name, tmp_path_factory):
             start_new_session=True,
         )
     base_url = f"http://127.0.0.1:{port}"
-    deadline = time.monotonic() + SERVER_READY_TIMEOUT_SEC
     try:
-        while time.monotonic() < deadline:
-            if server.poll() is not None:
-                tail = log_path.read_text(errors="replace")[-4000:]
-                raise RuntimeError(f"server exited early:\n{tail}")
-            try:
-                health = requests.get(
-                    f"{base_url}/health", timeout=HEALTH_PROBE_TIMEOUT_SEC
-                )
-                if health.status_code == 200:
-                    break
-            except requests.RequestException:  # not listening yet, or busy loading
-                pass
-            time.sleep(2)
-        else:
-            raise RuntimeError("server did not become healthy in time")
+        for endpoint, budget in (
+            ("liveness", SERVER_LIVE_TIMEOUT_SEC),
+            ("health", SERVER_READY_TIMEOUT_SEC),
+        ):
+            _wait_for(server, log_path, f"{base_url}/{endpoint}", budget)
         yield base_url
     finally:
         _stop(server)
+
+
+def _wait_for(server: subprocess.Popen, log_path: Path, url: str, budget: int):
+    deadline = time.monotonic() + budget
+    while time.monotonic() < deadline:
+        if server.poll() is not None:
+            tail = log_path.read_text(errors="replace")[-4000:]
+            raise RuntimeError(f"server exited early:\n{tail}")
+        try:
+            if requests.get(url, timeout=HEALTH_PROBE_TIMEOUT_SEC).status_code == 200:
+                return
+        except requests.RequestException:  # not listening yet, or busy loading
+            pass
+        time.sleep(2)
+    tail = log_path.read_text(errors="replace")[-4000:]
+    raise RuntimeError(f"{url} did not answer 200 within {budget} s:\n{tail}")
 
 
 def test_server_reports_the_smoke_model(serve_url):
