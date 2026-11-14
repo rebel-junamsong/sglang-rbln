@@ -120,6 +120,8 @@ class RBLNPlatform(Platform):
             # while resident regions take rbln tensors, which only rbln autocast casts.
             server_args.disable_autocast = True
         if self.is_cpu():
+            # Upstream's LTX2VocoderWithBWE.forward opens its float32 autocast region
+            # only off the CPU, so on the host its bf16 weights meet a float32 input.
             server_args.component_precisions.setdefault("vocoder", "fp32")
             return
         for flag in OFFLOAD_FLAGS:
