@@ -2,11 +2,10 @@
 """Keep the LTX-2 text features on the NPUs between Gemma and the connectors.
 
 Upstream packs Gemma's hidden states (`_gemma_postprocess_func`) and rescales them
-(`_rescale_v2_features`) eagerly, on the device the hidden states live on. Its
-connector transformer replaces the padded tokens with learned registers, which with
-resident regions brought the hidden states to the host; here that step runs as a
-module compiled for the connectors' NPUs, and the packed features are returned on
-those NPUs rather than the platform device, the host.
+(`_rescale_v2_features`), and its connector transformer replaces the padded tokens
+with learned registers, eagerly, on the device the hidden states live on. Here the
+packed features are returned on the connectors' NPUs rather than the platform
+device, the host, and their NaN check runs there too.
 """
 
 from __future__ import annotations
@@ -17,8 +16,6 @@ from torch import nn
 
 from sglang_rbln.compilation import placement, residency
 
-CONNECTOR = "sglang.multimodal_gen.runtime.models.adapter.ltx_2_connector"
-CONNECTOR_FORWARD = f"{CONNECTOR}.LTX2ConnectorTransformer1d.forward"
 ENCODE_TEXT = (
     "sglang.multimodal_gen.runtime.pipelines_core.stages.text_encoding."
     "TextEncodingStage.encode_text"
@@ -38,103 +35,11 @@ def _signature(*tensors: torch.Tensor) -> tuple:
     return tuple((tuple(t.shape), t.dtype) for t in tensors)
 
 
-class RegisterStep(nn.Module):
-    """Upstream's register replacement over a fixed length.
-
-    `src` moves the valid tokens to the front, in their order. Upstream zero-pads behind
-    them and blends with the flipped mask; `keep` is that mask where a valid token sits,
-    so the rows past them add nothing, as upstream's zeros do.
-    """
-
-    def __init__(self, learnable_registers: nn.Parameter, repeats: int) -> None:
-        super().__init__()
-        # The connector's own parameter, a weight here, so its tiling folds at compile.
-        self.learnable_registers = learnable_registers
-        self.repeats = repeats
-
-    def forward(self, hidden_states, src, keep, flipped):
-        registers = torch.tile(self.learnable_registers, (self.repeats, 1))
-        index = src.unsqueeze(-1).expand(-1, -1, hidden_states.shape[-1])
-        padded = torch.gather(hidden_states, 1, index)
-        return keep * padded + (1 - flipped) * registers
-
-
 class HasNan(nn.Module):
     """Whether a tensor holds a NaN, the check upstream's stage validators make."""
 
     def forward(self, tensor: torch.Tensor) -> torch.Tensor:
         return torch.isnan(tensor).any()
-
-
-class Normalize(nn.Module):
-    """The connector's own output norm, as one graph."""
-
-    def __init__(self, norm: nn.Module) -> None:
-        super().__init__()
-        self.norm = norm
-
-    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
-        return self.norm(hidden_states)
-
-
-def connector_forward(
-    forward,
-    self,
-    hidden_states,
-    attention_mask=None,
-    attn_mask_binarize_threshold=-9000.0,
-):
-    """Upstream's forward, with its register replacement over a fixed length when the
-    hidden states live on the NPUs."""
-    if self.learnable_registers is None or not residency._is_resident(hidden_states):
-        return forward(
-            self, hidden_states, attention_mask, attn_mask_binarize_threshold
-        )
-    batch_size, seq_len, _ = hidden_states.shape
-    if seq_len % self.num_learnable_registers != 0:
-        raise ValueError(
-            f"The `hidden_states` sequence length {hidden_states.shape[1]} should be "
-            "divisible by the number of learnable registers "
-            f"{self.num_learnable_registers}"
-        )
-
-    # The index is host math on the host mask: the valid tokens first, in their order.
-    binary_attn_mask = (attention_mask.cpu() >= attn_mask_binarize_threshold).int()
-    if binary_attn_mask.ndim == 4:
-        binary_attn_mask = binary_attn_mask.squeeze(1).squeeze(1)
-    src = torch.argsort(1 - binary_attn_mask, dim=1, stable=True).to(torch.int32)
-    flipped = torch.flip(binary_attn_mask, dims=[1]).unsqueeze(-1)
-    valid = torch.arange(seq_len) < binary_attn_mask.sum(dim=1, keepdim=True)
-    keep = (flipped * valid.unsqueeze(-1)).to(hidden_states.dtype)
-    flipped = flipped.to(hidden_states.dtype)
-    repeats = seq_len // self.num_learnable_registers
-    key = ("registers", id(self), repeats, _signature(hidden_states))
-    step = residency.resident_module(
-        COMPILED,
-        key,
-        lambda: RegisterStep(self.learnable_registers, repeats),
-        (hidden_states,),
-        placement.devices_of(self),
-    )
-    hidden_states = step(hidden_states, src, keep, flipped)
-    attention_mask = torch.zeros_like(attention_mask)
-
-    # On the host, where upstream's eager register step left the hidden states.
-    rotary_emb = self.rope(
-        batch_size, seq_len, device=torch.device("cpu"), dtype=hidden_states.dtype
-    )
-    for block in self.transformer_blocks:
-        hidden_states = block(
-            hidden_states, attention_mask=attention_mask, rotary_emb=rotary_emb
-        )
-    norm = residency.resident_module(
-        COMPILED,
-        ("norm_out", id(self), _signature(hidden_states)),
-        lambda: Normalize(self.norm_out),
-        (hidden_states,),
-        placement.devices_of(self),
-    )
-    return norm(hidden_states), attention_mask
 
 
 def encode_text(forward, self, text, server_args, *args, **kwargs):
@@ -168,7 +73,6 @@ def tensors_with_min_dims(validate, value, min_dims):
 
 
 TARGETS = {
-    CONNECTOR_FORWARD: connector_forward,
     ENCODE_TEXT: encode_text,
     VALIDATE: tensors_with_min_dims,
 }
