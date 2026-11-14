@@ -13,19 +13,18 @@ from sglang.multimodal_gen.runtime.models.decoders import ltx_2_5_diffusion_deco
 from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry
 
 from sglang_rbln.compilation import backend as compilation
-from sglang_rbln.layers.attention.neighborhood import neighborhood_attention
 from sglang_rbln.patches.models import ltx_2
 from sglang_rbln.patches.stages.ltx_2 import decoding_av
 
 
-def test_hands_the_decoder_the_tiled_neighborhood_attention():
+def test_decoder_keeps_upstream_attention():
+    """The decoder's neighborhood attention is upstream's flex_attention, which the
+    compiler lowers; nothing replaces it."""
     targets = ltx_2.register()
-    assert {ltx_2.DIFFUSION_DECODER_NA3D, ltx_2.DIFFUSION_DECODER_INIT} <= set(targets)
-    hooks = [hook for _, hook, _ in HookRegistry._hooks[ltx_2.DIFFUSION_DECODER_NA3D]]
-    assert ltx_2.na3d in hooks
+    assert ltx_2.DIFFUSION_DECODER_INIT in targets
+    assert not [t for t in targets if t.endswith("._na3d")]
     hooks = [hook for _, hook, _ in HookRegistry._hooks[ltx_2.DIFFUSION_DECODER_INIT]]
     assert ltx_2.keyframe_tag in hooks
-    assert ltx_2.na3d() is neighborhood_attention
 
 
 def test_decoder_loads_the_checkpoint_keyframe_tag():
@@ -53,24 +52,30 @@ def test_decoder_loads_the_checkpoint_keyframe_tag():
     ],
     ids=str,
 )
-def test_matches_the_flex_attention_decoder(monkeypatch, grid, kernel):
+def test_lowered_flex_matches_eager(grid, kernel):
+    """Upstream's flex_attention, as the rbln backend lowers it, against eager."""
+    lower = pytest.importorskip("rebel.core._flex_attention").lower_flex_attention
+
+    def lowered(graph_module, _):
+        lower(graph_module)
+        return graph_module.forward
+
     torch.manual_seed(0)
     attention = ltx_2_5_diffusion_decoder.LTX2VideoVaeNeighborhoodAttention(
         128, kernel
     ).eval()
     hidden_states = torch.randn(1, *grid, 128)
+    torch._dynamo.reset()
     with torch.no_grad():
         expected = attention(hidden_states)
-        monkeypatch.setattr(ltx_2_5_diffusion_decoder, "_na3d", ltx_2.na3d)
-        actual = attention(hidden_states)
+        actual = torch.compile(attention, backend=lowered)(hidden_states)
     torch.testing.assert_close(actual, expected, atol=2e-6, rtol=1e-5)
 
 
 @pytest.mark.npu
-def test_a_stage_3_attention_split_over_two_npus_runs(monkeypatch, tmp_path):
-    """Split over two NPUs, this attention aborted on its first run
-    (SYS_TASK_ABORTED) on rebel-compiler e4667eda9d. Its tiled kernel takes 135
-    spatial tiles per frame group at this grid, and 90 or more aborted."""
+def test_a_stage_3_attention_split_over_two_npus_runs(tmp_path):
+    """Split over two NPUs, this attention once aborted on its first run: its
+    tiles take 135 spatial tiles per frame group at this grid."""
     visible = [
         npu for npu in os.environ.get("RBLN_VISIBLE_DEVICES", "").split(",") if npu
     ]
@@ -83,7 +88,6 @@ def test_a_stage_3_attention_split_over_two_npus_runs(monkeypatch, tmp_path):
     )
     attention = attention.to(torch.bfloat16).eval()
     hidden_states = torch.randn(1, 18, 68, 120, 512, dtype=torch.bfloat16)
-    monkeypatch.setattr(ltx_2_5_diffusion_decoder, "_na3d", ltx_2.na3d)
     options = {"num_devices": 2, "cache_dir": str(tmp_path), "mode": ["strict"]}
     with torch.no_grad():
         reference = attention(hidden_states)
@@ -108,7 +112,6 @@ def test_diffusion_decoder_runs_on_the_npu(caplog, monkeypatch, tmp_path):
     latents = torch.randn(1, 128, 3, 7, 8, dtype=torch.bfloat16)
     with torch.no_grad():
         reference = model(latents, generator=torch.Generator().manual_seed(0))
-        monkeypatch.setattr(ltx_2_5_diffusion_decoder, "_na3d", ltx_2.na3d)
         decoding_av.compile_diffusion_decoder(model)
         with caplog.at_level(logging.WARNING, logger="rebel-compiler"):
             for _ in range(2):
