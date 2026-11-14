@@ -87,20 +87,17 @@ def test_compiles_the_audio_chain_once(audio_stage, chained, monkeypatch):
     assert isinstance(chain, vocoder.AudioChain)
     assert (kwargs["backend"], kwargs["dynamic"]) == ("rbln", False)
     assert (kwargs["options"]["num_devices"], kwargs["options"]["device"]) == (1, 3)
-    # The chain denormalizes (1 * 3 + 1), decodes (x 2), vocodes (+ 1); the
-    # stage itself no longer denormalizes on the host.
-    assert audio_stage.audio_vae.latents_mean is None
+    # The stage denormalizes (1 * 3 + 1), the chain decodes (x 2) and vocodes (+ 1).
+    assert audio_stage.audio_vae.latents_mean is not None
     for waveform in waveforms:
         assert torch.equal(waveform, torch.full((1, 2, 3, 4), 9.0))
 
 
-def test_chain_takes_flat_latents_and_returns_whole_tiles(audio_stage):
+@pytest.mark.parametrize("frames", [3, 25], ids=lambda n: f"{n}frames")
+def test_chain_takes_the_latents_and_returns_the_waveform(audio_stage, frames):
     chain = vocoder.AudioChain(audio_stage.audio_vae, audio_stage.vocoder)
-    chain.latent_shape = (2, 3, 4)
-    padded = chain(torch.ones(1, 24))
-    assert padded.shape == (1, 2, 3, vocoder.TILE)
-    assert torch.equal(padded[..., :4], torch.full((1, 2, 3, 4), 9.0))
-    assert torch.count_nonzero(padded[..., 4:]) == 0
+    waveform = chain(torch.ones(1, 2, frames, 4))
+    assert torch.equal(waveform, torch.full((1, 2, frames, 4), 3.0))
 
 
 def test_chain_runs_on_the_vocoders_placed_npu(audio_stage, chained):

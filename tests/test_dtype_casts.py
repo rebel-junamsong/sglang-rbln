@@ -69,26 +69,6 @@ ALLOWED = {
         "self.vae.latents_std.view(shape).to(latents.dtype)",
     ): "upstream denormalizes with the statistics in the latents' dtype",
     (
-        "patches/stages/ltx_2/vocoder.py",
-        "AudioChain.waveform",
-        "flat.view(1, channels, frames, bins).to(self.latent_dtype)",
-    ): "upstream decodes the audio latents in the audio VAE's dtype",
-    (
-        "patches/stages/ltx_2/vocoder.py",
-        "AudioChain.waveform",
-        "self.latents_std.view(stats).to(self.latent_dtype)",
-    ): "upstream denormalizes with the statistics in the latents' dtype",
-    (
-        "patches/stages/ltx_2/vocoder.py",
-        "AudioChain.waveform",
-        "self.latents_mean.view(stats).to(self.latent_dtype)",
-    ): "upstream denormalizes with the statistics in the latents' dtype",
-    (
-        "patches/stages/ltx_2/vocoder.py",
-        "CompiledAudio.forward",
-        "latents.reshape(1, -1).to(self.chain.latent_dtype)",
-    ): "upstream decodes the audio latents in the audio VAE's dtype",
-    (
         "patches/torch_rbln/autocast.py",
         "_cast.cast",
         "value.to(dtype)",
