@@ -14,7 +14,6 @@ from sglang_rbln.patches.models import (
     ltx_2,
     ltx_2_text_features,
     ltx_2_tile_ranks,
-    ltx_2_vae_assembly,
 )
 from sglang_rbln.patches.stages import compile_only, text_encoding
 from sglang_rbln.patches.stages.ltx_2 import (
@@ -59,7 +58,6 @@ def register() -> None:
         timeline.register()
     if device.resident_regions():
         residency.register()
-        ltx_2_vae_assembly.register()
         ltx_2_text_features.register()
         upsampling.register_resident()
         ltx_2.register_resident()
