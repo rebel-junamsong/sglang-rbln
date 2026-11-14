@@ -5,7 +5,7 @@ rebel takes contiguous device inputs only, so a strided view (Gemma-4's
 ``per_layer_inputs[:, :, i, :]``, one slice per decoder layer) reached the graph as an
 eager ``.contiguous()`` copy: one more eager device op per input and step, and a copy
 the runtime then failed to resolve in the next run (``RUN_INTERNAL (Invalid
-key_vaddr)``; see rebel_requests/eager_contiguous_device_view_invalid_key.md).
+key_vaddr)``).
 
 When such a view is ``narrow``/``select`` slices of a contiguous base, the placeholder
 takes the base instead and rebuilds the view from those slices, which rebel lowers

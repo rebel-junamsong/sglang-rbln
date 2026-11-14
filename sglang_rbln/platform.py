@@ -151,10 +151,7 @@ class RBLNPlatform(Platform):
         head_size: int,
         dtype: torch.dtype,
     ) -> str:
-        # `Platform`'s own is a stub returning "", so this cannot just be
-        # dropped. The plugin used to name an SDPA subclass that expanded the
-        # kv heads itself; the compiler honours `enable_gqa` now, so upstream's
-        # own backend and its selection logic do.
+        # `Platform`'s own returns "": take the CPU platform's SDPA selection.
         return CpuPlatform.get_attn_backend_cls_str(selected_backend, head_size, dtype)
 
     def get_torch_distributed_backend_str(self) -> str:

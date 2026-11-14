@@ -226,12 +226,10 @@ def install_fit_check() -> bool:
     coders, the vocoder, the duration head), which otherwise fails with a bare
     SYS_ENOMEM from the runtime instead of a RegionDoesNotFit naming what it needed.
     """
+    from rebel import RBLNCompiledModel
+
     global _installed
     if _installed:
-        return False
-    try:
-        from rebel import RBLNCompiledModel
-    except ImportError:
         return False
     RBLNCompiledModel.create_runtime = _checked_create_runtime(
         RBLNCompiledModel.create_runtime

@@ -80,13 +80,12 @@ def compile_diffusion_decoder(model) -> None:
     """Compile the decoder on its component's devices.
 
     Stages 1-3 compile on the set's first NPU, one region per stage
-    ModuleList. Split over the set, their attention aborts on the device
-    (rebel_requests/dfr_stage3_rsd_abort.md). The stage-4/5 tiles follow
-    upstream's decode-parallel tiling: each other NPU of the set is a rank
-    (ltx_2_tile_ranks) whose tile graphs run on that NPU alone, with the
-    decoder weights resident there. A set of two keeps both NPUs as ranks,
-    since one rank would serialise the tiles. The set's one context compiles
-    each tile graph once for all ranks.
+    ModuleList. Split over the set, their attention aborts on the device. The
+    stage-4/5 tiles follow upstream's decode-parallel tiling: each other NPU of
+    the set is a rank (ltx_2_tile_ranks) whose tile graphs run on that NPU alone,
+    with the decoder weights resident there. A set of two keeps both NPUs as
+    ranks, since one rank would serialise the tiles. The set's one context
+    compiles each tile graph once for all ranks.
     """
     compile_kwargs = static_compile_kwargs(model)
     devices = decoder_devices(model)
