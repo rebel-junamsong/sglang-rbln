@@ -484,3 +484,31 @@ def test_released_graphs_include_those_after_a_graph_break():
     assert len(runtimes) == 2
     compilation.release_graphs(decoder)
     assert [runtime() for runtime in runtimes] == [None, None]
+
+
+@pytest.mark.parametrize(("mode", "released"), [("resident", True), ("staged", False)])
+def test_a_resident_decode_gives_its_cached_blocks_back(
+    stage, monkeypatch, mode, released
+):
+    # The next request's tiles and video find the room the first request's did, so
+    # its video evicts neither the decoder's programs nor its pool.
+    monkeypatch.setenv("SGLANG_RBLN_EXECUTION_MODE", mode)
+    calls = []
+    monkeypatch.setattr(
+        torch,
+        "rbln",
+        SimpleNamespace(empty_cache=lambda: calls.append("cache")),
+        raising=False,
+    )
+
+    def forward(stage, batch, server_args):
+        assert calls == []
+        calls.append("stage")
+        return "output"
+
+    batch = SimpleNamespace(use_diffusion_decoder=False)
+    server_args = SimpleNamespace(enable_torch_compile=False)
+    output = decoding_av.compile_decoders(forward, stage, batch, server_args)
+
+    assert output == "output"
+    assert calls == ["stage", *(["cache"] if released else [])]

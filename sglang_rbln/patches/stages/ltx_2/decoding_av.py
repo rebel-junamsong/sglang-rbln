@@ -9,7 +9,7 @@ import logging
 import torch
 from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry, HookType
 
-from sglang_rbln import envs
+from sglang_rbln import device, envs
 from sglang_rbln.compilation import placement, regions, tiling
 from sglang_rbln.compilation.backend import (
     device_set_context,
@@ -173,7 +173,23 @@ def decode_within_memory(decode, vae, *args, **kwargs):
 
 def compile_decoders(forward, stage, batch, server_args):
     audio = functools.partial(vocoder.compile_audio, forward)
-    return compile_video_decoder(audio, stage, batch, server_args)
+    output = compile_video_decoder(audio, stage, batch, server_args)
+    release_cached_device_memory()
+    return output
+
+
+def release_cached_device_memory() -> None:
+    """Give the freed device blocks of the decode back once its video is on the host.
+
+    The VAE's tiles and the video they join are a request's largest device tensors
+    (2.2 GB on the VAE's first NPU at 1280x704x121). Kept in the caching allocator, the
+    next request's smaller tensors split those blocks, its tiles fill the old video's
+    block, and its video finds room only by evicting the decoder's programs and
+    setting the decoder's pool aside. The request after that loads them and grows
+    the pool again. Released, every request places them as the first one did.
+    """
+    if device.execution_mode() is device.ExecutionMode.RESIDENT:
+        torch.rbln.empty_cache()
 
 
 def decode_in_decoder_dtype(decode, stage, decoder, latents, batch, server_args):
