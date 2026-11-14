@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import collections
 import contextlib
-import contextvars
 import functools
 import os
 from collections.abc import Callable
@@ -151,7 +149,6 @@ def copy_across_devices(
 def _upload(tensor: torch.Tensor, device: torch.device) -> torch.Tensor:
     # Dense on the host first: a strided upload keeps its strides, and the graph that
     # reads it lays it out with a transpose graph of its own on one NPU.
-    crossings.record("up", "host tensor", tensor)
     return tensor.contiguous().to(device)
 
 
@@ -174,38 +171,6 @@ def resident_module(
         module.compile(**static_compile_kwargs(module))
         cache[key] = module
     return cache[key]
-
-
-class Crossings:
-    """Every host<->NPU transfer of a tensor, per pipeline stage: the bytes a host op
-    downloaded (by op) and the bytes uploaded from the host."""
-
-    stage: contextvars.ContextVar[str] = contextvars.ContextVar(
-        "rbln_stage", default="outside a stage"
-    )
-
-    def __init__(self) -> None:
-        self.bytes: collections.Counter = collections.Counter()
-        self.counts: collections.Counter = collections.Counter()
-
-    def record(self, direction: str, what: str, tensor: torch.Tensor) -> None:
-        key = (self.stage.get(), direction, what)
-        self.counts[key] += 1
-        self.bytes[key] += tensor.numel() * tensor.element_size()
-
-    def of_stage(self, stage: str) -> dict[tuple[str, str], tuple[int, int]]:
-        return {
-            key[1:]: (count, self.bytes[key])
-            for key, count in self.counts.items()
-            if key[0] == stage
-        }
-
-    def clear(self, stage: str) -> None:
-        for key in [key for key in self.counts if key[0] == stage]:
-            del self.counts[key], self.bytes[key]
-
-
-crossings = Crossings()
 
 
 class _Transfers:
@@ -234,12 +199,11 @@ class _Transfers:
         moved[value] = (value._version, resident)
         return resident
 
-    def download(self, value: Any, what: str = "host op") -> Any:
+    def download(self, value: Any) -> Any:
         if not _is_resident(value):
             return value
         cached = self.downloads.get(value)
         if cached is None:
-            crossings.record("down", what, value)
             cached = self.downloads[value] = value.cpu()
         return cached
 
@@ -261,10 +225,7 @@ class HostBoundary(TorchFunctionMode):
             for value in flat
             for leaf in torch.utils._pytree.tree_leaves(value)
         ):
-            what = getattr(func, "__name__", repr(func))
-            args, kwargs = tree_map(
-                functools.partial(_transfers.download, what=what), (args, kwargs)
-            )
+            args, kwargs = tree_map(_transfers.download, (args, kwargs))
         return func(*args, **kwargs)
 
 
@@ -347,14 +308,8 @@ def install_after_compile(result, module: torch.nn.Module, *args, **kwargs):
 
 
 def stage_on_host_boundary(call, stage, *args, **kwargs):
-    name = type(stage).__name__
-    token = Crossings.stage.set(name)
-    try:
-        with HostBoundary():
-            return call(stage, *args, **kwargs)
-    finally:
-        Crossings.stage.reset(token)
-        crossings.clear(name)
+    with HostBoundary():
+        return call(stage, *args, **kwargs)
 
 
 def register() -> tuple[str, ...]:

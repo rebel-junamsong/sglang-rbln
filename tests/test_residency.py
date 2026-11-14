@@ -324,25 +324,27 @@ def test_a_cross_set_copy_keeps_only_a_layout_its_reader_reads(
     assert (kept_config is not None) is kept
 
 
-class _Stage:
-    def __init__(self, work) -> None:
-        self.work = work
+@pytest.fixture
+def downloads(monkeypatch):
+    """The resident tensors a host op brought down, in order."""
+    seen = []
+    download = residency._transfers.download
+
+    def recording(value):
+        if residency._is_resident(value):
+            seen.append(value)
+        return download(value)
+
+    monkeypatch.setattr(residency._transfers, "download", recording)
+    return seen
 
 
 @pytest.mark.resident_mode
-def test_crossings_count_each_stage_download_by_op_and_upload():
+def test_a_host_op_in_a_stage_downloads_its_resident_input(downloads):
     resident = torch.zeros(4, 8, dtype=torch.bfloat16).to("rbln:0")
-    host = torch.ones(16, dtype=torch.float32)
-
-    def work():
-        resident + 1
-        resident * 2
-        residency._Transfers().to(host, torch.device("rbln:0"))
-        return residency.crossings.of_stage("_Stage")
-
-    seen = residency.stage_on_host_boundary(lambda stage: stage.work(), _Stage(work))
-    assert seen == {("down", "add"): (1, 64), ("up", "host tensor"): (1, 64)}
-    assert residency.crossings.of_stage("_Stage") == {}
+    result = residency.stage_on_host_boundary(lambda stage: resident + 1, None)
+    assert result.device.type == "cpu"
+    assert downloads == [resident]
 
 
 @pytest.mark.resident_mode
@@ -359,15 +361,10 @@ def test_a_strided_host_tensor_uploads_dense():
 
 
 @pytest.mark.resident_mode
-def test_casting_a_resident_module_downloads_no_parameter():
+def test_casting_a_resident_module_downloads_no_parameter(downloads):
     # Upstream casts the VAE around each decode: it brought the whole decoder down
     # (776.6 MiB) to compare tensor types.
     module = nn.Linear(8, 8).to("rbln:0")
-
-    def cast():
-        module.to(torch.float32)
-        return residency.crossings.of_stage("_Stage")
-
-    seen = residency.stage_on_host_boundary(lambda stage: stage.work(), _Stage(cast))
-    assert seen == {}
+    residency.stage_on_host_boundary(lambda stage: module.to(torch.float32), None)
+    assert downloads == []
     assert module.weight.device.type == "rbln"

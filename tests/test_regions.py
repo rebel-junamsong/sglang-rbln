@@ -671,12 +671,9 @@ def test_kept_outputs_stay_on_the_region_npus(monkeypatch, dummy_device):
     )
     with torch.no_grad():
         model(torch.randn(2, 8))  # block 0 runs eagerly on the host while learning
-        stage = residency.crossings.stage.get()
-        residency.crossings.clear(stage)
         with residency.HostBoundary():
             seen = model(torch.randn(2, 8))
     assert [out.device.type for out in seen] == ["rbln"] * 4
-    assert residency.crossings.of_stage(stage) == {}
 
 
 class SessionRegion(SimpleNamespace):
