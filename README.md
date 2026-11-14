@@ -53,11 +53,10 @@ plugins are installed.
 
 ## Quick start
 
-The upstream command, plus one RBLN setting: how many NPUs each model is split
-across.
+The upstream command; `--tp-size` is how many NPUs each model is split across.
 
 ```bash
-SGLANG_RBLN_NUM_DEVICES=4 sglang serve --model-path Lightricks/LTX-2.5-Diffusers
+sglang serve --model-path Lightricks/LTX-2.5-Diffusers --tp-size 4
 ```
 
 The DiT and the video decoder run tensor-parallel on NPUs 0–3. The Gemma text
@@ -111,7 +110,7 @@ the NPU. A compile error fails the request unless `SGLANG_RBLN_COMPILE_STRICT=0`
 | `SGLANG_RBLN_CACHE_DIR` | compiled-graph cache (default `~/.cache/sglang_rbln`) |
 | `SGLANG_RBLN_DISABLE_COMPILE_CACHE=1` | compile without the cache |
 | `SGLANG_RBLN_STATIC_OUTPUT=1` | reuse one device output buffer per graph output instead of allocating per run |
-| `SGLANG_RBLN_NUM_DEVICES=4` | compile every graph for tensor parallelism over that many NPUs (rebel `num_devices`) |
+| `SGLANG_RBLN_NUM_DEVICES=4` | compile every graph for tensor parallelism over that many NPUs (rebel `num_devices`). `--tp-size` (else `--num-gpus`) sets it: the compiler shards each graph, so one worker process drives the NPUs and upstream's own degree stays 1 |
 | `SGLANG_RBLN_COMPONENT_DEVICES=text_encoder=4,5,6,7` | run the named pipeline components (`;`-separated, e.g. `text_encoder=4,5,6,7;vae=8`) on their own NPUs, given as indices into `RBLN_VISIBLE_DEVICES`; each is tensor-parallel over its list, in place of `SGLANG_RBLN_NUM_DEVICES`, so a component that does not fit next to the DiT gets NPUs of its own. Without an entry, a text encoder runs on the next `SGLANG_RBLN_NUM_DEVICES` visible NPUs after the DiT's when there are that many and each can hold its share of the weights |
 | `SGLANG_RBLN_COMPILE_ONLY=1` | compile the graphs and stop before running them |
 | `SGLANG_RBLN_COMPILE_STRICT=0` | let a graph that fails to compile run on the host instead of failing the request (strict is on by default, so a compile failure is never silently timed as NPU work) |

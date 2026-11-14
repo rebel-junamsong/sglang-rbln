@@ -15,7 +15,7 @@ from sglang.multimodal_gen.runtime.platforms import PlatformEnum
 import sglang_rbln
 from sglang_rbln import device
 from sglang_rbln import platform as platform_module
-from sglang_rbln.platform import OFFLOAD_FLAGS, RUNS_ON_DEVICE, RBLNPlatform
+from sglang_rbln.platform import OFFLOAD_FLAGS, RBLNPlatform, runs_on_device
 
 NPU_FAMILIES = ("RBLN-CA22", "RBLN-CA25", "RBLN-CR13")
 
@@ -96,7 +96,7 @@ class TestExecutionMode:
         assert platform.device_name == "rbln"
         assert platform.is_out_of_tree()
         assert platform.get_dispatch_key_name() == "rbln"
-        if RUNS_ON_DEVICE:
+        if runs_on_device():
             assert platform.execution_mode == "resident"
             assert (platform.device_type, platform.dispatch_key) == (
                 "rbln",
@@ -160,7 +160,7 @@ class TestDeviceQueries:
     def test_communicator_follows_the_mode(
         self, monkeypatch, runs_on_device, communicator
     ):
-        monkeypatch.setattr(platform_module, "RUNS_ON_DEVICE", runs_on_device)
+        monkeypatch.setattr(platform_module, "runs_on_device", lambda: runs_on_device)
         resolved = resolve_name(RBLNPlatform.get_device_communicator_cls())
         assert resolved.__name__ == communicator
 
@@ -262,8 +262,8 @@ class TestServerArgDefaults:
     def test_regions_on_device_tensors_turn_autocast_off(
         self, server_args, monkeypatch, resident, on_device, explicit, expected
     ):
-        monkeypatch.setattr(platform_module, "RESIDENT_REGIONS", resident)
-        monkeypatch.setattr(platform_module, "RUNS_ON_DEVICE", on_device)
+        monkeypatch.setattr(platform_module, "resident_regions", lambda: resident)
+        monkeypatch.setattr(platform_module, "runs_on_device", lambda: on_device)
         if explicit:
             server_args.explicit_args = {"disable_autocast"}
         RBLNPlatform().apply_server_args_defaults(server_args)
@@ -288,7 +288,7 @@ class TestServerArgDefaults:
     ids=["default", "explicit"],
 )
 def test_device_mode_forbids_silent_compile_fallback(monkeypatch, preset, expected):
-    monkeypatch.setattr(platform_module, "RUNS_ON_DEVICE", True)
+    monkeypatch.setattr(platform_module, "runs_on_device", lambda: True)
     monkeypatch.setitem(sys.modules, "torch_rbln", ModuleType("torch_rbln"))
     monkeypatch.delenv(platform_module.TORCH_RBLN_FALLBACK_ENV, raising=False)
     if preset is not None:
@@ -306,7 +306,7 @@ def test_a_compile_only_device_run_takes_the_dummy_device(
     monkeypatch, compile_only, preset, expected
 ):
     """It compiles on device tensors as a device run does, with no NPU to open."""
-    monkeypatch.setattr(platform_module, "RUNS_ON_DEVICE", True)
+    monkeypatch.setattr(platform_module, "runs_on_device", lambda: True)
     monkeypatch.setitem(sys.modules, "torch_rbln", ModuleType("torch_rbln"))
     monkeypatch.setenv("SGLANG_RBLN_COMPILE_ONLY", compile_only)
     monkeypatch.delenv(platform_module.DUMMY_DEVICE_ENV, raising=False)
@@ -322,3 +322,80 @@ def test_amp_query_traces_without_a_graph_break():
         lambda x: x + 1 if RBLNPlatform.is_amp_supported() else x
     )(torch.ones(1))
     assert explained.graph_break_count == 0
+
+
+class TestTensorParallelDegree:
+    """`sglang serve --tp-size N` splits each model over N NPUs, as upstream's flag
+    does on GPUs; the compiler shards the graphs, so one worker drives them."""
+
+    @pytest.fixture
+    def server_args(self, monkeypatch) -> _ServerArgs:
+        # set, not deleted, so the test's own writes are undone with it
+        monkeypatch.setenv(platform_module.NUM_DEVICES_ENV, "")
+        return _ServerArgs(tp_size=None, num_gpus=1, explicit_args=set())
+
+    @pytest.mark.parametrize(
+        ("explicit", "expected"),
+        [
+            ({"tp_size": 4}, "4"),
+            ({"num_gpus": 4}, "4"),
+            ({"tp_size": 4, "num_gpus": 8}, "4"),
+            ({"tp_size": 1}, None),
+            ({}, None),
+        ],
+        ids=["tp-size", "num-gpus", "tp-size-first", "one", "unset"],
+    )
+    def test_the_degree_becomes_the_npus_per_model(
+        self, monkeypatch, server_args, explicit, expected
+    ):
+        for flag, value in explicit.items():
+            setattr(server_args, flag, value)
+        server_args.explicit_args = set(explicit)
+        platform_module.take_tensor_parallel_degree(server_args)
+        assert (os.environ[platform_module.NUM_DEVICES_ENV] or None) == expected
+        if expected is not None:
+            assert (server_args.tp_size, server_args.num_gpus) == (1, 1)
+
+    def test_an_agreeing_environment_is_kept(self, monkeypatch, server_args):
+        monkeypatch.setenv(platform_module.NUM_DEVICES_ENV, "4")
+        server_args.tp_size, server_args.explicit_args = 4, {"tp_size"}
+        platform_module.take_tensor_parallel_degree(server_args)
+        assert os.environ[platform_module.NUM_DEVICES_ENV] == "4"
+
+    def test_a_contradicting_environment_fails(self, monkeypatch, server_args):
+        monkeypatch.setenv(platform_module.NUM_DEVICES_ENV, "2")
+        server_args.tp_size, server_args.explicit_args = 4, {"tp_size"}
+        with pytest.raises(ValueError, match="contradicts"):
+            platform_module.take_tensor_parallel_degree(server_args)
+
+    def test_the_platform_device_follows_the_degree(self, monkeypatch, server_args):
+        # Imported before the arguments are parsed: the device must not be fixed then.
+        monkeypatch.setattr(
+            platform_module, "EXECUTION_MODE", device.ExecutionMode.RESIDENT
+        )
+        monkeypatch.setenv("SGLANG_RBLN_EXECUTION_MODE", "resident")
+        platform = RBLNPlatform()
+        assert platform.device_type == "rbln"
+        server_args.tp_size, server_args.explicit_args = 4, {"tp_size"}
+        platform_module.take_tensor_parallel_degree(server_args)
+        assert (platform.device_type, platform.dispatch_key) == ("cpu", "CPU")
+
+    def test_turning_resident_regions_on_registers_their_hooks(
+        self, monkeypatch, server_args
+    ):
+        from sglang_rbln import patches
+
+        calls = []
+        monkeypatch.setattr(patches, "register_resident", lambda **k: calls.append(k))
+        monkeypatch.setenv("SGLANG_RBLN_EXECUTION_MODE", "resident")
+        server_args.__dict__.update(
+            enable_torch_compile=True,
+            regional_compile=True,
+            component_precisions={},
+            disable_autocast=False,
+            tp_size=4,
+            explicit_args={"tp_size"},
+            **dict.fromkeys(OFFLOAD_FLAGS),
+        )
+        RBLNPlatform().apply_server_args_defaults(server_args)
+        assert calls == [{"apply": True}]

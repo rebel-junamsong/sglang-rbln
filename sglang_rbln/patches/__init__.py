@@ -25,7 +25,7 @@ from sglang_rbln.patches.stages.ltx_2 import (
 )
 from sglang_rbln.patches.torch_rbln import ops_utils
 
-__all__ = ["register"]
+__all__ = ["register", "register_resident"]
 
 
 def register() -> None:
@@ -57,7 +57,26 @@ def register() -> None:
     if envs.SGLANG_RBLN_LOG_TIMELINE:
         timeline.register()
     if device.resident_regions():
-        residency.register()
-        ltx_2_text_features.register()
-        upsampling.register_resident()
-        ltx_2.register_resident()
+        register_resident()
+
+
+_resident_registered = False
+
+
+def register_resident(apply: bool = False) -> bool:
+    """Register the hooks of resident regions. The platform calls it with `apply`
+    once the server arguments turn them on (`--tp-size`) in a process whose
+    plugins registered, and had their hooks applied, without them."""
+    global _resident_registered
+    if _resident_registered:
+        return False
+    residency.register()
+    ltx_2_text_features.register()
+    upsampling.register_resident()
+    ltx_2.register_resident()
+    _resident_registered = True
+    if apply:
+        from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry
+
+        HookRegistry.apply_hooks()  # patches only the targets not patched yet
+    return True

@@ -15,10 +15,7 @@ from sglang_rbln.compilation import backend as compilation
 from sglang_rbln.compilation import residency
 
 EXECUTION_MODE = device.execution_mode()
-RESIDENT_REGIONS = device.resident_regions()
-RUNS_ON_DEVICE = (
-    EXECUTION_MODE is device.ExecutionMode.RESIDENT and not RESIDENT_REGIONS
-)
+NUM_DEVICES_ENV = "SGLANG_RBLN_NUM_DEVICES"
 TORCH_RBLN_FALLBACK_ENV = "TORCH_RBLN_DISABLE_FALLBACK"
 TORCH_RBLN_FALLBACK_DEFAULT = "compile_error"
 # A compile-only run builds the artifacts a device run loads, so it compiles on device
@@ -34,21 +31,67 @@ OFFLOAD_FLAGS = (
 compilation.ensure_compile_backend()
 
 
+# Resolved on each use, not at import: the platform is imported before the server
+# arguments are parsed, and `--tp-size` sets the NPUs per model (see
+# `take_tensor_parallel_degree`).
+def resident_regions() -> bool:
+    return device.resident_regions()
+
+
+def runs_on_device() -> bool:
+    return EXECUTION_MODE is device.ExecutionMode.RESIDENT and not resident_regions()
+
+
+def take_tensor_parallel_degree(server_args) -> None:
+    """Split each model over the NPUs `--tp-size` (else `--num-gpus`) asks for.
+
+    The compiler shards a graph over its NPUs, so one worker process drives them:
+    the degree becomes `SGLANG_RBLN_NUM_DEVICES`, which the spawned workers inherit,
+    and upstream's own degree goes back to 1.
+    """
+    degree = next(
+        (
+            value
+            for flag in ("tp_size", "num_gpus")
+            if server_args.is_arg_explicitly_set(flag)
+            and (value := getattr(server_args, flag) or 1) > 1
+        ),
+        None,
+    )
+    if degree is None:
+        return
+    declared = envs.SGLANG_RBLN_NUM_DEVICES
+    if declared not in (None, degree):
+        raise ValueError(
+            f"SGLANG_RBLN_NUM_DEVICES={declared} contradicts the requested "
+            f"tensor-parallel degree {degree}"
+        )
+    os.environ[NUM_DEVICES_ENV] = str(degree)
+    server_args.tp_size = 1
+    server_args.num_gpus = 1
+
+
 class RBLNPlatform(Platform):
     _enum = PlatformEnum.OOT
     device_name = "rbln"
-    device_type = "rbln" if RUNS_ON_DEVICE else "cpu"
-    dispatch_key = "PrivateUse1" if RUNS_ON_DEVICE else "CPU"
     execution_mode = EXECUTION_MODE
     simple_compile_backend = compilation.COMPILE_BACKEND_NAME
 
+    @property
+    def device_type(self) -> str:
+        return "rbln" if runs_on_device() else "cpu"
+
+    @property
+    def dispatch_key(self) -> str:
+        return "PrivateUse1" if runs_on_device() else "CPU"
+
     def init_backend(self) -> None:
-        if not (RUNS_ON_DEVICE or RESIDENT_REGIONS):
+        if not (runs_on_device() or resident_regions()):
             return
         os.environ.setdefault(TORCH_RBLN_FALLBACK_ENV, TORCH_RBLN_FALLBACK_DEFAULT)
         if envs.SGLANG_RBLN_COMPILE_ONLY:
             os.environ.setdefault(DUMMY_DEVICE_ENV, "1")
-        if RESIDENT_REGIONS:
+        if resident_regions():
             residency.configure_device_group()
             return
         try:
@@ -60,12 +103,18 @@ class RBLNPlatform(Platform):
             ) from e
 
     def apply_server_args_defaults(self, server_args) -> None:
+        resident_before = resident_regions()
+        take_tensor_parallel_degree(server_args)
+        if resident_regions() and not resident_before:
+            from sglang_rbln import patches
+
+            patches.register_resident(apply=True)
         if not server_args.is_arg_explicitly_set("enable_torch_compile"):
             server_args.enable_torch_compile = True
         if not server_args.is_arg_explicitly_set("regional_compile"):
             server_args.regional_compile = True
         if (
-            RESIDENT_REGIONS or RUNS_ON_DEVICE
+            resident_regions() or runs_on_device()
         ) and not server_args.is_arg_explicitly_set("disable_autocast"):
             # Autocast does not reach the ops of a region compiled on rbln tensors (a
             # bf16 VAE fed fp32 latents fails to trace); upstream's own casts to the
@@ -85,25 +134,25 @@ class RBLNPlatform(Platform):
         return compilation.compile_options(module)
 
     def is_cpu(self) -> bool:
-        return not RUNS_ON_DEVICE
+        return not runs_on_device()
 
     def get_dispatch_key_name(self) -> str:
         return "rbln"
 
     @classmethod
     def get_local_torch_device(cls) -> torch.device:
-        if RUNS_ON_DEVICE:
+        if runs_on_device():
             return torch.device("rbln", sglang_envs.LOCAL_RANK)
         return torch.device("cpu")
 
     def get_device(self, local_rank: int) -> torch.device:
-        if RUNS_ON_DEVICE:
+        if runs_on_device():
             return torch.device("rbln", local_rank)
         return torch.device("cpu")
 
     @classmethod
     def set_device(cls, torch_device: torch.device) -> None:
-        if RUNS_ON_DEVICE:
+        if runs_on_device():
             torch.rbln.set_device(torch_device)
 
     @classmethod
@@ -123,7 +172,7 @@ class RBLNPlatform(Platform):
 
     @classmethod
     def is_float64_supported(cls) -> bool:
-        return not RUNS_ON_DEVICE
+        return not runs_on_device()
 
     @classmethod
     def is_async_output_supported(cls, enforce_eager: bool | None) -> bool:
@@ -159,7 +208,7 @@ class RBLNPlatform(Platform):
 
     @classmethod
     def get_device_communicator_cls(cls) -> str:
-        if RUNS_ON_DEVICE:
+        if runs_on_device():
             return super().get_device_communicator_cls()
         return CpuPlatform.get_device_communicator_cls()
 
@@ -175,6 +224,6 @@ def _device_index(torch_device) -> int:
 
 
 def _memory_info(device_id: int) -> device.MemoryInfo:
-    if RUNS_ON_DEVICE:
+    if runs_on_device():
         return device.npu_memory_info(device_id)
     return device.host_memory_info()
