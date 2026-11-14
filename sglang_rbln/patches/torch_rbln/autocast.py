@@ -74,6 +74,7 @@ FP32 = (
     "softplus",
     "layer_norm",
     "native_layer_norm",
+    "rms_norm",
     "group_norm",
     "frobenius_norm",
     "nuclear_norm",

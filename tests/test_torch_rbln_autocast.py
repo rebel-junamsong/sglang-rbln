@@ -46,6 +46,7 @@ def test_norms_and_softmax_run_in_float32(fake, features):
     with torch.autocast("rbln", torch.bfloat16):
         assert F.layer_norm(x, (features,), weight, weight).dtype == torch.float32
         assert F.group_norm(x.transpose(1, 2), 4).dtype == torch.float32
+        assert F.rms_norm(x, (features,), weight).dtype == torch.float32
         assert torch.softmax(x, -1).dtype == torch.float32
         assert torch.softmax(x, -1, dtype=torch.bfloat16).dtype == torch.bfloat16
 
