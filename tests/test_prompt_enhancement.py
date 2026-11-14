@@ -356,7 +356,6 @@ def test_the_step_is_placed_where_the_decoder_is(monkeypatch, tiny_enhancer):
     which is the DiT's set rather than the enhancer's."""
     from sglang_rbln.compilation import placement
 
-    monkeypatch.setenv("SGLANG_RBLN_PROMPT_ENHANCER_WHOLE_GRAPH", "1")
     monkeypatch.setenv("SGLANG_RBLN_COMPONENT_DEVICES", "prompt_enhancer=4,5,6,7")
     monkeypatch.setattr(
         "sglang_rbln.compilation.backend.static_compile_kwargs", lambda module: {}
@@ -367,7 +366,7 @@ def test_the_step_is_placed_where_the_decoder_is(monkeypatch, tiny_enhancer):
     monkeypatch.setitem(
         __import__("sys").modules,
         "sglang_rbln.patches.stages.text_encoding",
-        SimpleNamespace(compile_regions=lambda m: 1, traceable=lambda m: m),
+        SimpleNamespace(traceable=lambda m: m),
     )
     monkeypatch.setattr(
         tiny_enhancer,
@@ -379,42 +378,6 @@ def test_the_step_is_placed_where_the_decoder_is(monkeypatch, tiny_enhancer):
     enhancer._compile()
 
     assert placement.devices_of(enhancer.step) == (4, 5, 6, 7)
-
-
-def test_the_whole_graph_flag_picks_which_compile_runs(monkeypatch):
-    calls = []
-    monkeypatch.setattr(
-        prompt_enhancement,
-        "WholeGraph",
-        lambda decoder: calls.append("whole") or decoder,
-    )
-    monkeypatch.setitem(
-        __import__("sys").modules,
-        "sglang_rbln.patches.stages.text_encoding",
-        SimpleNamespace(
-            compile_regions=lambda module: calls.append("regions") or 3,
-            traceable=lambda module: module,
-        ),
-    )
-    monkeypatch.setattr(
-        "sglang_rbln.compilation.backend.static_compile_kwargs", lambda module: {}
-    )
-
-    class Stub(torch.nn.Module):  # placement keys modules weakly, so not a namespace
-        def compile(self, **kwargs):
-            pass
-
-    decoder, head = Stub(), Stub()
-    model = SimpleNamespace(
-        get_decoder=lambda: decoder, get_output_embeddings=lambda: head
-    )
-
-    # the whole graph is the default now, so only "0" picks the per-layer path
-    for flag, expected in (("0", "regions"), ("1", "whole")):
-        calls.clear()
-        monkeypatch.setenv("SGLANG_RBLN_PROMPT_ENHANCER_WHOLE_GRAPH", flag)
-        bare_enhancer(model=model, step=decoder)._compile()
-        assert calls == [expected], flag
 
 
 @pytest.fixture

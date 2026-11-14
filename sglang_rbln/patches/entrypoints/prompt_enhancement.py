@@ -6,9 +6,8 @@ its rewrite model as a ``prompt_enhancer/`` component (LTX-2.5: a Gemma-4 instru
 model) gets no rewrite at all. With ``SGLANG_RBLN_PROMPT_ENHANCER=1`` and no endpoint
 configured, the request runs that component here, compiled on
 ``SGLANG_RBLN_COMPONENT_DEVICES["prompt_enhancer"]`` and decoding greedily against a
-static KV cache. ``..._WHOLE_GRAPH=1`` compiles the decoder's own forward from the
-token ids rather than its layers region by region, putting embeddings, masks and
-rotary on the device too.
+static KV cache. The decoder's own forward compiles whole from the token ids, putting
+embeddings, masks and rotary on the device too.
 
 The chat turn follows upstream's enhancer unless ``..._SYSTEM_PROMPT`` (a file),
 ``..._USER_TEMPLATE``, ``..._MAX_NEW_TOKENS`` or ``..._NO_REPEAT_NGRAM`` say otherwise;
@@ -251,24 +250,20 @@ class ModelPromptEnhancer:
     def _compile(self) -> None:
         from sglang_rbln.compilation import placement
         from sglang_rbln.compilation.backend import static_compile_kwargs
-        from sglang_rbln.patches.stages.text_encoding import compile_regions, traceable
+        from sglang_rbln.patches.stages.text_encoding import traceable
 
         if devices := envs.SGLANG_RBLN_COMPONENT_DEVICES.get(COMPONENT):
             placement.place(self.model, devices)
         decoder = self.model.get_decoder()
-        if envs.SGLANG_RBLN_PROMPT_ENHANCER_WHOLE_GRAPH:
-            self.step = WholeGraph(decoder)
-            # a new module, so it carries no placement of its own and would resolve to
-            # logical device 0 -- the DiT's set -- rather than the enhancer's
-            if devices := placement.devices_of(decoder):
-                placement.place(self.step, devices)
-            self.step.compile(**static_compile_kwargs(decoder))
-            graphs = 1
-        else:
-            graphs = compile_regions(decoder)
+        self.step = WholeGraph(decoder)
+        # a new module, so it carries no placement of its own and would resolve to
+        # logical device 0 -- the DiT's set -- rather than the enhancer's
+        if devices := placement.devices_of(decoder):
+            placement.place(self.step, devices)
+        self.step.compile(**static_compile_kwargs(decoder))
         head = traceable(self.model.get_output_embeddings())
         head.compile(**static_compile_kwargs(head))
-        logger.info("Compiling the prompt enhancer as %d graphs and its head", graphs)
+        logger.info("Compiling the prompt enhancer's decoder and head")
 
     def user_turn(self, prompt: str, task: str) -> str:
         if template := envs.SGLANG_RBLN_PROMPT_ENHANCER_USER_TEMPLATE:
