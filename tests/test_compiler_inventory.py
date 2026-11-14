@@ -50,3 +50,45 @@ def test_installed_compiler_honours_enable_gqa(kv_heads):
 
     assert lowered.shape == tuple(expected.shape), COMPILER_FIX
     np.testing.assert_allclose(lowered, expected.numpy(), rtol=1e-4, atol=1e-5)
+
+
+EAGER_OP_ON_SECOND_SET = """
+import torch, torch_rbln
+weight = torch.ones(16, 8, dtype=torch.bfloat16).to("rbln:1")
+print((weight * torch.tensor(2.0, dtype=torch.bfloat16)).device)
+"""
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        f"{COMPILER_FIX}: rebel.core.torch_compile._create_runtime_with_weights "
+        "hands an eager op's logical device index to create_runtime, which expands "
+        "only device 0 to all of a multi-NPU device's NPUs"
+    ),
+)
+def test_an_eager_op_runs_on_a_second_multi_npu_logical_device():
+    """In resident TP mode the text encoder, connectors and audio graph sit on the
+    spare NPU set, logical device 1, and the eager ops between their regions run
+    there: Gemma's embedding scale failed every request with "The number of
+    devices provided (1) does not match the number of devices in the compiled
+    model (4)". Logical device 0 (the DiT's set) is unaffected."""
+    import subprocess
+    import sys
+
+    env = {
+        **__import__("os").environ,
+        "RBLN_DUMMY_DEVICE": "1",
+        "RBLN_DEVICE_MAP": "[0,1,2,3],[4,5,6,7]",
+        "TORCH_RBLN_DISABLE_FALLBACK": "all",
+    }
+    env.setdefault("RBLN_FORCE_NPU_NAME", "RBLN-CA22")
+    run = subprocess.run(
+        [sys.executable, "-c", EAGER_OP_ON_SECOND_SET],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert run.returncode == 0, run.stderr[-1500:]
+    assert run.stdout.strip().splitlines()[-1] == "rbln:1"
