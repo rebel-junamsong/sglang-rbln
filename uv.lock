@@ -2714,7 +2714,7 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8" },
-    { name = "rebel-compiler", specifier = ">=0.12.0", index = "https://pypi.rebellions.in/simple" },
+    { name = "rebel-compiler", specifier = ">=0.12.1.dev1111", index = "https://pypi.rebellions.in/simple" },
     { name = "requests", marker = "extra == 'test'" },
     { name = "sglang", extras = ["diffusion"], specifier = "==0.5.21" },
     { name = "torch-rbln", index = "https://pypi.rebellions.in/simple" },

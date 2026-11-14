@@ -181,10 +181,9 @@ def check_fits(compiled_model: Any, device: Any = None) -> None:
             for node, size in enumerate(sizes):
                 needed[node] += max(0, size - pool[node])
     # Loading a graph evicts the programs of graphs not running now; they reload on
-    # their next run. Wheels before the query count none.
-    evictable = getattr(rebel, "get_evictable_memory", lambda index: 0)
+    # their next run.
     free = [
-        info.free - info.granularity + evictable(index)
+        info.free - info.granularity + rebel.get_evictable_memory(index)
         for index, info in zip(
             nodes, map(rebel.get_device_memory_info, nodes), strict=True
         )

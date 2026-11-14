@@ -344,6 +344,7 @@ def device_memory(monkeypatch):
         return SimpleNamespace(free=free["bytes"], granularity=BLOCK_BYTES // 10)
 
     monkeypatch.setattr(rebel, "get_device_memory_info", get_device_memory_info)
+    monkeypatch.setattr(rebel, "get_evictable_memory", lambda index: 0)
     return free, queried
 
 
@@ -733,15 +734,13 @@ def test_idle_graphs_programs_make_room_once_evictable(device_memory, monkeypatc
     free, _ = device_memory
     free["bytes"] = 2 * BLOCK_BYTES + BLOCK_BYTES // 10
     region = SimpleNamespace(get_alloc_per_node=lambda: [5 * BLOCK_BYTES])
-    monkeypatch.delattr(rebel, "get_evictable_memory", raising=False)
-    with pytest.raises(regions.RegionDoesNotFit):  # a wheel without the query
+    with pytest.raises(regions.RegionDoesNotFit):  # nothing evictable
         regions.check_fits(region, 0)
     asked = []
     monkeypatch.setattr(
         rebel,
         "get_evictable_memory",
         lambda index: asked.append(index) or 3 * BLOCK_BYTES,
-        raising=False,
     )
     regions.check_fits(region, 0)
     assert asked == [0]
