@@ -3,15 +3,12 @@
 ## Set up
 
 ```bash
-uv venv --python 3.11 && source .venv/bin/activate
-uv pip install --index-strategy unsafe-best-match \
-  --extra-index-url https://download.pytorch.org/whl/cpu \
-  --extra-index-url https://pypi.rbln.ai/simple -e '.[test]'
-uv pip install flashinfer-python==0.7.1
+uv sync --frozen --extra test && source .venv/bin/activate
 pre-commit install
 ```
 
-Add the `device` extra to run the `device` execution-mode tests.
+The committed `uv.lock` pins the `rebel-compiler` and `torch-rbln` builds the
+results are measured with (see the README's Install section).
 
 ## Check
 
@@ -22,8 +19,8 @@ pytest -m e2e
 ```
 
 On a host without an NPU, set `RBLN_FORCE_NPU_NAME` to the NPU the compiler
-should target. Tests marked `npu` or `device_mode` are strict `xfail` where the
-host has no NPU or the execution mode is `host`, and run for real otherwise.
+should target. Tests marked `npu` or `resident_mode` are strict `xfail` where the
+host has no NPU or the execution mode is `staged`, and run for real otherwise.
 
 ## Rules
 
