@@ -6,7 +6,7 @@ from sglang_rbln import device, envs
 from sglang_rbln.compilation import placement, regions, residency, timeline
 from sglang_rbln.patches import ffmpeg_spawn
 from sglang_rbln.patches.configs import arch_config
-from sglang_rbln.patches.entrypoints import prompt_enhancement
+from sglang_rbln.patches.entrypoints import frames, prompt_enhancement
 from sglang_rbln.patches.layers import layernorm
 from sglang_rbln.patches.layers.attention import video_sparse_attn
 from sglang_rbln.patches.managers import gpu_worker
@@ -51,6 +51,7 @@ def register() -> None:
     gpu_worker.register()
     prompt_enhancement.register()
     ffmpeg_spawn.register()
+    frames.register()
     if device.torch_rbln_available():
         ops_utils.register()
         precision.register()
