@@ -16,7 +16,7 @@ constraints = [
     { name = "datasets", specifier = "==5.1.0" },
     { name = "diffusers", specifier = "==0.37.0" },
     { name = "numpy", specifier = "==2.3.5" },
-    { name = "rebel-compiler", specifier = "==0.12.1.dev1103+g6e13316e", index = "https://pypi.rebellions.in/simple" },
+    { name = "rebel-compiler", specifier = "==0.12.1.dev1108+gd08fd205", index = "https://pypi.rebellions.in/simple" },
     { name = "scipy", specifier = "==1.17.1" },
     { name = "torch", specifier = "==2.13.0+cpu", index = "https://download.pytorch.org/whl/cpu" },
     { name = "torch-rbln", specifier = "==0.12.1a1", index = "https://pypi.rebellions.in/simple" },
@@ -2326,7 +2326,7 @@ wheels = [
 
 [[package]]
 name = "rebel-compiler"
-version = "0.12.1.dev1103+g6e13316e"
+version = "0.12.1.dev1108+gd08fd205"
 source = { registry = "https://pypi.rebellions.in/simple" }
 dependencies = [
     { name = "attrs" },
@@ -2344,7 +2344,7 @@ dependencies = [
     { name = "typing-extensions" },
 ]
 wheels = [
-    { url = "https://pypi.rebellions.in/api/package/rebel-compiler/rebel_compiler-0.12.1.dev1103+g6e13316e-cp312-cp312-manylinux_2_34_x86_64.whl", hash = "sha256:121697b8de540a107a0e041557a26352220dcb2f3ce00cccf90c6a204093412a" },
+    { url = "https://pypi.rebellions.in/api/package/rebel-compiler/rebel_compiler-0.12.1.dev1108+gd08fd205-cp312-cp312-manylinux_2_34_x86_64.whl", hash = "sha256:367785359c4ff4c5807c6a72cb2330b53f31e42076bccea7e4414862924c3309" },
 ]
 
 [[package]]

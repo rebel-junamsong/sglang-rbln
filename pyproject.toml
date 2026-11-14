@@ -44,7 +44,7 @@ rbln_patches = "sglang_rbln.patches:register"
 # the PR was measured on. Bump these pins together with the result they produced.
 [tool.uv]
 constraint-dependencies = [
-    "rebel-compiler==0.12.1.dev1103+g6e13316e",
+    "rebel-compiler==0.12.1.dev1108+gd08fd205",
     "torch-rbln==0.12.1a1",
     "torch==2.13.0+cpu",
     "torchvision==0.28.0+cpu",
