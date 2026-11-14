@@ -25,10 +25,6 @@ HOOK_TARGET = (
     "sglang.multimodal_gen.runtime.pipelines_core.stages.model_specific_stages"
     ".ltx_2.decoding_av.LTX2AVDecodingStage.forward"
 )
-DIFFUSION_DECODE_TARGET = (
-    "sglang.multimodal_gen.runtime.pipelines_core.stages.model_specific_stages"
-    ".ltx_2.decoding_av.LTX2AVDecodingStage._decode_with_diffusion_decoder"
-)
 DECODE_TARGET = (
     "sglang.multimodal_gen.runtime.models.vaes.ltx_2_vae.AutoencoderKLLTX2Video.decode"
 )
@@ -191,21 +187,7 @@ def release_cached_device_memory() -> None:
         torch.rbln.empty_cache()
 
 
-def decode_in_decoder_dtype(decode, stage, decoder, latents, batch, server_args):
-    """Hand a compiled diffusion decoder its latents in its own dtype.
-
-    Upstream casts them only with autocast off and otherwise leaves the cast to
-    autocast, which does not reach the ops of a compiled graph.
-    """
-    if getattr(decoder, COMPILED, False):
-        latents = latents.to(next(decoder.parameters()).dtype)
-    return decode(stage, decoder, latents, batch, server_args)
-
-
 def register() -> tuple[str, ...]:
     HookRegistry.register(HOOK_TARGET, compile_decoders, HookType.AROUND)
     HookRegistry.register(DECODE_TARGET, decode_within_memory, HookType.AROUND)
-    HookRegistry.register(
-        DIFFUSION_DECODE_TARGET, decode_in_decoder_dtype, HookType.AROUND
-    )
-    return HOOK_TARGET, DECODE_TARGET, DIFFUSION_DECODE_TARGET
+    return HOOK_TARGET, DECODE_TARGET
