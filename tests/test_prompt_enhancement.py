@@ -98,6 +98,34 @@ def test_bf16_softcap_ties_break_as_generate(tiny_enhancer, prompt_tokens):
     assert tokens == expected
 
 
+@pytest.mark.parametrize("prompt_tokens", [20, 128, 130])
+def test_step_logits_match_one_shot_forward(tiny_enhancer, prompt_tokens):
+    """The static-cache decode is the model's own forward: in float32 every step's
+    logits are a one-shot forward's over the same tokens, up to reduction order."""
+    softcap = tiny_enhancer.config.get_text_config().final_logit_softcapping
+    head = tiny_enhancer.get_output_embeddings()
+    steps = []
+    record = head.register_forward_hook(
+        lambda module, args, out: steps.append(out[0, -1].float())
+    )
+    input_ids = torch.randint(
+        1, 500, (1, prompt_tokens), generator=torch.Generator().manual_seed(3)
+    )
+    try:
+        tokens = prompt_enhancement.greedy_decode(
+            tiny_enhancer, input_ids, max_new_tokens=8
+        )
+    finally:
+        record.remove()
+    sequence = torch.cat([input_ids[0], torch.tensor(tokens)])
+    with torch.inference_mode():
+        for step, logits in enumerate(steps[: len(tokens)]):
+            prefix = sequence[: prompt_tokens + step][None]
+            expected = tiny_enhancer(input_ids=prefix).logits[0, -1].float()
+            capped = torch.tanh(logits / softcap) * softcap
+            torch.testing.assert_close(capped, expected, rtol=0, atol=1e-4)
+
+
 def test_kv_shared_layers_get_no_cache_of_their_own(tiny_enhancer):
     cache = prompt_enhancement.window_cache(tiny_enhancer, window=256)
     assert len(cache.layers) == 4
