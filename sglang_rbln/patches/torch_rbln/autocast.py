@@ -4,9 +4,10 @@
 torch-rbln declares no AMP dtype, so ``torch.autocast("rbln")`` disables itself, and
 registers no kernel at ``AutocastPrivateUse1``, so every op would fall through and a
 bf16 module fed float32 inputs fails at its first conv or linear. These kernels cast as
-``aten/src/ATen/autocast_mode.cpp`` does for CUDA: the lower-precision ops run in the
-autocast dtype, the float32 ops in float32, and the promote ops in the widest
-input dtype.
+``aten/src/ATen/autocast_mode.cpp`` does for CUDA, on exactly the overloads the
+installed torch registers for CUDA: the lower-precision ops run in the autocast dtype,
+the float32 ops in float32, the promote ops in the widest input dtype, and the ops
+CUDA bans raise.
 """
 
 from __future__ import annotations
@@ -123,6 +124,12 @@ FP32_SET_OPT_DTYPE = (
     "linalg_matrix_norm",
     "sum",
 )
+FP32_APPEND_DTYPE = {
+    "norm.Scalar": "norm.ScalarOpt_dtype",
+    "norm.ScalarOpt_dim": "norm.ScalarOpt_dim_dtype",
+}
+BANNED = ("binary_cross_entropy",)
+CUDA_ONLY = ("cudnn_convolution", "cudnn_convolution_transpose")
 PROMOTE = (
     "addcdiv",
     "addcmul",
@@ -194,13 +201,43 @@ def _promote(op, *args, **kwargs):
     return _without_autocast(op, *_cast(dtype, args, kwargs))
 
 
-def _overloads(name: str):
+def _fp32_append_dtype(op, target, *args, **kwargs):
+    leaves, _ = tree_flatten((args, kwargs))
+    if any(_eligible(leaf) for leaf in leaves):
+        return _without_autocast(target, args, {**kwargs, "dtype": torch.float32})
+    return _without_autocast(op, args, kwargs)
+
+
+def _banned(op, *args, **kwargs):
+    raise RuntimeError(
+        f"{op} is unsafe to autocast, as CUDA autocast has it: compute it outside "
+        "the autocast region or use its with_logits form."
+    )
+
+
+def cuda_autocast_overloads() -> set[str]:
+    """The aten overloads the installed torch gives a CUDA autocast kernel."""
+    return {
+        name.removeprefix("aten::")
+        for name in torch._C._dispatch_get_all_op_names()
+        if name.startswith("aten::")
+        and torch._C._dispatch_has_kernel_for_dispatch_key(name, "AutocastCUDA")
+    }
+
+
+def _overloads(name: str, covered: set[str]):
     packet = getattr(torch.ops.aten, name, None)
     if packet is None:
         return
     for overload in packet.overloads():
-        if "out" not in overload:
+        qualified = name if overload == "default" else f"{name}.{overload}"
+        if qualified in covered:
             yield getattr(packet, overload)
+
+
+def _overload(qualified: str):
+    name, _, overload = qualified.partition(".")
+    return getattr(getattr(torch.ops.aten, name), overload or "default")
 
 
 def register() -> list[str]:
@@ -212,15 +249,22 @@ def register() -> list[str]:
     fallthrough.fallback(torch.library.fallthrough_kernel, DISPATCH_KEY)
     library = torch.library.Library("aten", "IMPL")
     _libraries.extend((fallthrough, library))
+    covered = cuda_autocast_overloads()
     registered = []
     for names, policy in (
         (LOWER_PRECISION_FP, _lower_precision),
         (FP32, _fp32),
         (FP32_SET_OPT_DTYPE, _fp32_set_opt_dtype),
         (PROMOTE, _promote),
+        (BANNED, _banned),
     ):
         for name in names:
-            for op in _overloads(name):
+            for op in _overloads(name, covered):
                 library.impl(op, functools.partial(policy, op), DISPATCH_KEY)
                 registered.append(str(op))
+    for source, target in FP32_APPEND_DTYPE.items():
+        op = _overload(source)
+        append = functools.partial(_fp32_append_dtype, op, _overload(target))
+        library.impl(op, append, DISPATCH_KEY)
+        registered.append(str(op))
     return registered

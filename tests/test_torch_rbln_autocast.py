@@ -69,3 +69,30 @@ def test_leaves_host_tensors_to_cpu_autocast(fake):
     weight = torch.empty(8, 8, 3, 3, dtype=torch.bfloat16)
     with torch.autocast("rbln", torch.bfloat16), pytest.raises(RuntimeError):
         F.conv2d(x, weight)
+
+
+def test_covers_exactly_cuda_autocasts_overloads(fake):
+    rbln = {
+        name.removeprefix("aten::")
+        for name in torch._C._dispatch_get_all_op_names()
+        if name.startswith("aten::")
+        and torch._C._dispatch_has_kernel_for_dispatch_key(name, autocast.DISPATCH_KEY)
+    }
+    assert rbln == autocast.cuda_autocast_overloads() - set(autocast.CUDA_ONLY)
+
+
+@pytest.mark.parametrize("dim", [None, -1], ids=["all", "last"])
+def test_norms_reduce_in_float32(fake, dim):
+    x = fake(4, 32, dtype=torch.bfloat16)
+    with torch.autocast("rbln", torch.bfloat16):
+        norm = torch.norm(x) if dim is None else torch.norm(x, 2, dim)
+    assert norm.dtype == torch.float32
+
+
+def test_bans_what_cuda_autocast_bans(fake):
+    x = fake(4, dtype=torch.bfloat16)
+    with (
+        torch.autocast("rbln", torch.bfloat16),
+        pytest.raises(RuntimeError, match="unsafe to autocast"),
+    ):
+        F.binary_cross_entropy(x, x)
