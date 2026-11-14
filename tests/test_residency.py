@@ -117,6 +117,22 @@ def test_boundary_writes_into_a_host_buffer_on_the_host():
 
 
 @pytest.mark.resident_mode
+def test_a_fake_tensor_probe_leaves_the_upload_cache_alone(transfers):
+    # The audio chain finds its waveform length under FakeTensorMode before its
+    # first run, while its buffers are still on the host: the probe uploaded them
+    # and cached fake tensors, so the next real op on a buffer returned a fake.
+    from torch._subclasses.fake_tensor import FakeTensor, FakeTensorMode
+
+    buffer = torch.ones(8, dtype=torch.bfloat16)
+    resident = torch.randn(8, dtype=torch.bfloat16).to("rbln:0")
+    with residency.DeviceBoundary():
+        with FakeTensorMode(allow_non_fake_inputs=True) as fake:
+            fake.from_tensor(resident) * buffer
+        assert transfers == []
+        assert not isinstance(resident * buffer, FakeTensor)
+
+
+@pytest.mark.resident_mode
 def test_a_resident_call_moves_module_and_inputs_under_the_boundary():
     block = nn.Linear(4, 4)
     seen = []

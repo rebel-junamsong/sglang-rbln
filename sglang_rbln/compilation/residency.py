@@ -221,6 +221,10 @@ def _target_device(func, args, kwargs) -> torch.device | None:
     return next((leaf.device for leaf in leaves if _is_resident(leaf)), None)
 
 
+def _faking() -> bool:
+    return torch._C._get_dispatch_mode(torch._C._TorchDispatchModeKey.FAKE) is not None
+
+
 class DeviceBoundary(TorchFunctionMode):
     """Run an eager op that touches resident tensors where they live.
 
@@ -255,6 +259,8 @@ class DeviceBoundary(TorchFunctionMode):
                 return value
             if device.type == "cpu":
                 return value.cpu()
+            if _faking():  # a shape-only probe: caching would keep a fake for a real
+                return value.contiguous().to(device)
             return _transfers.to(value, device)
 
         args, kwargs = tree_map(move, (args, kwargs))
