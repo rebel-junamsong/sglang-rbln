@@ -1,18 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
 """Keep the LTX-2 text features on the NPUs between Gemma and the connectors.
 
-Upstream packs Gemma's 49 hidden states into one 188160-channel feature per token
-(`_gemma_postprocess_func`), rescales it for each modality (`_rescale_v2_features`), and
-replaces the padded tokens with learned registers in each connector transformer. All
-three run eagerly, so with resident regions each brought its device tensors to the
-host, and the ~385 MB feature was uploaded dense to the projections and laid out again
-on every call. Here each runs, unchanged, as a module compiled for the connectors' NPUs
-whenever its inputs live on the NPUs; on the host, upstream runs as it is.
+Upstream packs Gemma's hidden states (`_gemma_postprocess_func`) and rescales them
+(`_rescale_v2_features`) eagerly, on the device the hidden states live on. Its
+connector transformer replaces the padded tokens with learned registers, which with
+resident regions brought the hidden states to the host; here that step runs as a
+module compiled for the connectors' NPUs, and the packed features are returned on
+those NPUs rather than the platform device, the host.
 """
 
 from __future__ import annotations
-
-from types import SimpleNamespace
 
 import torch
 from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry, HookType
@@ -20,10 +17,7 @@ from torch import nn
 
 from sglang_rbln.compilation import placement, residency
 
-CONFIGS = "sglang.multimodal_gen.configs.pipeline_configs.ltx_2"
 CONNECTOR = "sglang.multimodal_gen.runtime.models.adapter.ltx_2_connector"
-POSTPROCESS = f"{CONFIGS}._gemma_postprocess_func"
-RESCALE = f"{CONNECTOR}.LTX2TextConnectors._rescale_v2_features"
 CONNECTOR_FORWARD = f"{CONNECTOR}.LTX2ConnectorTransformer1d.forward"
 ENCODE_TEXT = (
     "sglang.multimodal_gen.runtime.pipelines_core.stages.text_encoding."
@@ -42,34 +36,6 @@ def _connector_devices() -> tuple[int, ...] | None:
 
 def _signature(*tensors: torch.Tensor) -> tuple:
     return tuple((tuple(t.shape), t.dtype) for t in tensors)
-
-
-class PackTextFeatures(nn.Module):
-    """Upstream's packing of the text encoder's hidden states, as one graph."""
-
-    def __init__(self, postprocess, pipeline_config) -> None:
-        super().__init__()
-        self.postprocess = postprocess
-        self.pipeline_config = pipeline_config
-
-    def forward(self, attention_mask: torch.Tensor, *hidden_states: torch.Tensor):
-        return self.postprocess(
-            SimpleNamespace(hidden_states=hidden_states),
-            {"attention_mask": attention_mask},
-            self.pipeline_config,
-        )
-
-
-class Rescale(nn.Module):
-    """Upstream's per-modality rescale of the packed features."""
-
-    def __init__(self, rescale, target_dim: int, source_dim: int) -> None:
-        super().__init__()
-        self.rescale = rescale
-        self.dims = (target_dim, source_dim)
-
-    def forward(self, features: torch.Tensor) -> torch.Tensor:
-        return self.rescale(features, *self.dims)
 
 
 class RegisterStep(nn.Module):
@@ -109,34 +75,6 @@ class Normalize(nn.Module):
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         return self.norm(hidden_states)
-
-
-def gemma_postprocess(postprocess, outputs, text_inputs, pipeline_config=None):
-    hidden_states = getattr(outputs, "hidden_states", None)
-    if hidden_states is None:
-        return postprocess(outputs, text_inputs, pipeline_config)
-    mask = text_inputs["attention_mask"]
-    key = ("pack", id(pipeline_config), _signature(mask, *hidden_states))
-    module = residency.resident_module(
-        COMPILED,
-        key,
-        lambda: PackTextFeatures(postprocess, pipeline_config),
-        hidden_states,
-        _connector_devices(),
-    )
-    return module(mask, *hidden_states)
-
-
-def rescale_v2_features(rescale, x, target_dim, source_dim):
-    key = ("rescale", target_dim, source_dim, _signature(x))
-    module = residency.resident_module(
-        COMPILED,
-        key,
-        lambda: Rescale(rescale, target_dim, source_dim),
-        (x,),
-        _connector_devices(),
-    )
-    return module(x)
 
 
 def connector_forward(
@@ -230,8 +168,6 @@ def tensors_with_min_dims(validate, value, min_dims):
 
 
 TARGETS = {
-    POSTPROCESS: gemma_postprocess,
-    RESCALE: rescale_v2_features,
     CONNECTOR_FORWARD: connector_forward,
     ENCODE_TEXT: encode_text,
     VALIDATE: tensors_with_min_dims,
