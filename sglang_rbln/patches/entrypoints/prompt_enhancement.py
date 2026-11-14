@@ -42,36 +42,6 @@ COMPONENT = "prompt_enhancer"
 PREFILL_CHUNK = 128
 
 
-class WholeGraph(torch.nn.Module):
-    """The decoder's own forward, behind a boundary dtype the runtime can bind.
-
-    An attention mask's physical form is a one-byte mask, which pairs with bf16 and
-    dlf16 and with no integer dtype, so an integer mask fails the bind
-    (``IsDtypeConversionAvailable``). It crosses as bf16 and is cast back inside the
-    graph; the model keeps its own dtypes.
-    """
-
-    MASK_DTYPE = torch.bfloat16
-
-    def __init__(self, decoder: torch.nn.Module) -> None:
-        super().__init__()
-        self.decoder = decoder
-
-    def forward(self, input_ids, attention_mask, **kwargs):
-        return self.decoder(
-            input_ids=input_ids, attention_mask=attention_mask.to(torch.long), **kwargs
-        )
-
-
-def mask_dtype(step) -> torch.dtype:
-    """The dtype the mask crosses the boundary as: the step says, or long by default.
-
-    Read as an attribute rather than by type, so anything standing in for the step --
-    a wrapper that times or traces it -- answers for the module it wraps.
-    """
-    return getattr(step, "MASK_DTYPE", torch.long)
-
-
 def cache_device(step, model) -> torch.device:
     """Where the KV cache must live: the device the compiled step will run on.
 
@@ -162,7 +132,7 @@ def greedy_decode(
     Both shapes belong to the configuration, not the request -- fixed ``PREFILL_CHUNK``
     chunks against a cache of ``SGLANG_RBLN_PROMPT_ENHANCER_MAX_SEQ_LEN`` -- so prompts
     of every length run the same two graphs. ``step`` is the module they run, the
-    decoder unless a ``WholeGraph`` was compiled.
+    model's decoder by default.
 
     Everything the step takes is built on the model's device and the mask grows on a
     host copy, so a device run has no eager op of its own between steps.
@@ -179,7 +149,7 @@ def greedy_decode(
     cache = window_cache(model, window, device)
     ids = torch.zeros((1, padded), dtype=torch.long)
     ids[0, :prompt] = input_ids[0]
-    host_mask = torch.zeros((1, window), dtype=mask_dtype(step))
+    host_mask = torch.zeros((1, window), dtype=torch.long)
     host_mask[0, :prompt] = 1
     mask = host_mask.to(device)
     for start in range(0, padded, PREFILL_CHUNK):
@@ -255,13 +225,7 @@ class ModelPromptEnhancer:
 
         if devices := envs.SGLANG_RBLN_COMPONENT_DEVICES.get(COMPONENT):
             placement.place(self.model, devices)
-        decoder = self.model.get_decoder()
-        self.step = WholeGraph(decoder)
-        # a new module, so it carries no placement of its own and would resolve to
-        # logical device 0 -- the DiT's set -- rather than the enhancer's
-        if devices := placement.devices_of(decoder):
-            placement.place(self.step, devices)
-        self.step.compile(**static_compile_kwargs(decoder))
+        self.step.compile(**static_compile_kwargs(self.step))
         head = traceable(self.model.get_output_embeddings())
         head.compile(**static_compile_kwargs(head))
         logger.info("Compiling the prompt enhancer's decoder and head")

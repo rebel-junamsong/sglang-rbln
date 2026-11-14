@@ -167,44 +167,6 @@ def test_the_cache_write_compiles_to_one_device_function(tmp_path, dummy_device)
         assert host_ops == set(), (written, host_ops)
 
 
-def test_the_whole_graph_hands_the_model_an_integer_mask():
-    seen = {}
-
-    class Decoder(torch.nn.Module):
-        def forward(self, input_ids, attention_mask, **kwargs):
-            seen["dtype"] = attention_mask.dtype
-            return attention_mask.sum()
-
-    step = prompt_enhancement.WholeGraph(Decoder())
-    mask = torch.ones((1, 4), dtype=prompt_enhancement.WholeGraph.MASK_DTYPE)
-
-    assert (
-        step(input_ids=torch.zeros((1, 4), dtype=torch.long), attention_mask=mask) == 4
-    )
-    assert seen["dtype"] == torch.long
-    assert prompt_enhancement.mask_dtype(step) is torch.bfloat16
-    assert prompt_enhancement.mask_dtype(Decoder()) is torch.long
-
-
-def test_whole_graph_decode_matches_generate(tiny_enhancer):
-    # the boundary mask is bf16, so the step must cast it back before the model reads it
-    input_ids = torch.randint(
-        1, 500, (1, 20), generator=torch.Generator().manual_seed(1)
-    )
-    expected = tiny_enhancer.generate(input_ids, do_sample=False, max_new_tokens=16)[
-        0, 20:
-    ].tolist()
-
-    tokens = prompt_enhancement.greedy_decode(
-        tiny_enhancer,
-        input_ids,
-        max_new_tokens=16,
-        step=prompt_enhancement.WholeGraph(tiny_enhancer.get_decoder()),
-    )
-
-    assert tokens == expected
-
-
 def recorded_shapes(model, prompt_tokens: int, monkeypatch) -> set:
     """The shapes the step is called with for a prompt of `prompt_tokens`."""
     shapes = set()
@@ -324,7 +286,7 @@ def test_the_decode_step_compiles_to_one_device_function(
     import rebel
 
     window = 2 * prompt_enhancement.PREFILL_CHUNK
-    step = prompt_enhancement.WholeGraph(tiny_enhancer.get_decoder())
+    step = copy.deepcopy(tiny_enhancer.get_decoder())
     step.compile(
         backend="rbln",
         dynamic=False,
@@ -337,7 +299,7 @@ def test_the_decode_step_compiles_to_one_device_function(
     with torch.inference_mode():
         step(
             input_ids=torch.ones((1, 1), dtype=torch.long),
-            attention_mask=torch.ones((1, window), dtype=step.MASK_DTYPE),
+            attention_mask=torch.ones((1, window), dtype=torch.long),
             past_key_values=cache,
             use_cache=True,
             cache_position=torch.tensor([1]),
@@ -371,7 +333,7 @@ def test_the_cache_is_built_on_the_device_the_step_will_run_on(
     """
     from sglang_rbln.compilation import placement, residency
 
-    step = prompt_enhancement.WholeGraph(tiny_enhancer.get_decoder())
+    step = torch.nn.Linear(1, 1)
     assert prompt_enhancement.cache_device(step, tiny_enhancer).type == "cpu"
 
     placement.place(step, (4, 5, 6, 7))
@@ -387,32 +349,27 @@ def test_the_cache_is_built_on_the_device_the_step_will_run_on(
     assert {layer.keys.device.type for layer in cache.layers} == {"rbln"}
 
 
-def test_the_step_is_placed_where_the_decoder_is(monkeypatch, tiny_enhancer):
-    """The wrapper is a new module, so nothing has placed it; unplaced means device 0,
-    which is the DiT's set rather than the enhancer's."""
+def test_the_compiled_step_runs_where_the_enhancer_is_placed(
+    monkeypatch, tiny_enhancer
+):
     from sglang_rbln.compilation import placement
 
+    model = copy.deepcopy(tiny_enhancer)
     monkeypatch.setenv("SGLANG_RBLN_COMPONENT_DEVICES", "prompt_enhancer=4,5,6,7")
     monkeypatch.setattr(
         "sglang_rbln.compilation.backend.static_compile_kwargs", lambda module: {}
     )
-    monkeypatch.setattr(
-        prompt_enhancement.WholeGraph, "compile", lambda self, **k: None
-    )
+    monkeypatch.setattr(torch.nn.Module, "compile", lambda self, **k: None)
     monkeypatch.setitem(
         __import__("sys").modules,
         "sglang_rbln.patches.stages.text_encoding",
         SimpleNamespace(traceable=lambda m: m),
     )
-    monkeypatch.setattr(
-        tiny_enhancer,
-        "get_output_embeddings",
-        lambda: SimpleNamespace(compile=lambda **k: None),
-    )
-    enhancer = bare_enhancer(model=tiny_enhancer, step=tiny_enhancer.get_decoder())
+    enhancer = bare_enhancer(model=model, step=model.get_decoder())
 
     enhancer._compile()
 
+    assert enhancer.step is model.get_decoder()
     assert placement.devices_of(enhancer.step) == (4, 5, 6, 7)
 
 
