@@ -24,8 +24,9 @@ host has no NPU or the execution mode is `staged`, and run for real otherwise.
 
 ## Rules
 
-- No comments or docstrings in code; the README and the tests carry the
-  explanations.
+- Comments and docstrings state an invariant or why the code is the way it is
+  (the upstream behaviour it works around, the device limit it respects), not
+  a narrative of what the code does or how it got there.
 - Prefer a `Platform` seam or `CustomOp.register_oot_forward` over a hook.
   A hook works around exactly one upstream line and comes with a row in
   `tests/test_patch_inventory.py`, so a bump that removes the line fails the
