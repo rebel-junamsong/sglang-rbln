@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import contextlib
 import contextvars
 import copy
 import itertools
 import logging
 import math
 import pickle
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Sequence
 from typing import Any
 
 import torch
@@ -222,12 +221,10 @@ _installed = False
 
 
 def install_fit_check() -> bool:
-    """Check every runtime this process creates, whatever compiled it.
-
-    `checking_fit` only covers block regions, so a module compiled straight
-    through `Module.compile` -- the VAE coders, the vocoder, the duration head
-    -- reached the device unchecked and failed with a bare SYS_ENOMEM from the
-    runtime instead of a RegionDoesNotFit naming what it needed.
+    """Check every runtime this process creates, whatever compiled it: a block
+    region, or a module compiled straight through `Module.compile` (the VAE
+    coders, the vocoder, the duration head), which otherwise fails with a bare
+    SYS_ENOMEM from the runtime instead of a RegionDoesNotFit naming what it needed.
     """
     global _installed
     if _installed:
@@ -241,24 +238,6 @@ def install_fit_check() -> bool:
     )
     _installed = True
     return True
-
-
-@contextlib.contextmanager
-def checking_fit() -> Iterator[None]:
-    if _installed:
-        yield
-        return
-    try:
-        from rebel import RBLNCompiledModel
-    except ImportError:
-        yield
-        return
-    create_runtime = RBLNCompiledModel.create_runtime
-    RBLNCompiledModel.create_runtime = _checked_create_runtime(create_runtime)
-    try:
-        yield
-    finally:
-        RBLNCompiledModel.create_runtime = create_runtime
 
 
 # How the runtime reports a device allocation that did not fit. torch-rbln reports
@@ -377,8 +356,7 @@ class Region:
             return self.group(values, calls)
         created = runtimes_created
         try:
-            with checking_fit():
-                output = self.group(values, calls)
+            output = self.group(values, calls)
         except Exception as error:
             if not _does_not_fit(error):
                 raise

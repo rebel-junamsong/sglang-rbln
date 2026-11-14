@@ -603,8 +603,8 @@ def test_other_compile_errors_do_not_split(monkeypatch):
 def test_installed_check_covers_a_module_no_block_group_compiled(
     device_memory, monkeypatch
 ):
-    """A VAE coder or vocoder reaches the device through Module.compile, which
-    `checking_fit` never wrapped: it used to fail with a bare SYS_ENOMEM."""
+    """A VAE coder or vocoder reaches the device through Module.compile, outside
+    any block region: it used to fail with a bare SYS_ENOMEM."""
     import rebel
 
     free, _ = device_memory
@@ -627,15 +627,16 @@ def test_runtime_creation_checks_every_node_it_loads_on(device_memory):
 
     free, queried = device_memory
     free["bytes"] = 3 * BLOCK_BYTES
-    original = rebel.RBLNCompiledModel.create_runtime
+    create_runtime = regions._checked_create_runtime(
+        rebel.RBLNCompiledModel.create_runtime
+    )
     compiled = SimpleNamespace(
         get_alloc_per_node=lambda: [BLOCK_BYTES, 4 * BLOCK_BYTES]
     )
-    with regions.checking_fit(), pytest.raises(regions.RegionDoesNotFit) as error:
-        rebel.RBLNCompiledModel.create_runtime(compiled, device=2)
+    with pytest.raises(regions.RegionDoesNotFit) as error:
+        create_runtime(compiled, device=2)
     assert queried == [2, 3]
     assert error.value.needed == [BLOCK_BYTES, 4 * BLOCK_BYTES]
-    assert rebel.RBLNCompiledModel.create_runtime is original
 
 
 def test_a_region_runs_on_the_npus_of_its_blocks():
