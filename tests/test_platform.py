@@ -169,6 +169,7 @@ class TestServerArgDefaults:
         return _ServerArgs(
             enable_torch_compile=False,
             regional_compile=False,
+            offload_during_compile=True,
             component_precisions={},
             explicit_args=set(),
             disable_autocast=False,
@@ -185,6 +186,16 @@ class TestServerArgDefaults:
         server_args.explicit_args = {"enable_torch_compile"}
         RBLNPlatform().apply_server_args_defaults(server_args)
         assert server_args.enable_torch_compile is False
+
+    def test_the_compile_warmup_keeps_the_dit_resident(self, server_args):
+        RBLNPlatform().apply_server_args_defaults(server_args)
+        assert server_args.offload_during_compile is False
+
+    def test_warns_on_an_explicit_compile_warmup_offload(self, server_args, caplog):
+        server_args.explicit_args = {"offload_during_compile"}
+        RBLNPlatform().apply_server_args_defaults(server_args)
+        assert server_args.offload_during_compile is True
+        assert "off its NPU set" in caplog.text
 
     def test_runs_the_vocoder_in_fp32(self, server_args):
         RBLNPlatform().apply_server_args_defaults(server_args)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 
 import torch
@@ -11,6 +12,8 @@ from sglang.multimodal_gen.runtime.platforms.cpu import CpuPlatform
 from sglang_rbln import device, envs
 from sglang_rbln.compilation import backend as compilation
 from sglang_rbln.compilation import residency
+
+logger = logging.getLogger(__name__)
 
 NUM_DEVICES_ENV = "SGLANG_RBLN_NUM_DEVICES"
 TORCH_RBLN_FALLBACK_ENV = "TORCH_RBLN_DISABLE_FALLBACK"
@@ -72,6 +75,17 @@ class RBLNPlatform(CpuPlatform):
         take_tensor_parallel_degree(server_args)
         if not server_args.is_arg_explicitly_set("enable_torch_compile"):
             server_args.enable_torch_compile = True
+        # The server warmup would layerwise-offload the DiT for its compile.
+        # Upstream's offload manager targets `device_type`, the host here, so it
+        # moves the resident DiT's weights off its NPUs; nothing moves them back.
+        if not server_args.is_arg_explicitly_set("offload_during_compile"):
+            server_args.offload_during_compile = False
+        elif server_args.offload_during_compile:
+            logger.warning(
+                "--offload-during-compile moves the resident DiT's weights off "
+                "its NPU set to the host for the warmup compile; requests after "
+                "it fail with a device mismatch."
+            )
         # Upstream's LTX2VocoderWithBWE.forward opens its float32 autocast region
         # only off the CPU, so on the host its bf16 weights meet a float32 input.
         server_args.component_precisions.setdefault("vocoder", "fp32")
