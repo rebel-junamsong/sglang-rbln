@@ -440,18 +440,21 @@ class DeferredBlock:
 
 
 def _become(placeholder: torch.Tensor, value: torch.Tensor) -> None:
-    """Make the caller's placeholder the region's output, without a copy.
+    """Make the tensor the caller holds for a kept output hold the region's output.
 
-    When a split region's output is also the next region's input, dynamo's guards
-    hold a weakref to it and `swap_tensors` refuses it: the placeholder then takes a
-    fresh alias of its storage, with the output's attributes.
+    `swap_tensors` refuses a tensor anything references weakly, and either side can
+    be: the region's first call hands the caller block 0's eager output, which a
+    runtime that read it references; a split region's output is the next region's
+    input, which dynamo's guards reference. So a real tensor takes the output by an
+    in-place copy, and a meta placeholder takes the output itself, through a fresh
+    alias of its storage that nothing references yet.
     """
-    try:
-        torch.utils.swap_tensors(placeholder, value)
-    except RuntimeError:
-        alias = value.detach()
-        alias.__dict__.update(value.__dict__)
-        torch.utils.swap_tensors(placeholder, alias)
+    if placeholder.device.type != "meta":
+        placeholder.copy_(value)
+        return
+    alias = value.detach()
+    alias.__dict__.update(value.__dict__)
+    torch.utils.swap_tensors(placeholder, alias)
 
 
 def consecutive_runs(

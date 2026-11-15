@@ -13,6 +13,7 @@ import torch
 from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry
 from torch import nn
 
+from sglang_rbln.compilation import backend as compilation
 from sglang_rbln.compilation import placement, regions, residency, shapes
 
 pytestmark = pytest.mark.usefixtures("rbln_platform")
@@ -789,3 +790,39 @@ def test_a_watched_output_still_reaches_its_placeholder():
     assert placeholder.data_ptr() == value.data_ptr()
     assert torch.equal(placeholder, value)
     assert placeholder._rbln_producer_view == "view"
+
+
+@pytest.mark.parametrize("watched", ["held", "output", "both"])
+def test_a_watched_eager_output_takes_the_region_output(watched):
+    # The region's first call hands the caller block 0's eager output, which a
+    # runtime that read it watches weakly; the region's own output may be watched too.
+    held = torch.zeros(2, 3)
+    value = torch.arange(6.0).reshape(2, 3)
+    watchers = [
+        weakref.ref(tensor)
+        for name, tensor in (("held", held), ("output", value))
+        if watched in (name, "both")
+    ]
+    regions._become(held, value)
+    assert torch.equal(held, value)
+    assert held.data_ptr() != value.data_ptr()
+    assert all(watcher() is not None for watcher in watchers)
+
+
+def test_a_device_tensor_a_graph_read_takes_the_region_output(
+    dummy_device, monkeypatch, tmp_path
+):
+    """Block 0's eager output on the NPUs, read by a compiled graph since, and the
+    region's output, read by the next region's graph: the runtimes watch both."""
+    monkeypatch.setenv("SGLANG_RBLN_CACHE_DIR", str(tmp_path))
+    compilation.ensure_compile_backend()
+    reader = nn.Linear(64, 64).to(torch.bfloat16)
+    reader.compile(**compilation.static_compile_kwargs(reader))
+    held = torch.zeros(1, 16, 64, dtype=torch.bfloat16).to("rbln:0")
+    value = torch.zeros(1, 16, 64, dtype=torch.bfloat16).to("rbln:0")
+    with torch.no_grad():
+        reader(held)
+        reader(value)
+    assert weakref.getweakrefcount(held) and weakref.getweakrefcount(value)
+    regions._become(held, value)
+    assert (held.device.type, tuple(held.shape)) == ("rbln", (1, 16, 64))
