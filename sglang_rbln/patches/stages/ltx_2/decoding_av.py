@@ -9,7 +9,7 @@ import logging
 import torch
 from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry, HookType
 
-from sglang_rbln import device, envs
+from sglang_rbln import envs
 from sglang_rbln.compilation import placement, regions, tiling
 from sglang_rbln.compilation.backend import (
     device_set_context,
@@ -183,8 +183,7 @@ def release_cached_device_memory() -> None:
     setting the decoder's pool aside. The request after that loads them and grows
     the pool again. Released, every request places them as the first one did.
     """
-    if device.execution_mode() is device.ExecutionMode.RESIDENT:
-        torch.rbln.empty_cache()
+    torch.rbln.empty_cache()
 
 
 def register() -> tuple[str, ...]:

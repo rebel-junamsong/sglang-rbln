@@ -1,10 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 import builtins
 import os
-import sys
 from importlib.metadata import entry_points
 from pkgutil import resolve_name
-from types import ModuleType, SimpleNamespace
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -15,7 +14,7 @@ from sglang.multimodal_gen.runtime.platforms import PlatformEnum
 import sglang_rbln
 from sglang_rbln import device
 from sglang_rbln import platform as platform_module
-from sglang_rbln.platform import OFFLOAD_FLAGS, RBLNPlatform, runs_on_device
+from sglang_rbln.platform import RBLNPlatform
 
 NPU_FAMILIES = ("RBLN-CA22", "RBLN-CA25", "RBLN-CR13")
 
@@ -68,47 +67,21 @@ class TestActivate:
         assert sglang_rbln.activate() == sglang_rbln.PLATFORM_CLASS_PATH
 
 
-class TestExecutionMode:
-    @pytest.mark.parametrize("requested", ["staged", "resident"])
-    def test_explicit_mode_wins(self, monkeypatch, requested):
-        monkeypatch.setenv("SGLANG_RBLN_EXECUTION_MODE", requested)
-        assert device.execution_mode() == requested
-
-    @pytest.mark.parametrize(
-        ("torch_rbln_installed", "expected"),
-        [(False, device.ExecutionMode.STAGED), (True, device.ExecutionMode.RESIDENT)],
-        ids=["without-torch-rbln", "with-torch-rbln"],
-    )
-    def test_auto_follows_torch_rbln(self, monkeypatch, torch_rbln_installed, expected):
-        monkeypatch.delenv("SGLANG_RBLN_EXECUTION_MODE", raising=False)
-        monkeypatch.setattr(
-            device, "torch_rbln_available", lambda: torch_rbln_installed
-        )
-        assert device.execution_mode() is expected
-
-    def test_unknown_mode_is_rejected(self, monkeypatch):
-        monkeypatch.setenv("SGLANG_RBLN_EXECUTION_MODE", "npu")
-        with pytest.raises(ValueError, match="SGLANG_RBLN_EXECUTION_MODE"):
-            device.execution_mode()
-
-    def test_platform_identity_matches_mode(self):
-        platform = RBLNPlatform()
-        assert platform.device_name == "rbln"
-        assert platform.is_out_of_tree()
-        assert platform.get_dispatch_key_name() == "rbln"
-        if runs_on_device():
-            assert platform.execution_mode == "resident"
-            assert (platform.device_type, platform.dispatch_key) == (
-                "rbln",
-                "PrivateUse1",
-            )
-            assert not platform.is_cpu()
-        else:
-            assert platform.execution_mode == "staged"
-            assert (platform.device_type, platform.dispatch_key) == ("cpu", "CPU")
-            assert platform.is_cpu()
-            assert platform.get_local_torch_device() == torch.device("cpu")
-            assert platform.tensor_on_device(torch.zeros(1))
+def test_upstream_sees_the_host():
+    """Upstream's tensors are cpu ones; the compiled regions take them onto their
+    NPUs, so every platform answer is the host's."""
+    platform = RBLNPlatform()
+    assert platform.device_name == "rbln"
+    assert platform.is_out_of_tree()
+    assert platform.get_dispatch_key_name() == "rbln"
+    assert (platform.device_type, platform.dispatch_key) == ("cpu", "CPU")
+    assert platform.is_cpu()
+    assert platform.get_local_torch_device() == torch.device("cpu")
+    assert platform.get_device(1) == torch.device("cpu")
+    assert platform.tensor_on_device(torch.zeros(1))
+    assert platform.is_float64_supported()
+    communicator = resolve_name(RBLNPlatform.get_device_communicator_cls())
+    assert communicator.__name__ == "CpuCommunicator"
 
 
 class TestSglangResolvesThePlugin:
@@ -152,18 +125,6 @@ class TestCustomOpDispatch:
 
 
 class TestDeviceQueries:
-    @pytest.mark.parametrize(
-        ("runs_on_device", "communicator"),
-        [(False, "CpuCommunicator"), (True, "DeviceCommunicatorBase")],
-        ids=["host", "device"],
-    )
-    def test_communicator_follows_the_mode(
-        self, monkeypatch, runs_on_device, communicator
-    ):
-        monkeypatch.setattr(platform_module, "runs_on_device", lambda: runs_on_device)
-        resolved = resolve_name(RBLNPlatform.get_device_communicator_cls())
-        assert resolved.__name__ == communicator
-
     def test_attention_backend_is_upstreams(self):
         """The plugin named its own kv-expanding SDPA subclass until the
         compiler honoured `enable_gqa`. `Platform`'s method is a stub returning
@@ -187,12 +148,6 @@ class TestDeviceQueries:
         monkeypatch.delenv("RBLN_FORCE_NPU_NAME", raising=False)
         assert RBLNPlatform.get_device_name(0).startswith("RBLN")
 
-    @pytest.mark.resident_mode
-    def test_local_torch_device_is_rbln(self, monkeypatch):
-        monkeypatch.setenv("LOCAL_RANK", "1")
-        local_device = RBLNPlatform.get_local_torch_device()
-        assert (local_device.type, local_device.index) == ("rbln", 1)
-
 
 def test_platform_compiles_through_rbln():
     platform = RBLNPlatform()
@@ -214,13 +169,7 @@ class TestServerArgDefaults:
             component_precisions={},
             explicit_args=set(),
             disable_autocast=False,
-            **dict.fromkeys(OFFLOAD_FLAGS),
         )
-
-    @pytest.fixture
-    def on_host(self, monkeypatch: pytest.MonkeyPatch, request) -> bool:
-        monkeypatch.setattr(RBLNPlatform, "is_cpu", lambda self: request.param)
-        return request.param
 
     def test_compiles_per_block_through_the_platform(self, server_args):
         RBLNPlatform().apply_server_args_defaults(server_args)
@@ -233,46 +182,34 @@ class TestServerArgDefaults:
         RBLNPlatform().apply_server_args_defaults(server_args)
         assert getattr(server_args, flag) is False
 
-    @pytest.mark.parametrize(
-        ("on_host", "expected"),
-        [(True, {"vocoder": "fp32"}), (False, {})],
-        ids=["host", "device"],
-        indirect=["on_host"],
-    )
-    def test_host_mode_runs_the_vocoder_in_fp32(self, server_args, on_host, expected):
+    def test_runs_the_vocoder_in_fp32(self, server_args):
         RBLNPlatform().apply_server_args_defaults(server_args)
-        assert server_args.component_precisions == expected
+        assert server_args.component_precisions == {"vocoder": "fp32"}
 
-    @pytest.mark.parametrize("on_host", [True], indirect=True)
-    def test_keeps_an_explicit_vocoder_precision(self, server_args, on_host):
+    def test_keeps_an_explicit_vocoder_precision(self, server_args):
         server_args.component_precisions = {"vocoder": "bf16"}
         RBLNPlatform().apply_server_args_defaults(server_args)
         assert server_args.component_precisions == {"vocoder": "bf16"}
 
-    @pytest.mark.parametrize(
-        ("resident", "on_device"),
-        [(False, False), (True, False), (False, True)],
-        ids=["host", "resident-regions", "device"],
-    )
-    def test_autocast_stays_as_upstream_sets_it(
-        self, server_args, monkeypatch, resident, on_device
-    ):
-        monkeypatch.setattr(platform_module, "resident_regions", lambda: resident)
-        monkeypatch.setattr(platform_module, "runs_on_device", lambda: on_device)
+    def test_autocast_stays_as_upstream_sets_it(self, server_args):
         RBLNPlatform().apply_server_args_defaults(server_args)
         assert server_args.disable_autocast is False
 
-    @pytest.mark.parametrize("on_host", [False], indirect=True)
-    def test_device_mode_keeps_components_resident(self, server_args, on_host):
-        server_args.explicit_args = {"vae_cpu_offload"}
-        server_args.vae_cpu_offload = True
-        RBLNPlatform().apply_server_args_defaults(server_args)
-        assert [getattr(server_args, flag) for flag in OFFLOAD_FLAGS] == [
-            False,
-            False,
-            False,
-            True,
-        ]
+
+@pytest.fixture
+def device_groups(monkeypatch) -> list[None]:
+    from sglang_rbln.compilation import residency
+
+    configured = []
+    monkeypatch.setattr(
+        residency, "configure_device_group", lambda: configured.append(None)
+    )
+    return configured
+
+
+def test_init_backend_lays_out_the_npu_sets(device_groups):
+    RBLNPlatform().init_backend()
+    assert device_groups == [None]
 
 
 @pytest.mark.parametrize(
@@ -280,9 +217,7 @@ class TestServerArgDefaults:
     [(None, platform_module.TORCH_RBLN_FALLBACK_DEFAULT), ("all", "all")],
     ids=["default", "explicit"],
 )
-def test_device_mode_forbids_silent_compile_fallback(monkeypatch, preset, expected):
-    monkeypatch.setattr(platform_module, "runs_on_device", lambda: True)
-    monkeypatch.setitem(sys.modules, "torch_rbln", ModuleType("torch_rbln"))
+def test_forbids_silent_compile_fallback(monkeypatch, device_groups, preset, expected):
     monkeypatch.delenv(platform_module.TORCH_RBLN_FALLBACK_ENV, raising=False)
     if preset is not None:
         monkeypatch.setenv(platform_module.TORCH_RBLN_FALLBACK_ENV, preset)
@@ -295,12 +230,10 @@ def test_device_mode_forbids_silent_compile_fallback(monkeypatch, preset, expect
     [("1", None, "1"), ("0", None, None), ("1", "0", "0")],
     ids=["compile-only", "run", "explicit"],
 )
-def test_a_compile_only_device_run_takes_the_dummy_device(
-    monkeypatch, compile_only, preset, expected
+def test_a_compile_only_run_takes_the_dummy_device(
+    monkeypatch, device_groups, compile_only, preset, expected
 ):
     """It compiles on device tensors as a device run does, with no NPU to open."""
-    monkeypatch.setattr(platform_module, "runs_on_device", lambda: True)
-    monkeypatch.setitem(sys.modules, "torch_rbln", ModuleType("torch_rbln"))
     monkeypatch.setenv("SGLANG_RBLN_COMPILE_ONLY", compile_only)
     monkeypatch.delenv(platform_module.DUMMY_DEVICE_ENV, raising=False)
     if preset is not None:
@@ -360,35 +293,3 @@ class TestTensorParallelDegree:
         server_args.tp_size, server_args.explicit_args = 4, {"tp_size"}
         with pytest.raises(ValueError, match="contradicts"):
             platform_module.take_tensor_parallel_degree(server_args)
-
-    def test_the_platform_device_follows_the_degree(self, monkeypatch, server_args):
-        # Imported before the arguments are parsed: the device must not be fixed then.
-        monkeypatch.setattr(
-            platform_module, "EXECUTION_MODE", device.ExecutionMode.RESIDENT
-        )
-        monkeypatch.setenv("SGLANG_RBLN_EXECUTION_MODE", "resident")
-        platform = RBLNPlatform()
-        assert platform.device_type == "rbln"
-        server_args.tp_size, server_args.explicit_args = 4, {"tp_size"}
-        platform_module.take_tensor_parallel_degree(server_args)
-        assert (platform.device_type, platform.dispatch_key) == ("cpu", "CPU")
-
-    def test_turning_resident_regions_on_registers_their_hooks(
-        self, monkeypatch, server_args
-    ):
-        from sglang_rbln import patches
-
-        calls = []
-        monkeypatch.setattr(patches, "register_resident", lambda **k: calls.append(k))
-        monkeypatch.setenv("SGLANG_RBLN_EXECUTION_MODE", "resident")
-        server_args.__dict__.update(
-            enable_torch_compile=True,
-            regional_compile=True,
-            component_precisions={},
-            disable_autocast=False,
-            tp_size=4,
-            explicit_args={"tp_size"},
-            **dict.fromkeys(OFFLOAD_FLAGS),
-        )
-        RBLNPlatform().apply_server_args_defaults(server_args)
-        assert calls == [{"apply": True}]

@@ -657,12 +657,9 @@ def test_a_region_runs_on_the_npus_of_its_blocks():
     )
 
 
-@pytest.mark.resident_mode
 def test_kept_outputs_stay_on_the_region_npus(monkeypatch, dummy_device):
     # The text encoder keeps every layer's output; a host placeholder made each one
     # cross to the host once the region ran, and back up for the connector.
-    monkeypatch.setenv("SGLANG_RBLN_EXECUTION_MODE", "resident")
-    monkeypatch.setenv("SGLANG_RBLN_NUM_DEVICES", "2")
 
     def backend(graph, example_inputs):
         return lambda *args: [out.to("rbln:0") for out in graph(*args)]
@@ -782,3 +779,16 @@ def test_a_split_region_compiles_in_its_parents_sharing_session(monkeypatch):
     with torch.no_grad():
         model(torch.randn(2, 8))
     assert len(compiled) == 3 and all(each is context for each in compiled)
+
+
+def test_a_watched_output_still_reaches_its_placeholder():
+    # A split region's output is the next region's input, which dynamo watches weakly.
+    value = torch.arange(6.0).reshape(2, 3)
+    value._rbln_producer_view = "view"
+    watched = weakref.ref(value)
+    placeholder = torch.empty(2, 3, device="meta")
+    regions._become(placeholder, value)
+    assert watched() is value
+    assert placeholder.data_ptr() == value.data_ptr()
+    assert torch.equal(placeholder, value)
+    assert placeholder._rbln_producer_view == "view"

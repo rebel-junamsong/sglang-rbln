@@ -6,19 +6,19 @@ import torch
 from sglang.multimodal_gen.runtime.utils.precision import align_tensor_to_module_dtype
 from torch import nn
 
-from sglang_rbln import device, envs
+from sglang_rbln import envs
 from sglang_rbln.compilation import placement
-from sglang_rbln.compilation.backend import COMPILED, compile_on_one_device
+from sglang_rbln.compilation.backend import COMPILED, compile_whole
 
 
 def audio_devices(vocoder: nn.Module) -> tuple[int, ...] | None:
-    """The vocoder's own placement, else, with resident regions, the text encoder's set.
+    """The vocoder's own placement, else the text encoder's set.
 
     The DiT's set has no room for the audio graphs beside both DiT shapes and the VAE.
     """
     if devices := placement.devices_of(vocoder):
         return devices
-    return placement.text_encoder_devices() if device.resident_regions() else None
+    return placement.text_encoder_devices()
 
 
 class AudioChain(nn.Module):
@@ -62,7 +62,7 @@ def compile_audio(forward, stage, batch, server_args):
         chain = AudioChain(audio_vae, vocoder)
         if devices := audio_devices(vocoder):
             placement.place(chain, devices)
-        compile_on_one_device(chain, "audio VAE decoder + vocoder")
+        compile_whole(chain, "audio VAE decoder + vocoder")
         audio_vae.decode = lambda latents, return_dict=True: (latents,)
         stage.vocoder = chain
         setattr(chain, COMPILED, True)

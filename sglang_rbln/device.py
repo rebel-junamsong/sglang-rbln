@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import importlib.util
-from enum import StrEnum
 from pathlib import Path
 from typing import NamedTuple
 
@@ -21,19 +20,6 @@ class MemoryInfo(NamedTuple):
     free: int
 
 
-class ExecutionMode(StrEnum):
-    """Where tensors live between compiled graphs; the graphs run on the NPUs in both.
-
-    - staged: host-staged I/O, each graph call uploads its inputs and downloads its
-      outputs;
-    - resident: device-resident, a graph's outputs stay on the NPUs for the next one.
-    """
-
-    AUTO = "auto"
-    STAGED = "staged"
-    RESIDENT = "resident"
-
-
 def device_nodes() -> list[Path]:
     return sorted(DEVICE_NODE_DIR.glob(DEVICE_NODE_PATTERN))
 
@@ -49,33 +35,6 @@ def rbln_available() -> bool:
     if envs.RBLN_FORCE_NPU_NAME:
         return True
     return _module_available("rebel") and bool(device_nodes())
-
-
-def torch_rbln_available() -> bool:
-    return _module_available("torch_rbln")
-
-
-def execution_mode() -> ExecutionMode:
-    requested = envs.SGLANG_RBLN_EXECUTION_MODE
-    try:
-        mode = ExecutionMode(requested)
-    except ValueError:
-        choices = ", ".join(ExecutionMode)
-        raise ValueError(
-            f"SGLANG_RBLN_EXECUTION_MODE={requested!r}; expected one of {choices}"
-        ) from None
-    if mode is ExecutionMode.AUTO:
-        if torch_rbln_available():
-            return ExecutionMode.RESIDENT
-        return ExecutionMode.STAGED
-    return mode
-
-
-def resident_regions() -> bool:
-    return (
-        execution_mode() is ExecutionMode.RESIDENT
-        and (envs.SGLANG_RBLN_NUM_DEVICES or 1) > 1
-    )
 
 
 def npu_name(device_id: int = 0) -> str:

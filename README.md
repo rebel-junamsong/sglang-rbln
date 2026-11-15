@@ -34,8 +34,8 @@ Requires Python 3.11–3.14, an RBLN NPU with its driver, and an account on the
 sglang 0.5.21 pins `flashinfer-python==0.6.18`, which asserts a CUDA device at
 import; the second command replaces it with 0.7.1, which does not. flashinfer
 is never used on RBLN.
-`torch-rbln` (built for `torch==2.13.0`) comes with it and runs the default
-`resident` execution mode.
+`torch-rbln` (built for `torch==2.13.0`) comes with it and keeps tensors on the
+NPUs between compiled graphs.
 
 To reproduce a published result, build the environment from the committed
 `uv.lock`. It pins the exact `rebel-compiler` and `torch-rbln` builds the result
@@ -75,20 +75,13 @@ video = client.videos.create(
 )
 ```
 
-## Execution modes
+## How it runs
 
-Compiled graphs run on the NPU in both NPU modes; `SGLANG_RBLN_EXECUTION_MODE`
-picks where tensors live between them.
-
-| mode | where the graphs run | tensors between graphs | needs |
-|---|---|---|---|
-| CPU eager: `staged` with `--disable-torch-compile` | CPU | CPU tensors | — |
-| `staged`: NPU, host-staged I/O | NPU | CPU tensors: each graph call uploads its inputs and downloads its outputs | `rebel-compiler` |
-| `resident`: NPU, device-resident | NPU | `torch-rbln` tensors that stay on the NPU for the next graph; eager ops between graphs run through `torch-rbln`. With `SGLANG_RBLN_NUM_DEVICES` > 1, compiled regions keep them on the tensor-parallel NPUs | `torch-rbln` |
-
-`auto` (default) is `resident`, since `torch-rbln` is a dependency; it falls back
-to `staged` only where `torch-rbln` cannot be imported. Set `staged` to keep
-tensors on the host between graphs.
+Each model runs as compiled graphs on its NPUs. A graph's outputs stay there as
+`torch-rbln` tensors for the next graph, and the eager ops between graphs run on
+the NPUs through `torch-rbln`; a tensor comes back to the host only where upstream
+reads it there (the decoded video, a sampled token). For a CPU reference run,
+leave the plugin out: upstream's own CPU platform runs the same pipeline.
 
 ## Compiled graphs
 
@@ -106,7 +99,6 @@ the NPU. A compile error fails the request unless `SGLANG_RBLN_COMPILE_STRICT=0`
 
 | Variable | Effect |
 |---|---|
-| `SGLANG_RBLN_EXECUTION_MODE` | `auto` (default, `resident`), `staged`, or `resident`: where activations live between compiled graphs |
 | `SGLANG_RBLN_CACHE_DIR` | compiled-graph cache (default `~/.cache/sglang_rbln`) |
 | `SGLANG_RBLN_DISABLE_COMPILE_CACHE=1` | compile without the cache |
 | `SGLANG_RBLN_STATIC_OUTPUT=1` | reuse one device output buffer per graph output instead of allocating per run |
@@ -119,10 +111,9 @@ the NPU. A compile error fails the request unless `SGLANG_RBLN_COMPILE_STRICT=0`
 | `SGLANG_RBLN_PROFILE_REQUEST=3` | which request (counting from 1, warmups excluded) `SGLANG_RBLN_PROFILE_DIR` captures |
 | `SGLANG_RBLN_COMPILE_VAE_ENCODER=0` | keep the LTX-2 video VAE encoder that I2V conditioning images go through on the CPU. On by default, across the VAE's devices like the decoder; it falls back to the CPU on its own if it does not fit them |
 | `SGLANG_RBLN_DURATION_HEAD_ON_NPU=0` | keep the LTX-2.5 duration head (`auto_duration` requests) on the CPU. On by default, on one NPU: its own if `SGLANG_RBLN_COMPONENT_DEVICES` places it, else the text encoder's last, else the last tensor-parallel one |
-| `SGLANG_RBLN_UPSAMPLER_ON_NPU=1` | compile the LTX-2 latent upsampler (`LTX2TwoStagePipeline`) on the text encoder's NPUs (or its own if `SGLANG_RBLN_COMPONENT_DEVICES` places it, else the DiT's): the DiT's set has no room for it beside both DiT shapes and the VAE decoder. In resident mode its latents cross between the two sets on the device |
 | `SGLANG_RBLN_LTX2_DETAILING_LORA=<file>` | experimental: run stage 2 of `LTX2TwoStagePipeline` as the official DFR does, with this detailing IC-LoRA (e.g. `ltx-2.5-22b-ic-lora-pixel-spatial-upscaler-x2-1.0.safetensors`) at strength 0.5 and the stage-1 latent as in-context reference tokens. The LoRA stays dynamic in both stages (strength 0 in stage 1), so both share one copy of the DiT weights on the NPUs |
 | `SGLANG_RBLN_COMPILE_DIFFUSION_DECODER=1` | compile the LTX-2.5 diffusion decoder (`use_diffusion_decoder` requests), one region per stage `ModuleList`, on the DiT's device set or the one `SGLANG_RBLN_COMPONENT_DEVICES` names for `diffusion_decoder`: its ~16 GiB of fixed graph memory does not fit one NPU, so the compiler shards it across that set and shares its compile context. Off by default, which runs the decoder eagerly as upstream does |
-| `SGLANG_RBLN_COMPILE_AUDIO=0` | keep the LTX-2 audio VAE decoder and the vocoder on the CPU. On by default, they compile as one graph on the vocoder's NPUs: those `SGLANG_RBLN_COMPONENT_DEVICES` names (`vocoder=8`), else the spare NPUs after the DiT's when they hold it, else, in `resident` mode, the text encoder's set. In `staged` mode the graph runs on the last NPU of that set, or on the last tensor-parallel NPU when the vocoder has none; in `resident` mode the set is one logical device and the graph runs across it. The stage's own latents go in and the waveform comes out at its length, with the mel kept on the device between the two models; the graph's edges need no host op (rebel-compiler lays a host edge's tile padding out as it stages the tensor). 0.34 s against 2.2-3.2 s on the CPU at 5 s of audio; the NPU's convolutions accumulate with an upward gain that compounds through the vocoder's ~100 convs, so its waveform lands below CPU bf16 (12.9 vs 16.6 dB SNR against float32 at 5 s of audio) |
+| `SGLANG_RBLN_COMPILE_AUDIO=0` | keep the LTX-2 audio VAE decoder and the vocoder on the CPU. On by default, they compile as one graph on the vocoder's NPUs: those `SGLANG_RBLN_COMPONENT_DEVICES` names (`vocoder=8`), else the spare NPUs after the DiT's when they hold it, else the text encoder's set; the graph runs across that set. The stage's own latents go in and the waveform comes out at its length, with the mel kept on the device between the two models. 0.34 s against 2.2-3.2 s on the CPU at 5 s of audio; the NPU's convolutions accumulate with an upward gain that compounds through the vocoder's ~100 convs, so its waveform lands below CPU bf16 (12.9 vs 16.6 dB SNR against float32 at 5 s of audio) |
 | `SGLANG_RBLN_BLOCKS_PER_REGION=7` | cap the blocks compiled as one region graph (see [Compiled graphs](#compiled-graphs); 1 compiles each block alone). Set it only when one graph does not fit or does not compile |
 | `SGLANG_RBLN_PROMPT_ENHANCER=1` | serve a request's `enhance_prompt` with the checkpoint's own `prompt_enhancer/` component (LTX-2.5: a Gemma-4 instruct model) when no `--prompt-enhancer-config` endpoint is set: its decoder's whole forward compiles as one graph on `SGLANG_RBLN_COMPONENT_DEVICES` `prompt_enhancer=…`, so embeddings, masks and rotary run on the device (LTX-2.5's Gemma-4 enhancer on one CA22, 855 prompt tokens: 28.7 ms a token against 34 ms on the host), and it decodes greedily with a static KV cache (one prefill graph, one decode graph). Text prompts only |
 | `SGLANG_RBLN_PROMPT_ENHANCER_MAX_SEQ_LEN=2048` | the static KV cache the prompt enhancer compiles for (default 2048). It is the prefill and decode graphs' shape, so every request that fits runs the same two graphs instead of a new pair per prompt length; a prompt and rewrite needing more still runs, on graphs of its own. Each step attends over the whole length; measured on one CA22 with LTX-2.5's Gemma-4 enhancer, a 2048 cache costs nothing against a prompt-shaped 896 one (28.7 ms a step against 30.8 ms) |

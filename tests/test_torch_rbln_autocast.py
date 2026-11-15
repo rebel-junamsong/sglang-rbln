@@ -6,9 +6,7 @@ import torch
 import torch.nn.functional as F
 from torch._subclasses.fake_tensor import FakeTensorMode
 
-torch_rbln = pytest.importorskip("torch_rbln")
-
-from sglang_rbln.patches.torch_rbln import autocast  # noqa: E402
+from sglang_rbln.patches.torch_rbln import autocast
 
 DEVICE = "rbln:0"
 

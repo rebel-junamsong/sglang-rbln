@@ -2,6 +2,7 @@
 import base64
 import io
 import os
+import re
 import signal
 import socket
 import subprocess
@@ -25,9 +26,12 @@ HEALTH_PROBE_TIMEOUT_SEC = 30
 REQUEST_TIMEOUT_SEC = 900
 SHUTDOWN_TIMEOUT_SEC = 60
 # These tests carry no npu marker, and the host's NPUs belong to other sessions:
-# the server runs in staged mode and sees no NPU (there is no NPU 99), with or
-# without torch-rbln in the environment.
+# the server sees no NPU (there is no NPU 99) and runs on rbln's dummy device, whose
+# outputs are garbage, so only the serving plumbing and the shapes are asserted.
 HIDDEN_NPUS = "99"
+# Upstream takes the next free port when the one asked for was taken between choosing
+# it and binding it, so the URL is read from the server's own log.
+SERVING_URL = re.compile(r"Uvicorn running on \S*?(http://[\w.]+:\d+)")
 
 
 def _free_port() -> int:
@@ -88,7 +92,7 @@ def serve_url(npu_name, tmp_path_factory):
         **os.environ,
         "SGLANG_DIFFUSION_PLATFORM_OVERRIDE": "rbln",
         "RBLN_VISIBLE_DEVICES": HIDDEN_NPUS,
-        "SGLANG_RBLN_EXECUTION_MODE": "staged",
+        "RBLN_DUMMY_DEVICE": "1",
     }
     serve_env.setdefault("RBLN_FORCE_NPU_NAME", npu_name)
     serve_cmd = [
@@ -116,8 +120,8 @@ def serve_url(npu_name, tmp_path_factory):
             stderr=subprocess.STDOUT,
             start_new_session=True,
         )
-    base_url = f"http://127.0.0.1:{port}"
     try:
+        base_url = _served_url(server, log_path, SERVER_LIVE_TIMEOUT_SEC)
         for endpoint, budget in (
             ("liveness", SERVER_LIVE_TIMEOUT_SEC),
             ("health", SERVER_READY_TIMEOUT_SEC),
@@ -126,6 +130,19 @@ def serve_url(npu_name, tmp_path_factory):
         yield base_url
     finally:
         _stop(server)
+
+
+def _served_url(server: subprocess.Popen, log_path: Path, budget: int) -> str:
+    deadline = time.monotonic() + budget
+    while time.monotonic() < deadline:
+        if server.poll() is not None:
+            tail = log_path.read_text(errors="replace")[-4000:]
+            raise RuntimeError(f"server exited early:\n{tail}")
+        if served := SERVING_URL.search(log_path.read_text(errors="replace")):
+            return served.group(1)
+        time.sleep(2)
+    tail = log_path.read_text(errors="replace")[-4000:]
+    raise RuntimeError(f"the server did not start serving within {budget} s:\n{tail}")
 
 
 def _wait_for(server: subprocess.Popen, log_path: Path, url: str, budget: int):

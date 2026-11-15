@@ -17,7 +17,7 @@ from torch import nn
 from sglang_rbln.compilation import backend as compilation
 from sglang_rbln.compilation import placement
 from sglang_rbln.compilation.regions import RegionDoesNotFit
-from sglang_rbln.patches.stages.ltx_2 import duration, image_encoding, upsampling
+from sglang_rbln.patches.stages.ltx_2 import duration, image_encoding
 
 pytestmark = pytest.mark.usefixtures("rbln_platform")
 
@@ -54,21 +54,13 @@ def duration_stage(monkeypatch):
 AUTO = SimpleNamespace(auto_duration=True)
 
 
-@pytest.fixture
-def upsample_stage(monkeypatch):
-    monkeypatch.setenv("SGLANG_RBLN_UPSAMPLER_ON_NPU", "1")
-    return SimpleNamespace(spatial_upsampler=nn.Conv3d(4, 4, 3))
-
-
 @pytest.mark.parametrize(
     ("module", "hook", "kind"),
     [
         (image_encoding, image_encoding.compile_video_encoder, HookType.AROUND),
         (duration, duration.compile_duration_head, HookType.AROUND),
-        # the upsampler's one AROUND belongs to the detailing LoRA (ltx_2/detailing.py)
-        (upsampling, upsampling.compile_upsampler, HookType.BEFORE),
     ],
-    ids=["encoder", "duration-head", "upsampler"],
+    ids=["encoder", "duration-head"],
 )
 def test_registers_on_the_stage(module, hook, kind):
     target = module.register()
@@ -111,11 +103,10 @@ def test_leaves_the_encoder_eager(
     assert compiled == []
 
 
-def test_compiles_the_duration_head_once_on_the_last_device(
+def test_compiles_the_duration_head_once_on_the_dit_set(
     duration_stage, compiled, monkeypatch
 ):
-    """With no spare NPUs for a text encoder the head falls to the DiT's last."""
-    monkeypatch.setenv("SGLANG_RBLN_EXECUTION_MODE", "staged")
+    """With no spare NPUs for a text encoder the head runs across the DiT's set."""
     monkeypatch.setenv("SGLANG_RBLN_NUM_DEVICES", "4")
     monkeypatch.setattr(placement, "visible_npus", lambda: 4)
     outputs = [
@@ -125,7 +116,7 @@ def test_compiles_the_duration_head_once_on_the_last_device(
     assert outputs == ["output", "output"]
     assert [module for module, _ in compiled] == [duration_stage.duration_head]
     options = compiled[0][1]["options"]
-    assert (options["num_devices"], options["device"]) == (1, 3)
+    assert (options["num_devices"], options.get("device")) == (4, None)
 
 
 @pytest.mark.parametrize(
@@ -133,11 +124,10 @@ def test_compiles_the_duration_head_once_on_the_last_device(
     [(None, (4, None)), ((4, 5, 6, 7), (4, [4, 5, 6, 7]))],
     ids=["dit-set", "placed"],
 )
-def test_resident_duration_head_compiles_for_the_set_of_its_inputs(
+def test_duration_head_compiles_for_the_set_of_its_inputs(
     duration_stage, compiled, monkeypatch, placed, devices
 ):
-    # in resident mode each NPU set is one logical device that holds the head's inputs
-    monkeypatch.setenv("SGLANG_RBLN_EXECUTION_MODE", "resident")
+    # each NPU set is one logical device that holds the head's inputs
     monkeypatch.setenv("SGLANG_RBLN_NUM_DEVICES", "4")
     monkeypatch.setattr(placement, "text_encoder_devices", lambda: placed)
     duration.compile_duration_head(forward, duration_stage, AUTO, COMPILE)
@@ -162,56 +152,13 @@ def test_leaves_the_duration_head_eager(
     assert compiled == []
 
 
-@pytest.mark.parametrize(
-    ("placed", "text_encoder", "devices"),
-    [
-        (None, (4, 5, 6, 7), (4, [4, 5, 6, 7])),
-        ((8, 9, 10, 11), (4, 5, 6, 7), (4, [8, 9, 10, 11])),
-        (None, None, (4, None)),
-    ],
-    ids=["text-encoder-set", "placed", "dit-set"],
-)
-def test_compiles_the_upsampler_once_on_its_device_set(
-    upsample_stage, compiled, monkeypatch, placed, text_encoder, devices
-):
-    # beside the text encoder: the DiT's set has no room beside both DiT shapes
-    monkeypatch.setenv("SGLANG_RBLN_NUM_DEVICES", "4")
-    # with resident regions it compiles inside its latent graph instead
-    monkeypatch.setenv("SGLANG_RBLN_EXECUTION_MODE", "staged")
-    monkeypatch.setattr(placement, "text_encoder_devices", lambda: text_encoder)
-    if placed:
-        placement.place(upsample_stage.spatial_upsampler, placed)
-    # a BEFORE hook: it compiles and leaves the arguments alone
-    outputs = [
-        upsampling.compile_upsampler(upsample_stage, None, COMPILE) for _ in range(2)
-    ]
-    assert outputs == [None, None]
-    assert [module for module, _ in compiled] == [upsample_stage.spatial_upsampler]
-    options = compiled[0][1]["options"]
-    assert (options["num_devices"], options.get("device")) == devices
-
-
-@pytest.mark.parametrize(
-    ("requested", "server_args"),
-    [("", COMPILE), ("1", SimpleNamespace(enable_torch_compile=False))],
-    ids=["not-requested", "compile-disabled"],
-)
-def test_leaves_the_upsampler_eager(
-    upsample_stage, compiled, monkeypatch, requested, server_args
-):
-    monkeypatch.setenv("SGLANG_RBLN_UPSAMPLER_ON_NPU", requested)
-    upsampling.compile_upsampler(upsample_stage, None, server_args)
-    assert compiled == []
-
-
 def test_duration_head_follows_the_text_encoder(duration_stage, compiled, monkeypatch):
     """With no placement of its own the head goes where the text encoder is."""
-    monkeypatch.setenv("SGLANG_RBLN_EXECUTION_MODE", "staged")
     monkeypatch.setenv("SGLANG_RBLN_NUM_DEVICES", "4")
     monkeypatch.setattr(placement, "visible_npus", lambda: 8)
     duration.compile_duration_head(forward, duration_stage, AUTO, COMPILE)
     options = compiled[0][1]["options"]
-    assert (options["num_devices"], options["device"]) == (1, 7)
+    assert (options["num_devices"], options["device"]) == (4, [4, 5, 6, 7])
 
 
 def _refusing_once(error):

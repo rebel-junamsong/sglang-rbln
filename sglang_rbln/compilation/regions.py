@@ -15,7 +15,7 @@ import torch
 from torch import nn
 from torch.utils._pytree import tree_leaves, tree_map
 
-from sglang_rbln import device, envs
+from sglang_rbln import envs
 from sglang_rbln.compilation import placement, shapes
 from sglang_rbln.compilation.backend import forget_frames, release_graphs
 
@@ -435,22 +435,32 @@ class DeferredBlock:
         pending = state.pop("pending", [])
         kept = zip(itertools.chain(*pending), output[:-width], strict=True)
         for placeholder, value in kept:
-            if device.resident_regions():
-                torch.utils.swap_tensors(placeholder, value)
-            else:
-                placeholder.copy_(value)
+            _become(placeholder, value)
         return _restore(output[-width:], width)
 
     @staticmethod
     def _placeholders(values: tuple) -> tuple:
-        """What the caller holds for each kept output until the region runs. With
-        resident regions it takes the output itself, which stays on the NPUs."""
-        if not device.resident_regions():
-            return tuple(map(torch.empty_like, values))
+        """What the caller holds for each kept output until the region runs; it then
+        takes the output itself, which stays on the NPUs."""
         return tuple(
             torch.empty(value.shape, dtype=value.dtype, device="meta")
             for value in values
         )
+
+
+def _become(placeholder: torch.Tensor, value: torch.Tensor) -> None:
+    """Make the caller's placeholder the region's output, without a copy.
+
+    When a split region's output is also the next region's input, dynamo's guards
+    hold a weakref to it and `swap_tensors` refuses it: the placeholder then takes a
+    fresh alias of its storage, with the attributes rebel left on it.
+    """
+    try:
+        torch.utils.swap_tensors(placeholder, value)
+    except RuntimeError:
+        alias = value.detach()
+        alias.__dict__.update(value.__dict__)
+        torch.utils.swap_tensors(placeholder, alias)
 
 
 def consecutive_runs(

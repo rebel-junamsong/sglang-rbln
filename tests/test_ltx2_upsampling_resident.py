@@ -12,8 +12,7 @@ from sglang.multimodal_gen.runtime.pipelines_core.stages.model_specific_stages i
 )
 from torch import nn
 
-from sglang_rbln import device
-from sglang_rbln.compilation import placement, residency
+from sglang_rbln.compilation import residency
 from sglang_rbln.patches.stages.ltx_2 import upsampling
 
 pytestmark = pytest.mark.usefixtures("rbln_platform")
@@ -93,21 +92,3 @@ def test_host_latents_take_upstream(stage, monkeypatch):
         )
     assert torch.equal(actual, expected)
     assert calls == []
-
-
-@pytest.mark.parametrize("resident", [True, False], ids=["resident", "host"])
-def test_resident_regions_compile_the_upsampler_only_inside_its_graph(
-    stage, monkeypatch, resident
-):
-    monkeypatch.setenv("SGLANG_RBLN_UPSAMPLER_ON_NPU", "1")
-    monkeypatch.setattr(device, "resident_regions", lambda: resident)
-    monkeypatch.setattr(placement, "text_encoder_devices", lambda: (0, 1, 2, 3))
-    compiled = []
-    monkeypatch.setattr(
-        nn.Module, "compile", lambda module, **kwargs: compiled.append(module)
-    )
-    upsampling.compile_upsampler(
-        stage, None, SimpleNamespace(enable_torch_compile=True)
-    )
-    assert placement.devices_of(stage.spatial_upsampler) == (0, 1, 2, 3)
-    assert compiled == ([] if resident else [stage.spatial_upsampler])

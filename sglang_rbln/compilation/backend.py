@@ -9,13 +9,12 @@ import os
 import sys
 import traceback
 import types
-import weakref
 from typing import Any
 
 import torch
 from torch._dynamo.eval_frame import _debug_get_cache_entry_list
 
-from sglang_rbln import device, envs
+from sglang_rbln import envs
 from sglang_rbln.compilation import device_views, placement, shapes, timeline
 
 logger = logging.getLogger(__name__)
@@ -23,7 +22,6 @@ logger = logging.getLogger(__name__)
 COMPILE_BACKEND_NAME = "rbln"
 
 _device_set_contexts: dict[tuple[int, ...] | int | None, Any] = {}
-_module_contexts: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 
 
 def _new_context():
@@ -37,21 +35,6 @@ def device_set_context(device_set: tuple[int, ...] | int | None):
     if context is None:
         context = _device_set_contexts[device_set] = _new_context()
     return context
-
-
-def module_context(module: torch.nn.Module):
-    context = _module_contexts.get(module)
-    if context is None:
-        context = _module_contexts[module] = _new_context()
-    return context
-
-
-def on_one_device(options: dict[str, Any], device: int, module: torch.nn.Module):
-    return options | {
-        "num_devices": 1,
-        "device": device,
-        "compile_context": module_context(module),
-    }
 
 
 def compile_options(module: torch.nn.Module) -> dict[str, Any]:
@@ -151,24 +134,9 @@ def compile_once(module: torch.nn.Module, what: str, compile_kwargs: dict) -> No
     logger.info("Compiling the %s: %s", what, compile_kwargs)
 
 
-def compile_on_one_device(module: torch.nn.Module, what: str) -> None:
-    """Compile `module` for one NPU: its own if placed, else the last TP one.
-
-    With resident regions each NPU set is one logical device, and a graph reads a
-    device input only on the device that holds it, so `module` then compiles for
-    the whole set its inputs live on.
-    """
-    compile_kwargs = static_compile_kwargs(module)
-    if device.resident_regions():
-        compile_once(module, what, compile_kwargs)
-        return
-    options = compile_kwargs["options"]
-    if devices := placement.devices_of(module):
-        if len(devices) > 1:
-            compile_kwargs["options"] = on_one_device(options, devices[-1], module)
-    elif num_devices := options.get("num_devices"):
-        compile_kwargs["options"] = on_one_device(options, num_devices - 1, module)
-    compile_once(module, what, compile_kwargs)
+def compile_whole(module: torch.nn.Module, what: str) -> None:
+    """Compile `module` as one static graph, for the NPU set its inputs live on."""
+    compile_once(module, what, static_compile_kwargs(module))
 
 
 def describe_graph(graph: torch.fx.GraphModule, example_inputs) -> str:

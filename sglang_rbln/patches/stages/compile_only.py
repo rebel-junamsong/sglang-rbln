@@ -3,7 +3,7 @@
 
 Compile-only builds every graph and runs none, so each stage hands on outputs that hold
 no values. The stages' own checks read those values (a NaN in the text embedding fails
-the latent preparation), and a staged compile-only run stopped at the first of them,
+the latent preparation), and a compile-only run would stop at the first of them,
 before the DiT compiled.
 """
 

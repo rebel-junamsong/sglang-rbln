@@ -23,7 +23,7 @@ def _uninitialised_embedding() -> VerificationResult:
 
 
 def test_upstream_rejects_a_compile_only_stage_output():
-    # What stopped a staged compile-only run before the DiT compiled.
+    # What would stop a compile-only run before the DiT compiled.
     with pytest.raises(Exception, match="prompt_embeds"):
         RUN_VERIFICATION(object(), _uninitialised_embedding(), "Stage", "input")
 

@@ -7,7 +7,6 @@ import pytest
 import torch
 from torch import nn
 
-from sglang_rbln import device
 from sglang_rbln.compilation import placement, residency
 from sglang_rbln.compilation.backend import COMPILE_BACKEND_NAME
 
@@ -30,26 +29,6 @@ def transfers(monkeypatch):
 
     monkeypatch.setattr(residency._transfers, "to", recording)
     return seen
-
-
-@pytest.mark.parametrize(
-    ("mode", "num_devices", "expected"),
-    [
-        ("resident", "4", True),
-        ("resident", "1", False),
-        ("resident", None, False),
-        ("staged", "4", False),
-    ],
-)
-def test_resident_regions_need_device_mode_and_several_npus(
-    monkeypatch, mode, num_devices, expected
-):
-    monkeypatch.setenv("SGLANG_RBLN_EXECUTION_MODE", mode)
-    if num_devices is None:
-        monkeypatch.delenv("SGLANG_RBLN_NUM_DEVICES", raising=False)
-    else:
-        monkeypatch.setenv("SGLANG_RBLN_NUM_DEVICES", num_devices)
-    assert device.resident_regions() is expected
 
 
 def _compiled_block() -> nn.Module:
@@ -91,7 +70,6 @@ def test_boundary_leaves_host_values_alone():
     torch.testing.assert_close(doubled, torch.arange(0.0, 12.0, 2.0))
 
 
-@pytest.mark.resident_mode
 def test_boundary_takes_host_operands_to_the_resident_one(transfers):
     hidden = torch.arange(6.0, dtype=torch.bfloat16)
     resident = hidden.to("rbln:0")
@@ -104,7 +82,6 @@ def test_boundary_takes_host_operands_to_the_resident_one(transfers):
     assert transfers == [("cpu", "rbln")]  # the 0-dim scalar stays on the host
 
 
-@pytest.mark.resident_mode
 def test_boundary_writes_into_a_host_buffer_on_the_host():
     buffer = torch.zeros(4, dtype=torch.bfloat16)
     resident = torch.ones(2, dtype=torch.bfloat16).to("rbln:0")
@@ -116,7 +93,6 @@ def test_boundary_writes_into_a_host_buffer_on_the_host():
     ) == torch.device("cpu")
 
 
-@pytest.mark.resident_mode
 def test_a_fake_tensor_probe_leaves_the_upload_cache_alone(transfers):
     # The audio chain finds its waveform length under FakeTensorMode before its
     # first run, while its buffers are still on the host: the probe uploaded them
@@ -132,7 +108,6 @@ def test_a_fake_tensor_probe_leaves_the_upload_cache_alone(transfers):
         assert not isinstance(resident * buffer, FakeTensor)
 
 
-@pytest.mark.resident_mode
 def test_a_resident_call_moves_module_and_inputs_under_the_boundary():
     block = nn.Linear(4, 4)
     seen = []
@@ -264,7 +239,6 @@ def test_an_inference_tensor_moves_on_every_call(monkeypatch):
 
 
 @pytest.mark.npu  # it asserts the values an eager copy between NPU sets carries
-@pytest.mark.resident_mode
 def test_a_value_crosses_npu_sets_on_the_device():
     if torch.rbln.device_count() < 2:
         pytest.skip("needs two logical devices")
@@ -311,7 +285,6 @@ def test_registers_the_placement_hooks():
         )
 
 
-@pytest.mark.resident_mode
 @pytest.mark.parametrize("hooked", [True, False], ids=["hooked", "upstream"])
 def test_a_resident_component_survives_the_manager_move(monkeypatch, hooked):
     from sglang.multimodal_gen.runtime.managers.memory_managers import (
@@ -368,7 +341,6 @@ def test_a_cross_set_copy_keeps_only_a_layout_its_reader_reads(
     assert (kept_config is not None) is kept
 
 
-@pytest.mark.resident_mode
 def test_a_strided_host_tensor_uploads_dense():
     # LTX-2 packs its latents as a transposed view. Uploaded with its strides, the
     # graph that reads it ran a one-NPU transpose first, compiled on the first step,
@@ -381,7 +353,6 @@ def test_a_strided_host_tensor_uploads_dense():
     assert uploaded.is_contiguous()
 
 
-@pytest.mark.resident_mode
 def test_casting_a_resident_module_moves_no_parameter(transfers):
     # Upstream casts the VAE around each decode: under the old host boundary it
     # brought the whole decoder down (776.6 MiB) to compare tensor types.

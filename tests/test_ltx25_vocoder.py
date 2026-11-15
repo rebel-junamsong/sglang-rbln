@@ -75,8 +75,9 @@ def audio_forward(stage, batch, server_args):
 
 
 def test_compiles_the_audio_chain_once(audio_stage, chained, monkeypatch):
-    monkeypatch.setenv("SGLANG_RBLN_EXECUTION_MODE", "staged")
+    # with no set of its own it runs across the DiT's
     monkeypatch.setenv("SGLANG_RBLN_NUM_DEVICES", "4")
+    monkeypatch.setattr(placement, "text_encoder_devices", lambda: None)
     server_args = SimpleNamespace(enable_torch_compile=True)
     waveforms = [
         vocoder.compile_audio(audio_forward, audio_stage, None, server_args)
@@ -86,7 +87,8 @@ def test_compiles_the_audio_chain_once(audio_stage, chained, monkeypatch):
     chain, kwargs = chained[0]
     assert isinstance(chain, vocoder.AudioChain)
     assert (kwargs["backend"], kwargs["dynamic"]) == ("rbln", False)
-    assert (kwargs["options"]["num_devices"], kwargs["options"]["device"]) == (1, 3)
+    assert kwargs["options"]["num_devices"] == 4
+    assert "device" not in kwargs["options"]
     # The stage denormalizes (1 * 3 + 1), the chain decodes (x 2) and vocodes (+ 1).
     assert audio_stage.audio_vae.latents_mean is not None
     for waveform in waveforms:
@@ -196,19 +198,13 @@ def test_vocoder_runs_on_the_npu(caplog, monkeypatch, tmp_path):
     assert snr > 30
 
 
-@pytest.mark.parametrize(
-    ("mode", "devices"),
-    [("resident", (4, [4, 5, 6, 7])), ("staged", (1, 3))],
-    ids=["resident", "staged"],
-)
-def test_the_audio_chain_compiles_beside_the_text_encoder_when_resident(
-    audio_stage, chained, monkeypatch, mode, devices
+def test_the_audio_chain_compiles_beside_the_text_encoder(
+    audio_stage, chained, monkeypatch
 ):
-    # with resident regions the DiT's set has no room for it beside both DiT shapes
-    monkeypatch.setenv("SGLANG_RBLN_EXECUTION_MODE", mode)
+    # the DiT's set has no room for it beside both DiT shapes
     monkeypatch.setenv("SGLANG_RBLN_NUM_DEVICES", "4")
     monkeypatch.setattr(placement, "text_encoder_devices", lambda: (4, 5, 6, 7))
     compile_on = SimpleNamespace(enable_torch_compile=True)
     vocoder.compile_audio(audio_forward, audio_stage, None, compile_on)
     options = chained[0][1]["options"]
-    assert (options["num_devices"], options["device"]) == devices
+    assert (options["num_devices"], options["device"]) == (4, [4, 5, 6, 7])

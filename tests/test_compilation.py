@@ -129,20 +129,6 @@ class TestCompileOptions:
         placement.place(placed, (4, 5, 6, 7))
         assert compilation.compile_options(placed)["compile_context"] is not default
 
-    def test_one_device_compile_keeps_a_context_per_module(self, monkeypatch):
-        monkeypatch.setenv("SGLANG_RBLN_NUM_DEVICES", "4")
-        monkeypatch.setattr(compilation, "_device_set_contexts", {})
-        module = _TinyMlp()
-        shared = compilation.compile_options(module)
-        options = compilation.on_one_device(shared, 3, module)
-        assert options["num_devices"] == 1
-        assert options["device"] == 3
-        assert options["compile_context"] is not shared["compile_context"]
-        again = compilation.on_one_device(shared, 3, module)
-        assert again["compile_context"] is options["compile_context"]
-        other = compilation.on_one_device(shared, 3, _TinyMlp())
-        assert other["compile_context"] is not options["compile_context"]
-
     def test_context_shares_weights_across_graphs(self):
         context = compilation.compile_options(_TinyMlp())["compile_context"]
         assert context.state.use_weight_sharing
@@ -203,7 +189,6 @@ def test_compiled_module_runs_on_the_npu(monkeypatch, tmp_path):
     assert list(tmp_path.glob("*.rbln")), "the compiled graph was not persisted"
 
 
-@pytest.mark.resident_mode
 def test_compile_only_stands_an_empty_tensor_in_for_a_device_view(
     monkeypatch, dummy_device
 ):

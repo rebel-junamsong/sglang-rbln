@@ -146,21 +146,18 @@ def compile_the_dit_whole(compile_module, stage, module):
         server_args.regional_compile = regional
 
 
-def register_resident() -> str:
-    HookRegistry.register(DIT_COMPILE, compile_the_dit_whole, HookType.AROUND)
-    return DIT_COMPILE
-
-
 def register() -> tuple[str, ...]:
     for target in HOOK_TARGETS:
         HookRegistry.register(target, cached_rotary_tables, HookType.AROUND)
     HookRegistry.register(FUSED_ADA_VALUES, without_triton_ada_values, HookType.REPLACE)
     HookRegistry.register(DIFFUSION_DECODER_INIT, keyframe_tag, HookType.AFTER)
+    HookRegistry.register(DIT_COMPILE, compile_the_dit_whole, HookType.AROUND)
     for target, blend in BLENDS.items():
         HookRegistry.register(target, blend, HookType.REPLACE)
     return (
         *HOOK_TARGETS,
         FUSED_ADA_VALUES,
         DIFFUSION_DECODER_INIT,
+        DIT_COMPILE,
         *BLENDS,
     )

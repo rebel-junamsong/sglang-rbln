@@ -19,8 +19,8 @@ pytest -m e2e
 ```
 
 On a host without an NPU, set `RBLN_FORCE_NPU_NAME` to the NPU the compiler
-should target. Tests marked `npu` or `resident_mode` are strict `xfail` where the
-host has no NPU or the execution mode is `staged`, and run for real otherwise.
+should target. Tests marked `npu` are strict `xfail` where the
+host has no NPU, and run for real otherwise.
 
 ## Rules
 

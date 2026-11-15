@@ -6,19 +6,12 @@ import torch
 from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry, HookType
 from torch import nn
 
-from sglang_rbln import device, envs
 from sglang_rbln.compilation import placement, residency
-from sglang_rbln.compilation.backend import (
-    COMPILED,
-    compile_once,
-    static_compile_kwargs,
-)
 
 STAGE = (
     "sglang.multimodal_gen.runtime.pipelines_core.stages.model_specific_stages"
     ".ltx_2.upsampling.LTX2UpsampleStage"
 )
-HOOK_TARGET = f"{STAGE}.forward"
 UPSAMPLE_TARGET = f"{STAGE}._upsample_video_latents"
 PACK_TARGET = f"{STAGE}._pack_video_latents"
 GRAPHS = "_rbln_upsample_graphs"
@@ -26,32 +19,6 @@ GRAPHS = "_rbln_upsample_graphs"
 
 def _devices(upsampler: nn.Module) -> tuple[int, ...] | None:
     return placement.devices_of(upsampler) or placement.text_encoder_devices()
-
-
-def compile_upsampler(stage, batch, server_args, *args, **kwargs):
-    """Compile the upsampler on the text encoder's NPUs, unless it was placed itself.
-
-    The DiT's set has no room for it beside both DiT shapes and the VAE decoder.
-    With resident regions it is not compiled alone: `upsample_video_latents`
-    compiles it inside the graph that also scales the latents around it.
-    BEFORE, not AROUND: the stage's one AROUND hook belongs to detailing.
-    """
-    upsampler = stage.spatial_upsampler
-    if (
-        envs.SGLANG_RBLN_UPSAMPLER_ON_NPU
-        and server_args.enable_torch_compile
-        and upsampler is not None
-        and not getattr(upsampler, COMPILED, False)
-    ):
-        if placement.devices_of(upsampler) is None and (
-            devices := placement.text_encoder_devices()
-        ):
-            placement.place(upsampler, devices)
-        if not device.resident_regions():
-            compile_once(
-                upsampler, "latent upsampler", static_compile_kwargs(upsampler)
-            )
-    return None
 
 
 class UpsampleLatents(nn.Module):
@@ -120,12 +87,7 @@ def pack_video_latents(original, batch, latents, server_args):
     return None
 
 
-def register() -> str:
-    HookRegistry.register(HOOK_TARGET, compile_upsampler, HookType.BEFORE)
-    return HOOK_TARGET
-
-
-def register_resident() -> tuple[str, str]:
+def register() -> tuple[str, str]:
     HookRegistry.register(UPSAMPLE_TARGET, upsample_video_latents, HookType.AROUND)
     HookRegistry.register(PACK_TARGET, pack_video_latents, HookType.AROUND)
     return UPSAMPLE_TARGET, PACK_TARGET

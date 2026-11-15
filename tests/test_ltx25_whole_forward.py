@@ -149,7 +149,7 @@ class _ServerArgs(SimpleNamespace):
     ],
     ids=["ltx-dit", "explicit-regional", "other-module"],
 )
-def test_resident_regions_compile_the_ltx_dit_whole(module, explicit, regional):
+def test_the_ltx_dit_compiles_whole(module, explicit, regional):
     # Per block, every step took the hidden states to the host for the output norm.
     stage = SimpleNamespace(
         server_args=_ServerArgs(regional_compile=True, explicit=set(explicit))
@@ -170,7 +170,8 @@ def test_resident_regions_compile_the_ltx_dit_whole(module, explicit, regional):
 def test_the_whole_dit_compile_wraps_the_denoising_stage():
     from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry, HookType
 
-    target = ltx_2_patch.register_resident()
+    target = ltx_2_patch.DIT_COMPILE
+    assert target in ltx_2_patch.register()
     assert target.endswith("DenoisingStage._maybe_torch_compile")
     assert any(
         hook is ltx_2_patch.compile_the_dit_whole and kind is HookType.AROUND

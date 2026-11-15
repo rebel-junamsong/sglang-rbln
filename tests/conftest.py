@@ -26,8 +26,6 @@ def pin_the_dummy_device_without_an_npu() -> None:
     dummy flag, makes the count the same for every order. The flag is restored, so a
     test without `dummy_device` is still held to the host.
     """
-    if not device.torch_rbln_available():
-        return
     import torch_rbln  # noqa: F401
     from torch_rbln import _C
 
@@ -140,17 +138,13 @@ def pytest_runtest_call(item: pytest.Item):
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
-    unmet = {
-        "npu": (not device.device_nodes(), "no RBLN device nodes on host"),
-        "resident_mode": (
-            device.execution_mode() is not device.ExecutionMode.RESIDENT,
-            "execution mode is staged",
-        ),
-    }
+    if device.device_nodes():
+        return
     for item in items:
-        for marker, (missing, reason) in unmet.items():
-            if missing and item.get_closest_marker(marker):
-                item.add_marker(pytest.mark.xfail(reason=reason, strict=True))
+        if item.get_closest_marker("npu"):
+            item.add_marker(
+                pytest.mark.xfail(reason="no RBLN device nodes on host", strict=True)
+            )
 
 
 @pytest.fixture
@@ -204,14 +198,9 @@ def rbln_platform(fresh_platform: None, rbln_override: dict[str, str]):
 
 
 @pytest.fixture
-def run_probe(rbln_override: dict[str, str]) -> Callable[[str, str], dict]:
-    def run(code: str, execution_mode: str) -> dict:
-        probe_env = {
-            **os.environ,
-            **rbln_override,
-            "SGLANG_RBLN_EXECUTION_MODE": execution_mode,
-            "PYTHONWARNINGS": "ignore",
-        }
+def run_probe(rbln_override: dict[str, str]) -> Callable[[str], dict]:
+    def run(code: str) -> dict:
+        probe_env = {**os.environ, **rbln_override, "PYTHONWARNINGS": "ignore"}
         completed = subprocess.run(
             [sys.executable, "-c", code],
             env=probe_env,

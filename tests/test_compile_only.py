@@ -13,8 +13,6 @@ from pathlib import Path
 
 import pytest
 
-pytest.importorskip("torch_rbln")
-
 COMPILE_ONE_GRAPH = textwrap.dedent(
     """
     import sys

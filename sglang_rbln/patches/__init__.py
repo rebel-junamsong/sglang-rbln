@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from sglang_rbln import device, envs
+from sglang_rbln import envs
 from sglang_rbln.compilation import placement, regions, residency, timeline
 from sglang_rbln.patches import ffmpeg_spawn
 from sglang_rbln.patches.configs import arch_config
@@ -25,7 +25,7 @@ from sglang_rbln.patches.stages.ltx_2 import (
 )
 from sglang_rbln.patches.utils import precision
 
-__all__ = ["register", "register_resident"]
+__all__ = ["register"]
 
 
 def register() -> None:
@@ -51,33 +51,10 @@ def register() -> None:
     prompt_enhancement.register()
     ffmpeg_spawn.register()
     frames.register()
-    if device.torch_rbln_available():
-        precision.register()
+    precision.register()
+    residency.register()
+    ltx_2_text_features.register()
     if envs.SGLANG_RBLN_COMPILE_ONLY:
         compile_only.register()
     if envs.SGLANG_RBLN_LOG_TIMELINE:
         timeline.register()
-    if device.resident_regions():
-        register_resident()
-
-
-_resident_registered = False
-
-
-def register_resident(apply: bool = False) -> bool:
-    """Register the hooks of resident regions. The platform calls it with `apply`
-    once the server arguments turn them on (`--tp-size`) in a process whose
-    plugins registered, and had their hooks applied, without them."""
-    global _resident_registered
-    if _resident_registered:
-        return False
-    residency.register()
-    ltx_2_text_features.register()
-    upsampling.register_resident()
-    ltx_2.register_resident()
-    _resident_registered = True
-    if apply:
-        from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry
-
-        HookRegistry.apply_hooks()  # patches only the targets not patched yet
-    return True

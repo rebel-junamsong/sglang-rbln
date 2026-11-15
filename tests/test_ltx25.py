@@ -6,8 +6,6 @@ from sglang.multimodal_gen import registry
 from sglang.multimodal_gen.configs.pipeline_configs.ltx_2_5 import LTX25PipelineConfig
 from sglang.multimodal_gen.runtime.pipelines.ltx_2_pipeline import LTX2Pipeline
 
-from sglang_rbln.device import ExecutionMode
-
 pytestmark = pytest.mark.usefixtures("rbln_platform")
 
 LTX25_MODEL_ID = "Lightricks/LTX-2.5-Diffusers"
@@ -29,7 +27,7 @@ except NotImplementedError:
     pass
 print(json.dumps({{
     "platform": type(platforms.current_platform).__name__,
-    "execution_mode": platforms.current_platform.execution_mode,
+    "device_type": platforms.current_platform.device_type,
     "norm_triton_imported": {NORM_TRITON_MODULE!r} in sys.modules,
     "vsa_kernel_bound": video_sparse_attn.video_sparse_attn is not None,
 }}))
@@ -50,13 +48,10 @@ def test_ltx25_pipeline_declares_audio_modules():
     )
 
 
-@pytest.mark.parametrize(
-    "execution_mode", [ExecutionMode.STAGED, ExecutionMode.RESIDENT]
-)
-def test_serve_import_chain_loads_without_cuda(run_probe, execution_mode):
-    assert run_probe(LTX25_IMPORT_PROBE, execution_mode) == {
+def test_serve_import_chain_loads_without_cuda(run_probe):
+    assert run_probe(LTX25_IMPORT_PROBE) == {
         "platform": "RBLNPlatform",
-        "execution_mode": execution_mode,
+        "device_type": "cpu",
         "norm_triton_imported": False,
         "vsa_kernel_bound": False,
     }

@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     RBLN_FORCE_NPU_NAME: str | None = None
-    SGLANG_RBLN_EXECUTION_MODE: str = "auto"
     SGLANG_RBLN_CACHE_DIR: Path = Path("~/.cache/sglang_rbln").expanduser()
     SGLANG_RBLN_DISABLE_COMPILE_CACHE: bool = False
     SGLANG_RBLN_COMPILE_ONLY: bool = False
@@ -24,7 +23,6 @@ if TYPE_CHECKING:
     SGLANG_RBLN_COMPILE_AUDIO: bool = True
     SGLANG_RBLN_COMPILE_VAE_ENCODER: bool = True
     SGLANG_RBLN_DURATION_HEAD_ON_NPU: bool = True
-    SGLANG_RBLN_UPSAMPLER_ON_NPU: bool = False
     SGLANG_RBLN_BLOCKS_PER_REGION: int | None = None
     SGLANG_RBLN_PROMPT_ENHANCER: bool = False
     SGLANG_RBLN_PROMPT_ENHANCER_SYSTEM_PROMPT: Path | None = None
@@ -62,9 +60,6 @@ def _int(name: str, default: int) -> Callable[[], int]:
 
 environment_variables: dict[str, Callable[[], Any]] = {
     "RBLN_FORCE_NPU_NAME": _optional("RBLN_FORCE_NPU_NAME"),
-    "SGLANG_RBLN_EXECUTION_MODE": lambda: (
-        os.environ.get("SGLANG_RBLN_EXECUTION_MODE", "").strip().lower() or "auto"
-    ),
     "SGLANG_RBLN_CACHE_DIR": lambda: Path(
         os.environ.get("SGLANG_RBLN_CACHE_DIR") or "~/.cache/sglang_rbln"
     ).expanduser(),
@@ -89,7 +84,6 @@ environment_variables: dict[str, Callable[[], Any]] = {
     "SGLANG_RBLN_DURATION_HEAD_ON_NPU": _flag(
         "SGLANG_RBLN_DURATION_HEAD_ON_NPU", default=True
     ),
-    "SGLANG_RBLN_UPSAMPLER_ON_NPU": _flag("SGLANG_RBLN_UPSAMPLER_ON_NPU"),
     "SGLANG_RBLN_BLOCKS_PER_REGION": _optional("SGLANG_RBLN_BLOCKS_PER_REGION", int),
     "SGLANG_RBLN_PROMPT_ENHANCER": _flag("SGLANG_RBLN_PROMPT_ENHANCER"),
     "SGLANG_RBLN_PROMPT_ENHANCER_SYSTEM_PROMPT": _optional(
