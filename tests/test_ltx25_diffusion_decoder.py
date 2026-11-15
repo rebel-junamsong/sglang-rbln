@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
-import logging
 import os
 
 import pytest
@@ -14,7 +13,6 @@ from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry
 
 from sglang_rbln.compilation import backend as compilation
 from sglang_rbln.patches.models import ltx_2
-from sglang_rbln.patches.stages.ltx_2 import decoding_av
 
 
 def test_decoder_keeps_upstream_attention():
@@ -93,30 +91,5 @@ def test_a_stage_3_attention_split_over_two_npus_runs(tmp_path):
         reference = attention(hidden_states)
         compiled = torch.compile(attention, backend="rbln", options=options)
         output = compiled(hidden_states)
-    error = (output.float() - reference.float()).abs().mean() / reference.abs().mean()
-    assert error < 3e-2
-
-
-@pytest.mark.npu
-def test_diffusion_decoder_runs_on_the_npu(caplog, monkeypatch, tmp_path):
-    monkeypatch.setenv("SGLANG_RBLN_CACHE_DIR", str(tmp_path))
-    compilation.ensure_compile_backend()
-    torch.manual_seed(0)
-    config = LTX25DiffusionDecoderConfig()
-    arch = config.arch_config
-    arch.decoder_stage_channels = [128, 64, 32, 32, 16]
-    arch.decoder_stage_depths = [2, 1, 1, 1, 2]
-    arch.decoder_head_dim = 16
-    model = ltx_2_5_diffusion_decoder.LTX2VideoDiffusionDecoderModel(config)
-    model = model.to(torch.bfloat16).eval()
-    latents = torch.randn(1, 128, 3, 7, 8, dtype=torch.bfloat16)
-    with torch.no_grad():
-        reference = model(latents, generator=torch.Generator().manual_seed(0))
-        decoding_av.compile_diffusion_decoder(model)
-        with caplog.at_level(logging.WARNING, logger="rebel-compiler"):
-            for _ in range(2):
-                output = model(latents, generator=torch.Generator().manual_seed(0))
-    assert "allback to eager" not in caplog.text
-    assert output.shape == reference.shape == (1, 3, 17, 224, 256)
     error = (output.float() - reference.float()).abs().mean() / reference.abs().mean()
     assert error < 3e-2

@@ -43,20 +43,12 @@ def compile_options(module: torch.nn.Module) -> dict[str, Any]:
     options: dict[str, Any] = {
         "compile_context": device_set_context(devices or num_devices)
     }
-    modes = [
-        mode
-        for mode, enabled in (
-            ("compile_only", envs.SGLANG_RBLN_COMPILE_ONLY),
-            ("strict", envs.SGLANG_RBLN_COMPILE_STRICT),
-        )
-        if enabled
-    ]
-    if modes:
-        options["mode"] = modes
+    # strict: a compile error fails the request instead of falling back to eager
+    options["mode"] = (
+        ["compile_only", "strict"] if envs.SGLANG_RBLN_COMPILE_ONLY else ["strict"]
+    )
     if not envs.SGLANG_RBLN_DISABLE_COMPILE_CACHE:
         options["cache_dir"] = str(envs.SGLANG_RBLN_CACHE_DIR)
-    if envs.SGLANG_RBLN_STATIC_OUTPUT:
-        options["use_static_output"] = True
     if devices:
         options["device"] = list(devices)
         options["num_devices"] = len(devices)

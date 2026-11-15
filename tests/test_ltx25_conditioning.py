@@ -38,16 +38,14 @@ def forward(stage, batch, server_args):
 
 
 @pytest.fixture
-def encode_stage(monkeypatch):
-    monkeypatch.delenv("SGLANG_RBLN_COMPILE_VAE_ENCODER", raising=False)
+def encode_stage():
     return SimpleNamespace(
         vae=SimpleNamespace(encoder=nn.Linear(4, 4), decoder=nn.Linear(4, 4))
     )
 
 
 @pytest.fixture
-def duration_stage(monkeypatch):
-    monkeypatch.delenv("SGLANG_RBLN_DURATION_HEAD_ON_NPU", raising=False)
+def duration_stage():
     return SimpleNamespace(duration_head=nn.Linear(4, 4))
 
 
@@ -90,15 +88,8 @@ def test_encoder_spans_the_devices_of_the_vae(encode_stage, compiled, monkeypatc
     assert (options["num_devices"], options["device"]) == (4, [4, 5, 6, 7])
 
 
-@pytest.mark.parametrize(
-    ("requested", "server_args"),
-    [("0", COMPILE), ("1", SimpleNamespace(enable_torch_compile=False))],
-    ids=["opted-out", "compile-disabled"],
-)
-def test_leaves_the_encoder_eager(
-    encode_stage, compiled, monkeypatch, requested, server_args
-):
-    monkeypatch.setenv("SGLANG_RBLN_COMPILE_VAE_ENCODER", requested)
+def test_leaves_the_encoder_eager_without_torch_compile(encode_stage, compiled):
+    server_args = SimpleNamespace(enable_torch_compile=False)
     image_encoding.compile_video_encoder(forward, encode_stage, None, server_args)
     assert compiled == []
 
@@ -136,18 +127,14 @@ def test_duration_head_compiles_for_the_set_of_its_inputs(
 
 
 @pytest.mark.parametrize(
-    ("requested", "batch", "server_args"),
+    ("batch", "server_args"),
     [
-        ("0", AUTO, COMPILE),
-        ("1", SimpleNamespace(auto_duration=False), COMPILE),
-        ("1", AUTO, SimpleNamespace(enable_torch_compile=False)),
+        (SimpleNamespace(auto_duration=False), COMPILE),
+        (AUTO, SimpleNamespace(enable_torch_compile=False)),
     ],
-    ids=["opted-out", "fixed-duration", "compile-disabled"],
+    ids=["fixed-duration", "compile-disabled"],
 )
-def test_leaves_the_duration_head_eager(
-    duration_stage, compiled, monkeypatch, requested, batch, server_args
-):
-    monkeypatch.setenv("SGLANG_RBLN_DURATION_HEAD_ON_NPU", requested)
+def test_leaves_the_duration_head_eager(duration_stage, compiled, batch, server_args):
     duration.compile_duration_head(forward, duration_stage, batch, server_args)
     assert compiled == []
 

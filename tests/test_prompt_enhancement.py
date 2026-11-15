@@ -216,7 +216,7 @@ def recorded_shapes(model, prompt_tokens: int, monkeypatch) -> set:
 def test_the_graphs_do_not_follow_the_prompt_length(tiny_enhancer, monkeypatch):
     # a server that compiled a graph per prompt length would pay the compile again for
     # every new length it sees
-    monkeypatch.setenv("SGLANG_RBLN_PROMPT_ENHANCER_MAX_SEQ_LEN", "512")
+    monkeypatch.setattr(prompt_enhancement, "CACHE_WINDOW", 512)
 
     short = recorded_shapes(tiny_enhancer, 20, monkeypatch)
     long = recorded_shapes(tiny_enhancer, 300, monkeypatch)
@@ -224,16 +224,16 @@ def test_the_graphs_do_not_follow_the_prompt_length(tiny_enhancer, monkeypatch):
     assert short == long == {((1, 128), (1, 512)), ((1, 1), (1, 512))}
 
 
-def test_a_prompt_past_the_configured_length_still_runs(tiny_enhancer, monkeypatch):
-    monkeypatch.setenv("SGLANG_RBLN_PROMPT_ENHANCER_MAX_SEQ_LEN", "128")
+def test_a_prompt_past_the_cache_window_still_runs(tiny_enhancer, monkeypatch):
+    monkeypatch.setattr(prompt_enhancement, "CACHE_WINDOW", 128)
 
     shapes = recorded_shapes(tiny_enhancer, 200, monkeypatch)
 
     assert shapes == {((1, 128), (1, 256)), ((1, 1), (1, 256))}
 
 
-def test_the_configured_length_is_what_the_cache_is_compiled_for(monkeypatch):
-    monkeypatch.setenv("SGLANG_RBLN_PROMPT_ENHANCER_MAX_SEQ_LEN", "1024")
+def test_the_cache_window_is_what_the_cache_is_compiled_for(monkeypatch):
+    monkeypatch.setattr(prompt_enhancement, "CACHE_WINDOW", 1024)
     assert prompt_enhancement.cache_window(900) == 1024
     assert prompt_enhancement.cache_window(1024) == 1024
     assert (
@@ -261,17 +261,7 @@ def test_the_system_prompt_comes_from_a_file_when_one_is_named(monkeypatch, tmp_
     assert upstream_default and upstream_default != recipe.read_text()
 
 
-@pytest.mark.parametrize(
-    ("variable", "argument", "value", "default"),
-    [
-        ("SGLANG_RBLN_PROMPT_ENHANCER_MAX_NEW_TOKENS", "max_new_tokens", "64", 512),
-        ("SGLANG_RBLN_PROMPT_ENHANCER_NO_REPEAT_NGRAM", "no_repeat_ngram", "5", 0),
-    ],
-)
-def test_the_decode_settings_reach_greedy_decode(
-    monkeypatch, variable, argument, value, default
-):
-    # they are read per request, so a running server picks up a change
+def test_decoding_follows_ltx_cores_recipe(monkeypatch):
     seen = []
     monkeypatch.setattr(
         prompt_enhancement,
@@ -291,12 +281,9 @@ def test_the_decode_settings_reach_greedy_decode(
         ),
     )
 
-    monkeypatch.delenv(variable, raising=False)
-    enhancer.enhance("a fox", "video")
-    monkeypatch.setenv(variable, value)
     enhancer.enhance("a fox", "video")
 
-    assert [kwargs[argument] for kwargs in seen] == [default, int(value)]
+    assert seen == [{"max_new_tokens": 600, "no_repeat_ngram": 5, "step": None}]
 
 
 def test_the_decode_step_compiles_to_one_device_function(
@@ -466,14 +453,13 @@ def test_refuses_image_prompts(served):
     assert served.calls == []
 
 
-def test_user_turn_defaults_to_upstreams_format(monkeypatch):
-    monkeypatch.delenv("SGLANG_RBLN_PROMPT_ENHANCER_USER_TEMPLATE", raising=False)
+def test_the_user_turn_matches_the_system_prompt_in_use(monkeypatch, tmp_path):
+    # upstream's system prompt reads a JSON turn; ltx-core's a plain one
+    monkeypatch.delenv("SGLANG_RBLN_PROMPT_ENHANCER_SYSTEM_PROMPT", raising=False)
     enhancer = object.__new__(prompt_enhancement.ModelPromptEnhancer)
     assert json.loads(enhancer.user_turn("a fox", "video")) == {
         "task": "video",
         "prompt": "a fox",
     }
-    monkeypatch.setenv(
-        "SGLANG_RBLN_PROMPT_ENHANCER_USER_TEMPLATE", "user prompt: {prompt}"
-    )
+    monkeypatch.setenv("SGLANG_RBLN_PROMPT_ENHANCER_SYSTEM_PROMPT", str(tmp_path))
     assert enhancer.user_turn("a fox", "video") == "user prompt: a fox"

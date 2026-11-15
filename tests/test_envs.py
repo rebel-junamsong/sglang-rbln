@@ -12,21 +12,8 @@ from sglang_rbln import envs
     [("1", True), ("true", True), (" YES ", True), ("0", False), ("", False)],
 )
 def test_flags_accept_truthy_spellings(monkeypatch, value, expected):
-    monkeypatch.setenv("SGLANG_RBLN_STATIC_OUTPUT", value)
-    assert envs.SGLANG_RBLN_STATIC_OUTPUT is expected
-
-
-@pytest.mark.parametrize(
-    ("value", "expected"),
-    [(None, True), ("", True), ("1", True), ("0", False), (" false ", False)],
-    ids=["unset", "empty", "on", "off", "spelled-off"],
-)
-def test_compile_strict_is_on_unless_turned_off(monkeypatch, value, expected):
-    if value is None:
-        monkeypatch.delenv("SGLANG_RBLN_COMPILE_STRICT", raising=False)
-    else:
-        monkeypatch.setenv("SGLANG_RBLN_COMPILE_STRICT", value)
-    assert envs.SGLANG_RBLN_COMPILE_STRICT is expected
+    monkeypatch.setenv("SGLANG_RBLN_COMPILE_ONLY", value)
+    assert envs.SGLANG_RBLN_COMPILE_ONLY is expected
 
 
 @pytest.mark.parametrize(
@@ -59,7 +46,6 @@ def test_values_are_parsed(monkeypatch, name, value, expected):
         ("SGLANG_RBLN_PROFILE_REQUEST", 3),
         ("SGLANG_RBLN_BLOCKS_PER_REGION", None),
         ("SGLANG_RBLN_CACHE_DIR", Path.home() / ".cache" / "sglang_rbln"),
-        ("SGLANG_RBLN_COMPILE_AUDIO", True),
     ],
 )
 def test_defaults(monkeypatch, name, expected):
@@ -72,11 +58,17 @@ def test_unknown_names_raise():
         _ = envs.SGLANG_RBLN_UNKNOWN
 
 
-def test_readme_documents_every_plugin_variable():
+# Set by the platform from --tp-size for the worker processes, not by users.
+INTERNAL_VARIABLES = {"SGLANG_RBLN_NUM_DEVICES"}
+
+
+def test_readme_documents_every_user_facing_variable():
     readme = Path(__file__).parents[1] / "README.md"
     documented = re.findall(r"^\| `(SGLANG_RBLN_\w+)", readme.read_text(), re.M)
     assert sorted(documented) == sorted(
-        name for name in envs.environment_variables if name.startswith("SGLANG_RBLN_")
+        name
+        for name in envs.environment_variables
+        if name.startswith("SGLANG_RBLN_") and name not in INTERNAL_VARIABLES
     )
 
 

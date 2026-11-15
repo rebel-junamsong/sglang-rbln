@@ -55,7 +55,6 @@ def audio_stage_fixture():
 
 @pytest.fixture(name="chained")
 def chained_fixture(monkeypatch):
-    monkeypatch.setenv("SGLANG_RBLN_COMPILE_AUDIO", "1")
     calls = []
     monkeypatch.setattr(
         nn.Module, "compile", lambda module, **kwargs: calls.append((module, kwargs))
@@ -110,16 +109,8 @@ def test_chain_runs_on_the_vocoders_placed_npu(audio_stage, chained):
     assert (options["num_devices"], options["device"]) == (1, [8])
 
 
-@pytest.mark.parametrize(
-    ("requested", "enable_torch_compile"),
-    [("0", True), ("1", False)],
-    ids=["opted-out", "compile-disabled"],
-)
-def test_leaves_the_audio_modules_eager(
-    audio_stage, chained, monkeypatch, requested, enable_torch_compile
-):
-    monkeypatch.setenv("SGLANG_RBLN_COMPILE_AUDIO", requested)
-    server_args = SimpleNamespace(enable_torch_compile=enable_torch_compile)
+def test_leaves_the_audio_modules_eager_without_torch_compile(audio_stage, chained):
+    server_args = SimpleNamespace(enable_torch_compile=False)
     vocoder.compile_audio(forward, audio_stage, None, server_args)
     assert chained == []
     assert audio_stage.audio_vae.latents_mean is not None

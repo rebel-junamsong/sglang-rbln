@@ -6,7 +6,6 @@ import torch
 from sglang.multimodal_gen.runtime.utils.precision import align_tensor_to_module_dtype
 from torch import nn
 
-from sglang_rbln import envs
 from sglang_rbln.compilation import placement
 from sglang_rbln.compilation.backend import COMPILED, compile_whole
 
@@ -53,8 +52,7 @@ def compile_audio(forward, stage, batch, server_args):
     audio_vae = getattr(stage, "audio_vae", None)
     vocoder = getattr(stage, "vocoder", None)
     if (
-        envs.SGLANG_RBLN_COMPILE_AUDIO
-        and server_args.enable_torch_compile
+        server_args.enable_torch_compile
         and audio_vae is not None
         and vocoder is not None
         and not getattr(vocoder, COMPILED, False)

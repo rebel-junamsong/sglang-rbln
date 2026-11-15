@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry, HookType
 
-from sglang_rbln import envs
 from sglang_rbln.compilation import placement
 from sglang_rbln.compilation.backend import COMPILED, compile_whole
 from sglang_rbln.compilation.regions import run_on_cpu_if_it_does_not_fit
@@ -18,10 +17,7 @@ HOOK_TARGET = (
 def compile_duration_head(forward, stage, batch, server_args):
     head = stage.duration_head
     if not (
-        envs.SGLANG_RBLN_DURATION_HEAD_ON_NPU
-        and server_args.enable_torch_compile
-        and batch.auto_duration
-        and head is not None
+        server_args.enable_torch_compile and batch.auto_duration and head is not None
     ):
         return forward(stage, batch, server_args)
     if not getattr(head, COMPILED, False):

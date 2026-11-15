@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry, HookType
 
-from sglang_rbln import envs
 from sglang_rbln.compilation.backend import (
     COMPILED,
     compile_once,
@@ -20,11 +19,7 @@ HOOK_TARGET = (
 
 def compile_video_encoder(forward, stage, batch, server_args):
     encoder = getattr(stage.vae, "encoder", None)
-    if not (
-        envs.SGLANG_RBLN_COMPILE_VAE_ENCODER
-        and server_args.enable_torch_compile
-        and encoder is not None
-    ):
+    if not (server_args.enable_torch_compile and encoder is not None):
         return forward(stage, batch, server_args)
     if not getattr(encoder, COMPILED, False):
         compile_once(encoder, "video encoder", static_compile_kwargs(encoder))

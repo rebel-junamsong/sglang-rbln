@@ -9,9 +9,11 @@ configured, the request runs that component here, compiled on
 static KV cache. The decoder's own forward compiles whole from the token ids, putting
 embeddings, masks and rotary on the device too.
 
-The chat turn follows upstream's enhancer unless ``..._SYSTEM_PROMPT`` (a file),
-``..._USER_TEMPLATE``, ``..._MAX_NEW_TOKENS`` or ``..._NO_REPEAT_NGRAM`` say otherwise;
-the README lists them in full.
+Decoding follows ltx-core's official enhancer recipe: greedy, no repeated 5-gram, at
+most 600 new tokens. The chat turn is upstream's (its system prompt, a JSON user turn)
+unless ``SGLANG_RBLN_PROMPT_ENHANCER_SYSTEM_PROMPT`` names a system prompt file, such
+as ltx-core's ``gemma4_t2v_system_prompt.txt``: the user turn is then that recipe's
+``user prompt: {prompt}``.
 """
 
 from __future__ import annotations
@@ -40,6 +42,13 @@ HOOK_TARGET = (
 )
 COMPONENT = "prompt_enhancer"
 PREFILL_CHUNK = 128
+# ltx-core's GEMMA4_ENHANCE_GENERATION_KWARGS, greedy
+MAX_NEW_TOKENS = 600
+NO_REPEAT_NGRAM = 5
+# The static KV cache length every request compiles for: ltx-core's system prompt (782
+# tokens), a user prompt and MAX_NEW_TOKENS. A longer request runs on graphs of its
+# own.
+CACHE_WINDOW = 2048
 
 
 def cache_device(step, model) -> torch.device:
@@ -86,22 +95,20 @@ def window_cache(model, window: int, device: torch.device | None = None):
 
 
 def cache_window(needed: int) -> int:
-    """The static cache length, one configured size for every request.
+    """The static cache length, the same for every request that fits it.
 
     The cache length and the prefill chunk are the shapes the prefill and the decode
     graph are compiled for, so holding them still is what keeps a server from compiling
-    a new pair of graphs for every prompt length it sees. A prompt that does not fit the
-    configured length still runs, on graphs of its own.
+    a new pair of graphs for every prompt length it sees. A prompt that does not fit
+    still runs, on graphs of its own.
     """
-    limit = envs.SGLANG_RBLN_PROMPT_ENHANCER_MAX_SEQ_LEN
-    if needed <= limit:
-        return limit
+    if needed <= CACHE_WINDOW:
+        return CACHE_WINDOW
     logger.warning(
-        "The prompt and its rewrite need %d tokens, past the %d of "
-        "SGLANG_RBLN_PROMPT_ENHANCER_MAX_SEQ_LEN; this request compiles graphs of its "
-        "own. Raise that setting to keep every request on one pair of graphs.",
+        "The prompt and its rewrite need %d tokens, past the %d-token cache; this "
+        "request compiles graphs of its own.",
         needed,
-        limit,
+        CACHE_WINDOW,
     )
     return -(-needed // PREFILL_CHUNK) * PREFILL_CHUNK
 
@@ -129,7 +136,7 @@ def greedy_decode(
     """Greedy decoding with a static KV cache: one prefill shape, one decode shape.
 
     Both shapes belong to the configuration, not the request -- fixed ``PREFILL_CHUNK``
-    chunks against a cache of ``SGLANG_RBLN_PROMPT_ENHANCER_MAX_SEQ_LEN`` -- so prompts
+    chunks against a cache of ``CACHE_WINDOW`` -- so prompts
     of every length run the same two graphs. ``step`` is the module they run, the
     model's decoder by default.
 
@@ -214,7 +221,7 @@ class ModelPromptEnhancer:
     @staticmethod
     def _system_prompt() -> str:
         if path := envs.SGLANG_RBLN_PROMPT_ENHANCER_SYSTEM_PROMPT:
-            return Path(path).read_text()
+            return path.read_text()
         return upstream.PromptEnhancerConfig.model_fields["system_prompt"].default
 
     def _compile(self) -> None:
@@ -230,8 +237,10 @@ class ModelPromptEnhancer:
         logger.info("Compiling the prompt enhancer's decoder and head")
 
     def user_turn(self, prompt: str, task: str) -> str:
-        if template := envs.SGLANG_RBLN_PROMPT_ENHANCER_USER_TEMPLATE:
-            return template.format(prompt=prompt, task=task)
+        """The turn the system prompt in use expects: ltx-core's plain one with its
+        prompt file, upstream's JSON with upstream's prompt."""
+        if envs.SGLANG_RBLN_PROMPT_ENHANCER_SYSTEM_PROMPT:
+            return f"user prompt: {prompt}"
         return json.dumps({"task": task, "prompt": prompt}, ensure_ascii=False)
 
     def enhance(self, prompt: str, task: str) -> str:
@@ -246,8 +255,8 @@ class ModelPromptEnhancer:
             tokens = greedy_decode(
                 self.model,
                 input_ids,
-                max_new_tokens=envs.SGLANG_RBLN_PROMPT_ENHANCER_MAX_NEW_TOKENS,
-                no_repeat_ngram=envs.SGLANG_RBLN_PROMPT_ENHANCER_NO_REPEAT_NGRAM,
+                max_new_tokens=MAX_NEW_TOKENS,
+                no_repeat_ngram=NO_REPEAT_NGRAM,
                 step=self.step,
             )
         rewritten = self.tokenizer.decode(tokens, skip_special_tokens=True).strip()

@@ -12,7 +12,6 @@ from sglang_rbln.patches.managers import gpu_worker
 from sglang_rbln.patches.models import (
     ltx_2,
     ltx_2_text_features,
-    ltx_2_tile_ranks,
 )
 from sglang_rbln.patches.stages import compile_only, text_encoding
 from sglang_rbln.patches.stages.ltx_2 import (
@@ -38,7 +37,6 @@ def register() -> None:
     video_sparse_attn.register()
     regions.register()
     ltx_2.register()
-    ltx_2_tile_ranks.register()
     text_encoding.register()
     decoding_av.register()
     image_encoding.register()

@@ -137,26 +137,10 @@ class TestCompileOptions:
         ("env", "expected"),
         [
             ({}, {"mode": ["strict"]}),
-            ({"SGLANG_RBLN_COMPILE_STRICT": "0"}, {}),
-            (
-                {"SGLANG_RBLN_STATIC_OUTPUT": "1"},
-                {"mode": ["strict"], "use_static_output": True},
-            ),
             ({"SGLANG_RBLN_NUM_DEVICES": "4"}, {"mode": ["strict"], "num_devices": 4}),
-            (
-                {"SGLANG_RBLN_COMPILE_ONLY": "1", "SGLANG_RBLN_COMPILE_STRICT": "0"},
-                {"mode": ["compile_only"]},
-            ),
             ({"SGLANG_RBLN_COMPILE_ONLY": "1"}, {"mode": ["compile_only", "strict"]}),
         ],
-        ids=[
-            "strict-by-default",
-            "fallback-allowed",
-            "static-output",
-            "num-devices",
-            "compile-only",
-            "both",
-        ],
+        ids=["always-strict", "num-devices", "compile-only"],
     )
     def test_switches(self, monkeypatch, env, expected):
         for name, value in env.items():
