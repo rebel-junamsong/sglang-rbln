@@ -126,6 +126,7 @@ FP32_APPEND_DTYPE = {
     "norm.ScalarOpt_dim": "norm.ScalarOpt_dim_dtype",
 }
 BANNED = ("binary_cross_entropy",)
+# CUDA autocast kernels left out: cuDNN ops, which rbln tensors never reach.
 CUDA_ONLY = ("cudnn_convolution", "cudnn_convolution_transpose")
 PROMOTE = (
     "addcdiv",
@@ -141,6 +142,7 @@ PROMOTE = (
     "scatter_add",
 )
 
+# Held for the process: a Library drops its registrations when collected.
 _libraries: list[torch.library.Library] = []
 
 
@@ -222,7 +224,7 @@ def cuda_autocast_overloads() -> set[str]:
     }
 
 
-def _overloads(name: str, covered: set[str]):
+def _covered_overloads(name: str, covered: set[str]):
     packet = getattr(torch.ops.aten, name, None)
     if packet is None:
         return
@@ -232,7 +234,7 @@ def _overloads(name: str, covered: set[str]):
             yield getattr(packet, overload)
 
 
-def _overload(qualified: str):
+def _aten_overload(qualified: str):
     name, _, overload = qualified.partition(".")
     return getattr(getattr(torch.ops.aten, name), overload or "default")
 
@@ -241,7 +243,9 @@ def register() -> list[str]:
     """Register the policy at ``AutocastPrivateUse1``; returns the ops it covers."""
     if _libraries:
         return []
+    # torch.autocast turns itself off for a dtype the device module does not list.
     torch.rbln.get_amp_supported_dtype = lambda: list(AMP_DTYPES)
+    # Ops without a policy run their device kernels, as under CUDA autocast.
     fallthrough = torch.library.Library("_", "IMPL")
     fallthrough.fallback(torch.library.fallthrough_kernel, DISPATCH_KEY)
     library = torch.library.Library("aten", "IMPL")
@@ -256,12 +260,12 @@ def register() -> list[str]:
         (BANNED, _banned),
     ):
         for name in names:
-            for op in _overloads(name, covered):
+            for op in _covered_overloads(name, covered):
                 library.impl(op, functools.partial(policy, op), DISPATCH_KEY)
                 registered.append(str(op))
     for source, target in FP32_APPEND_DTYPE.items():
-        op = _overload(source)
-        append = functools.partial(_fp32_append_dtype, op, _overload(target))
+        op = _aten_overload(source)
+        append = functools.partial(_fp32_append_dtype, op, _aten_overload(target))
         library.impl(op, append, DISPATCH_KEY)
         registered.append(str(op))
     return registered

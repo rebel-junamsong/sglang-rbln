@@ -10,7 +10,7 @@ from sglang_rbln.patches.configs import arch_config
 
 @pytest.fixture
 def traceable_config(monkeypatch):
-    monkeypatch.setattr(ArchConfig, "__getattr__", arch_config.extra_attr)
+    monkeypatch.setattr(ArchConfig, "__getattr__", arch_config.traceable_extra_attr)
 
 
 @pytest.mark.parametrize(

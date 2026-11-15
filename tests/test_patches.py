@@ -68,7 +68,7 @@ class TestLtx2RopeHook:
         assert cos.is_contiguous() and sin.is_contiguous()
         assert torch.equal(cos, table.swapaxes(1, 2))
 
-    @pytest.mark.parametrize("target", ltx_2.HOOK_TARGETS)
+    @pytest.mark.parametrize("target", ltx_2.ROTARY_FORWARDS)
     def test_registers_an_around_hook(self, target):
         assert target in ltx_2.register()
         assert any(

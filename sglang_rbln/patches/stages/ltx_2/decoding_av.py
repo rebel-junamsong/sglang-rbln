@@ -3,16 +3,13 @@
 from __future__ import annotations
 
 import functools
-import logging
 
 import torch
 from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry, HookType
 
 from sglang_rbln.compilation import tiling
-from sglang_rbln.compilation.backend import release_graphs, static_compile_kwargs
+from sglang_rbln.compilation.backend import COMPILED, compile_whole, release_graphs
 from sglang_rbln.patches.stages.ltx_2 import vocoder
-
-logger = logging.getLogger(__name__)
 
 HOOK_TARGET = (
     "sglang.multimodal_gen.runtime.pipelines_core.stages.model_specific_stages"
@@ -21,7 +18,6 @@ HOOK_TARGET = (
 DECODE_TARGET = (
     "sglang.multimodal_gen.runtime.models.vaes.ltx_2_vae.AutoencoderKLLTX2Video.decode"
 )
-COMPILED = "_rbln_decoder_compiled"
 
 
 def compile_video_decoder(forward, stage, batch, server_args, *args, **kwargs):
@@ -30,12 +26,9 @@ def compile_video_decoder(forward, stage, batch, server_args, *args, **kwargs):
         server_args.enable_torch_compile
         and not batch.use_diffusion_decoder
         and vae is not None
-        and not getattr(vae, COMPILED, False)
+        and not getattr(vae.decoder, COMPILED, False)
     ):
-        compile_kwargs = static_compile_kwargs(vae.decoder)
-        vae.decoder.compile(**compile_kwargs)
-        logger.info("Compiling the LTX-2 video decoder: %s", compile_kwargs)
-        setattr(vae, COMPILED, True)
+        compile_whole(vae.decoder, "LTX-2 video decoder")
     return forward(stage, batch, server_args, *args, **kwargs)
 
 
@@ -63,18 +56,12 @@ def decode_within_memory(decode, vae, *args, **kwargs):
 def compile_decoders(forward, stage, batch, server_args):
     audio = functools.partial(vocoder.compile_audio, forward)
     output = compile_video_decoder(audio, stage, batch, server_args)
-    release_cached_device_memory()
-    return output
-
-
-def release_cached_device_memory() -> None:
-    """Give the freed device blocks of the decode back once its video is on the host.
-
-    The VAE's tiles and the video they join are a request's largest device tensors
-    (2.2 GB on the VAE's first NPU at 1280x704x121). Released, every request's decode
-    places them as the first one did.
-    """
+    # The VAE's tiles and the video they join are a request's largest device tensors
+    # (2.2 GB on the VAE's first NPU at 1280x704x121). With the video on the host,
+    # their freed memory goes back, so every request's decode finds the free memory
+    # the first one did.
     torch.rbln.empty_cache()
+    return output
 
 
 def register() -> tuple[str, ...]:

@@ -16,6 +16,8 @@ logger = logging.getLogger(__name__)
 HOOK_TARGET = (
     "sglang.multimodal_gen.runtime.managers.gpu_worker.GPUWorker.execute_forward"
 )
+# Numbers the non-warmup requests from 1 while profiling is on, as
+# SGLANG_RBLN_PROFILE_REQUEST counts them.
 _request_counter = itertools.count(1)
 
 
@@ -46,6 +48,7 @@ def key_request_shape(execute_forward, worker, batch, *args, **kwargs):
         shapes.current_shape_key.reset(token)
 
 
+# sglang takes one AROUND hook per target, so the two compose here.
 def run_request(execute_forward, worker, batch, *args, **kwargs):
     return key_request_shape(
         functools.partial(profile_request, execute_forward),

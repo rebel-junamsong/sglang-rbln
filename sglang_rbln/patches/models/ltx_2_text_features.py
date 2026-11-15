@@ -23,18 +23,17 @@ ENCODE_TEXT = (
     "TextEncodingStage.encode_text"
 )
 PACK = "sglang.multimodal_gen.configs.pipeline_configs.ltx_2.pack_text_embeds_v2"
+# encode_text(text, server_args, encoder_index, return_attention_mask, return_type,
+# device, ...): the index of `device` among the arguments after server_args.
+DEVICE_POSITION = 3
 _pack_graphs: dict[tuple, nn.Module] = {}
-
-
-def _connector_devices() -> tuple[int, ...] | None:
-    return placement.component_devices("connectors")
 
 
 def encode_text(forward, self, text, server_args, *args, **kwargs):
     """Upstream moves the packed features to the platform device, the host; with the
     connectors placed they stay on the connectors' NPUs, where they were packed."""
-    devices = _connector_devices()
-    if devices and len(args) < 4 and kwargs.get("device") is None:
+    devices = placement.component_devices("connectors")
+    if devices and len(args) <= DEVICE_POSITION and kwargs.get("device") is None:
         kwargs["device"] = torch.device("rbln", residency.logical_device_on(devices))
     return forward(self, text, server_args, *args, **kwargs)
 
@@ -63,13 +62,13 @@ def pack_text_features(pack, hidden_states, attention_mask, *args, **kwargs):
     return module(hidden_states, attention_mask)
 
 
-TARGETS = {
+HOOKS = {
     ENCODE_TEXT: encode_text,
     PACK: pack_text_features,
 }
 
 
 def register() -> tuple[str, ...]:
-    for target, hook in TARGETS.items():
+    for target, hook in HOOKS.items():
         HookRegistry.register(target, hook, HookType.AROUND)
-    return tuple(TARGETS)
+    return tuple(HOOKS)

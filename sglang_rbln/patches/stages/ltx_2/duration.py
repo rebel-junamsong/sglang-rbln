@@ -21,8 +21,8 @@ def compile_duration_head(forward, stage, batch, server_args):
     ):
         return forward(stage, batch, server_args)
     if not getattr(head, COMPILED, False):
-        # The head reads the text encoder's output, so it belongs on that set
-        # unless it was placed itself. Without one it falls to the DiT's NPUs.
+        # The head reads the text encoder's output, so unless it was placed itself
+        # it goes on the text encoder's set; with neither, on the DiT's NPUs.
         if placement.devices_of(head) is None and (
             devices := placement.text_encoder_devices()
         ):

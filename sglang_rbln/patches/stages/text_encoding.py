@@ -22,6 +22,7 @@ LTX2_STAGES = f"{STAGES}.model_specific_stages.ltx_2"
 HOOK_TARGET = f"{STAGES}.text_encoding.TextEncodingStage.forward"
 CONNECTOR_HOOK_TARGET = f"{LTX2_STAGES}.text_connector.LTX2TextConnectorStage.forward"
 COMPILED = "_rbln_regions_compiled"
+# transformers' qualname, its typo included.
 CAPTURE_HOOK = "install_output_capuring_hook.<locals>.output_capturing_hook"
 CONNECTOR_PROJECTIONS = (
     "text_proj_in",
@@ -30,6 +31,8 @@ CONNECTOR_PROJECTIONS = (
 )
 
 
+# Dynamo skips entry frames inside torch.nn, so a compiled bare nn.Linear traces
+# nothing; a subclass whose forward is defined here gives dynamo a frame to trace.
 @functools.cache
 def _traceable_class(cls: type[nn.Module]) -> type[nn.Module]:
     def forward(self, *args, **kwargs):
@@ -54,6 +57,9 @@ def _without_capture_hooks(hooks: dict) -> OrderedDict:
 
 
 def install_capture_hooks(module: nn.Module) -> None:
+    """Install transformers' output-capture hooks before the layers compile, so
+    `capture_outside` finds them; transformers installs them on the first forward
+    that requests an output."""
     from transformers import PreTrainedModel
     from transformers.utils.output_capturing import maybe_install_capturing_hooks
 
@@ -61,15 +67,22 @@ def install_capture_hooks(module: nn.Module) -> None:
         maybe_install_capturing_hooks(module)
 
 
-def is_captured(layer: nn.Module) -> bool:
+def has_capture_hook(layer: nn.Module) -> bool:
     return any(map(_is_capture_hook, layer._forward_hooks.values()))
 
 
 def capture_outside(layer: nn.Module) -> nn.Module:
+    """The module to compile for `layer`, without transformers' output-capture hooks.
+
+    The hooks read a ContextVar, which dynamo cannot trace. The submodules' hooks are
+    dropped, as nothing here requests their outputs. When `layer` has its own, it
+    keeps them and calls a hook-free shallow copy, so they run eagerly around the
+    graph.
+    """
     for submodule in layer.modules():
         if submodule is not layer:
             submodule._forward_hooks = _without_capture_hooks(submodule._forward_hooks)
-    if not is_captured(layer):
+    if not has_capture_hook(layer):
         return layer
     region = copy.copy(layer)
     region._forward_hooks = _without_capture_hooks(layer._forward_hooks)
@@ -80,41 +93,48 @@ def capture_outside(layer: nn.Module) -> nn.Module:
 def layer_stack(module: nn.Module) -> list[nn.Module]:
     if names := getattr(module, "layer_names", ()):
         return [layer for name in names for layer in module.get_submodule(name)]
+    # An encoder without layer_names (Gemma 4 Unified on sglang 0.5.21) names its
+    # decoder layer class in _no_split_modules.
     blocks = set(getattr(module, "_no_split_modules", None) or ())
     return [m for m in module.modules() if type(m).__name__ in blocks]
 
 
-def layer_lists(module: nn.Module) -> list[list[nn.Module]]:
+def layer_runs(module: nn.Module) -> list[list[nn.Module]]:
+    """The module's layers, in runs of consecutive indices under one parent."""
     stack = {id(layer) for layer in layer_stack(module)}
     named = [(name, m) for name, m in module.named_modules() if id(m) in stack]
     return regions.consecutive_runs(named)
 
 
 def compile_regions(module: nn.Module, projections: Iterable[str] = ()) -> int:
+    """Compile `module`'s layer runs as regions and its named `projections` whole,
+    once per module; returns how many graphs that makes."""
     if getattr(module, COMPILED, False):
         return 0
     install_capture_hooks(module)
-    lists = layer_lists(module)
+    runs = layer_runs(module)
     linears = [
         traceable(linear)
         for name in projections
         if (linear := getattr(module, name, None)) is not None
     ]
     graphs = 0
-    if lists or linears:
+    if runs or linears:
         compile_kwargs = static_compile_kwargs(module)
-        size = envs.SGLANG_RBLN_BLOCKS_PER_REGION
-        for layers in lists:
-            captured = any(map(is_captured, layers))
+        blocks_per_region = envs.SGLANG_RBLN_BLOCKS_PER_REGION
+        for layers in runs:
+            keep_outputs = any(map(has_capture_hook, layers))
             layers = [capture_outside(layer) for layer in layers]
-            regions.group_blocks(layers, size, compile_kwargs, captured)
-            graphs += regions.graph_count(layers, size)
+            regions.group_blocks(
+                layers, blocks_per_region, compile_kwargs, keep_outputs
+            )
+            graphs += regions.graph_count(layers, blocks_per_region)
         for linear in linears:
             linear.compile(**compile_kwargs)
         graphs += len(linears)
         logger.info(
             "Compiling %d layers and %d projections of %s as %d regions",
-            sum(map(len, lists)),
+            sum(map(len, runs)),
             len(linears),
             type(module).__name__,
             graphs,

@@ -15,9 +15,7 @@ def audio_devices(vocoder: nn.Module) -> tuple[int, ...] | None:
 
     The DiT's set has no room for the audio graphs beside both DiT shapes and the VAE.
     """
-    if devices := placement.devices_of(vocoder):
-        return devices
-    return placement.text_encoder_devices()
+    return placement.devices_of(vocoder) or placement.text_encoder_devices()
 
 
 class AudioChain(nn.Module):

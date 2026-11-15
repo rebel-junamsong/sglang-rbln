@@ -91,7 +91,7 @@ def test_keeps_the_lora_dynamic_in_both_stages(lora, phase, strength):
     assert switched == [phase]
     assert calls == [
         (
-            (detailing.ADAPTER, str(lora)),
+            (detailing.ADAPTER_NAME, str(lora)),
             {"target": "transformer", "strength": strength, "merge_weights": False},
         )
     ]
@@ -109,7 +109,7 @@ def test_leaves_the_pipeline_alone_without_the_lora(monkeypatch):
 
 
 def test_keeps_the_stage1_latent_as_tokens(upsampled, stage1_latents):
-    tokens, grid = upsampled.extra[detailing.REFERENCE]
+    tokens, grid = upsampled.extra[detailing.REFERENCE_KEY]
     torch.testing.assert_close(tokens, pack(stage1_latents, 1, None))
     assert grid == (FRAMES, HEIGHT, WIDTH, FPS, 2)
 
@@ -117,7 +117,7 @@ def test_keeps_the_stage1_latent_as_tokens(upsampled, stage1_latents):
 def test_reference_lands_on_the_target_grid(model, upsampled):
     """ltx-core scales a reference token's height and width by the downscale
     factor, so reference cell (f, i, j) starts where target cell (f, 2i, 2j) does."""
-    reference = upsampled.extra[detailing.REFERENCE]
+    reference = upsampled.extra[detailing.REFERENCE_KEY]
     coords = detailing.reference_coords(model, reference, 1, "cpu")
     target = model.rope.prepare_video_coords(
         1, FRAMES, 2 * HEIGHT, 2 * WIDTH, "cpu", FPS
@@ -147,9 +147,9 @@ def test_appends_clean_reference_tokens(upsampled):
     ctx = detailing.append_reference(
         lambda *a: stage2_context(noisy), None, upsampled, None
     )
-    tokens = upsampled.extra[detailing.REFERENCE][0]
+    tokens = upsampled.extra[detailing.REFERENCE_KEY][0]
     count = noisy.shape[1]
-    assert upsampled.extra[detailing.TARGET_TOKENS] == count
+    assert upsampled.extra[detailing.TARGET_TOKENS_KEY] == count
     torch.testing.assert_close(ctx.latents, torch.cat([noisy, tokens], dim=1))
     torch.testing.assert_close(ctx.clean_latent[:, count:], tokens)
     # Timestep = sigma * mask per token: the reference stays at timestep 0.
@@ -176,7 +176,7 @@ def test_model_sees_reference_positions(model, upsampled):
     inputs = detailing.reference_positions(
         lambda *a: inputs, None, ctx, step, upsampled
     )
-    reference = upsampled.extra[detailing.REFERENCE]
+    reference = upsampled.extra[detailing.REFERENCE_KEY]
     expected = torch.cat(
         [
             model.rope.prepare_video_coords(
@@ -191,7 +191,7 @@ def test_model_sees_reference_positions(model, upsampled):
 
 
 def test_decodes_only_the_target_tokens(upsampled):
-    upsampled.extra[detailing.TARGET_TOKENS] = 5
+    upsampled.extra[detailing.TARGET_TOKENS_KEY] = 5
     seen = []
     detailing.drop_reference(
         lambda stage, batch, latents, **k: seen.append(latents),

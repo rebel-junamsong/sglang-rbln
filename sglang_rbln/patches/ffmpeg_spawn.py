@@ -1,16 +1,23 @@
 # SPDX-License-Identifier: Apache-2.0
+"""Spawn imageio-ffmpeg's ffmpeg in its own process group without ``preexec_fn``.
+
+imageio-ffmpeg passes ``preexec_fn=os.setpgrp``, which makes CPython fork() the
+whole worker; a worker holding many NPU runtimes spent seconds copying its page
+tables per saved video. ``process_group=0`` puts ffmpeg in its own group the same
+way and keeps the spawn on the vfork path.
+"""
 
 from __future__ import annotations
 
 import functools
 import os
-import sys
 from collections.abc import Callable
 from importlib import import_module
 from typing import Any
 
+# _io imports its own reference to _utils._popen_kwargs.
 PATCHED_MODULES = ("imageio_ffmpeg._utils", "imageio_ffmpeg._io")
-PATCHED_NAME = "_popen_kwargs"
+PATCHED_FUNCTION = "_popen_kwargs"
 
 
 def spawn_in_own_group(popen_kwargs: Callable[..., dict[str, Any]]):
@@ -27,14 +34,8 @@ def spawn_in_own_group(popen_kwargs: Callable[..., dict[str, Any]]):
 
 
 def register() -> tuple[str, ...]:
-    if sys.platform.startswith("win"):
-        return ()
-    try:
-        modules = [import_module(name) for name in PATCHED_MODULES]
-    except ImportError:
-        return ()
-    for module in modules:
-        original = getattr(module, PATCHED_NAME)
+    for module in map(import_module, PATCHED_MODULES):
+        original = getattr(module, PATCHED_FUNCTION)
         if not getattr(original, "spawns_in_own_group", False):
-            setattr(module, PATCHED_NAME, spawn_in_own_group(original))
+            setattr(module, PATCHED_FUNCTION, spawn_in_own_group(original))
     return PATCHED_MODULES

@@ -22,11 +22,13 @@ from sglang_rbln import envs
 
 logger = logging.getLogger(__name__)
 
-ADAPTER = "ltx2_detailing"
+ADAPTER_NAME = "ltx2_detailing"
 # ltx-pipelines dfr_helpers/ops.py DETAILING_LORA_STRENGTH
 STAGE_STRENGTHS = {"stage1": 0.0, "stage2": 0.5}
-REFERENCE = "rbln_ltx2_reference"
-TARGET_TOKENS = "rbln_ltx2_target_tokens"
+# batch.extra keys: the stage-1 reference, and how many noisy tokens precede it in
+# the stage-2 sequence.
+REFERENCE_KEY = "rbln_ltx2_reference"
+TARGET_TOKENS_KEY = "rbln_ltx2_target_tokens"
 
 PIPELINE = "sglang.multimodal_gen.runtime.pipelines.ltx_2_pipeline.LTX2TwoStagePipeline"
 STAGES = (
@@ -51,7 +53,7 @@ def switch_lora_phase(switch, pipeline, phase, *args, **kwargs):
     switch(pipeline, phase, *args, **kwargs)
     if (path := envs.SGLANG_RBLN_LTX2_DETAILING_LORA) and phase in STAGE_STRENGTHS:
         pipeline.set_lora(
-            ADAPTER,
+            ADAPTER_NAME,
             str(path),
             target="transformer",
             strength=STAGE_STRENGTHS[phase],
@@ -60,7 +62,8 @@ def switch_lora_phase(switch, pipeline, phase, *args, **kwargs):
 
 
 def keep_reference(forward, stage, batch, server_args, *args, **kwargs):
-    """Keep the stage-1 latent, as stage-2 tokens with their RoPE positions."""
+    """Keep the stage-1 latent as stage-2 reference tokens, with the grid, fps and
+    downscale factor their RoPE positions are built from."""
     if not (path := envs.SGLANG_RBLN_LTX2_DETAILING_LORA):
         return forward(stage, batch, server_args, *args, **kwargs)
     latents = batch.latents
@@ -70,7 +73,7 @@ def keep_reference(forward, stage, batch, server_args, *args, **kwargs):
     )
     fps = batch.fps
     batch = forward(stage, batch, server_args, *args, **kwargs)
-    batch.extra[REFERENCE] = (
+    batch.extra[REFERENCE_KEY] = (
         tokens.contiguous(),
         (frames, height, width, fps, reference_downscale_factor(str(path))),
     )
@@ -93,7 +96,7 @@ def reference_coords(model, reference, batch_size: int, device) -> torch.Tensor:
 
 def append_reference(prepare, stage, batch, server_args, *args, **kwargs):
     ctx = prepare(stage, batch, server_args, *args, **kwargs)
-    reference = batch.extra.get(REFERENCE)
+    reference = batch.extra.get(REFERENCE_KEY)
     if reference is None or ctx.stage != "stage2":
         return ctx
     if batch.did_sp_shard_latents:
@@ -107,7 +110,7 @@ def append_reference(prepare, stage, batch, server_args, *args, **kwargs):
             (*latents.shape[:2], 1), device=latents.device, dtype=torch.float32
         )
     clean = ctx.clean_latent if ctx.clean_latent is not None else latents
-    batch.extra[TARGET_TOKENS] = latents.shape[1]
+    batch.extra[TARGET_TOKENS_KEY] = latents.shape[1]
     ctx.latents = torch.cat([latents, tokens], dim=1)
     ctx.clean_latent = torch.cat([clean, tokens.to(clean.dtype)], dim=1)
     ctx.denoise_mask = torch.cat([mask, mask.new_zeros(*tokens.shape[:2], 1)], dim=1)
@@ -116,8 +119,8 @@ def append_reference(prepare, stage, batch, server_args, *args, **kwargs):
 
 def reference_positions(build, stage, ctx, step, batch, *args, **kwargs):
     inputs = build(stage, ctx, step, batch, *args, **kwargs)
-    reference = batch.extra.get(REFERENCE)
-    if reference is None or TARGET_TOKENS not in batch.extra:
+    reference = batch.extra.get(REFERENCE_KEY)
+    if reference is None or TARGET_TOKENS_KEY not in batch.extra:
         return inputs
     model = step.current_model
     latents = inputs.latent_model_input
@@ -139,8 +142,8 @@ def reference_positions(build, stage, ctx, step, batch, *args, **kwargs):
 
 
 def drop_reference(finish, stage, batch, latents, *args, **kwargs):
-    if (count := batch.extra.pop(TARGET_TOKENS, None)) is not None:
-        batch.extra.pop(REFERENCE, None)
+    if (count := batch.extra.pop(TARGET_TOKENS_KEY, None)) is not None:
+        batch.extra.pop(REFERENCE_KEY, None)
         latents = latents[:, :count]
     return finish(stage, batch, latents, *args, **kwargs)
 

@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Upstream's float32 frames to uint8 on all host threads: same clamp, scale and
-truncating cast, same bytes; upstream's one-thread numpy took 0.8 s at 1280x704x121."""
+"""Convert upstream's float32 frames to uint8 with torch's multi-threaded host ops.
+
+Same clamp, scale and truncating cast as upstream, so the same bytes; upstream's
+single-threaded numpy took 0.8 s at 1280x704x121.
+"""
 
 from __future__ import annotations
 

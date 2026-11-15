@@ -22,7 +22,7 @@ def test_decoder_keeps_upstream_attention():
     assert ltx_2.DIFFUSION_DECODER_INIT in targets
     assert not [t for t in targets if t.endswith("._na3d")]
     hooks = [hook for _, hook, _ in HookRegistry._hooks[ltx_2.DIFFUSION_DECODER_INIT]]
-    assert ltx_2.keyframe_tag in hooks
+    assert ltx_2.declare_keyframe_tag in hooks
 
 
 def test_decoder_loads_the_checkpoint_keyframe_tag():
@@ -31,7 +31,7 @@ def test_decoder_loads_the_checkpoint_keyframe_tag():
     arch.decoder_stage_channels = [64, 32, 16, 16, 8]
     arch.decoder_head_dim = 8
     decoder = ltx_2_5_diffusion_decoder.LTX2VideoDiffusionDecoder3d(config)
-    ltx_2.keyframe_tag(None, decoder, config)
+    ltx_2.declare_keyframe_tag(None, decoder, config)
     state = decoder.state_dict()
     assert torch.equal(state["type_emb"], torch.zeros(arch.latent_channels))
     tag = torch.randn(arch.latent_channels)

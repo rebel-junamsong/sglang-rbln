@@ -36,11 +36,11 @@ def test_text_features_are_returned_on_the_connectors_npus(
     assert seen == [expected]
 
 
-@pytest.mark.parametrize("target", features.TARGETS)
+@pytest.mark.parametrize("target", features.HOOKS)
 def test_wraps_upstream_around(target):
     assert target in features.register()
     assert any(
-        hook is features.TARGETS[target] and kind is HookType.AROUND
+        hook is features.HOOKS[target] and kind is HookType.AROUND
         for kind, hook, _ in HookRegistry._hooks[target]
     )
 

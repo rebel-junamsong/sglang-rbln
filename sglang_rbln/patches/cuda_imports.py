@@ -37,6 +37,13 @@ def _imports_cleanly(module: str) -> bool:
 
 
 def block_without_cuda(module: str) -> bool:
+    """Make ``module`` import as not installed when it is installed but fails to import.
+
+    A CUDA-only package fails its import here with an error upstream's ``except
+    ImportError`` guard does not catch. Blocked, its import raises
+    ``ModuleNotFoundError`` and ``find_spec`` probes still get a spec. Returns whether
+    ``module`` was blocked.
+    """
     import torch
 
     if torch.cuda.is_available() or module in sys.modules:

@@ -7,7 +7,9 @@ from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry, HookTy
 HOOK_TARGET = "sglang.multimodal_gen.configs.models.base.ArchConfig.__getattr__"
 
 
-def extra_attr(self, name: str):
+# Upstream's lookup, read through self.__dict__: dynamo cannot trace upstream's
+# object.__getattribute__, so a compiled forward breaks at every config getattr.
+def traceable_extra_attr(self, name: str):
     extras = self.__dict__.get("extra_attrs")
     if extras is not None and name in extras:
         return extras[name]
@@ -15,5 +17,5 @@ def extra_attr(self, name: str):
 
 
 def register() -> str:
-    HookRegistry.register(HOOK_TARGET, extra_attr, HookType.REPLACE)
+    HookRegistry.register(HOOK_TARGET, traceable_extra_attr, HookType.REPLACE)
     return HOOK_TARGET

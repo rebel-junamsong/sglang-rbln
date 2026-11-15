@@ -41,6 +41,8 @@ HOOK_TARGET = (
     ".maybe_enhance_prompt"
 )
 COMPONENT = "prompt_enhancer"
+# Prompt tokens per prefill call: a prompt pads to whole chunks, so prompts of every
+# length run one prefill graph.
 PREFILL_CHUNK = 128
 # ltx-core's GEMMA4_ENHANCE_GENERATION_KWARGS, greedy
 MAX_NEW_TOKENS = 600
@@ -76,21 +78,22 @@ def window_cache(model, window: int, device: torch.device | None = None):
     cache as an input they write back rather than creating it in the prefill graph.
     """
     text = model.config.get_text_config()
-    owners = text.num_hidden_layers - (getattr(text, "num_kv_shared_layers", 0) or 0)
-    cache = Cache(layers=[StaticLayer(max_cache_len=window) for _ in range(owners)])
+    kv_owners = text.num_hidden_layers - (getattr(text, "num_kv_shared_layers", 0) or 0)
+    cache = Cache(layers=[StaticLayer(max_cache_len=window) for _ in range(kv_owners)])
     param = next(model.parameters())
     device = param.device if device is None else device
     for index, layer in enumerate(cache.layers):
-        full = text.layer_types[index] == "full_attention"
         head_dim = text.head_dim
-        if full:
+        if text.layer_types[index] == "full_attention":
             head_dim = getattr(text, "global_head_dim", None) or head_dim
-        row = torch.empty(
+        # One token's keys: the layer takes its head count, head dim, dtype and
+        # device from it.
+        one_token = torch.empty(
             (1, text.num_key_value_heads, 1, head_dim),
             dtype=param.dtype,
             device=device,
         )
-        layer.lazy_initialization(row, row)
+        layer.lazy_initialization(one_token, one_token)
     return cache
 
 
@@ -110,7 +113,12 @@ def cache_window(needed: int) -> int:
         needed,
         CACHE_WINDOW,
     )
-    return -(-needed // PREFILL_CHUNK) * PREFILL_CHUNK
+    return _whole_chunks(needed)
+
+
+def _whole_chunks(tokens: int) -> int:
+    """`tokens` rounded up to a multiple of PREFILL_CHUNK."""
+    return -(-tokens // PREFILL_CHUNK) * PREFILL_CHUNK
 
 
 def _banned_by_ngram(history: list[int], size: int) -> list[int]:
@@ -136,12 +144,11 @@ def greedy_decode(
     """Greedy decoding with a static KV cache: one prefill shape, one decode shape.
 
     Both shapes belong to the configuration, not the request -- fixed ``PREFILL_CHUNK``
-    chunks against a cache of ``CACHE_WINDOW`` -- so prompts
-    of every length run the same two graphs. ``step`` is the module they run, the
-    model's decoder by default.
+    chunks against a cache of ``CACHE_WINDOW`` -- so prompts of every length run the
+    same two graphs. ``step`` is the module they run, the model's decoder by default.
 
-    Everything the step takes is built on the model's device and the mask grows on a
-    host copy, so a device run has no eager op of its own between steps.
+    Everything the step takes is built on the device it runs on and the mask grows on
+    a host copy, so a device run has no eager op of its own between steps.
     """
     step = model.get_decoder() if step is None else step
     head = model.get_output_embeddings()
@@ -150,7 +157,7 @@ def greedy_decode(
     eos = set(eos if isinstance(eos, list) else [eos])
     prompt = input_ids.shape[1]
     window = cache_window(prompt + max_new_tokens)
-    padded = -(-prompt // PREFILL_CHUNK) * PREFILL_CHUNK
+    padded = _whole_chunks(prompt)
     device = cache_device(step, model)
     cache = window_cache(model, window, device)
     ids = torch.zeros((1, padded), dtype=torch.long)
@@ -170,7 +177,9 @@ def greedy_decode(
             cache_position=positions,
             position_ids=positions[None],
         ).last_hidden_state
+    # The last prompt token's hidden state, from the last chunk's output.
     hidden = hidden[:, prompt - 1 - (padded - PREFILL_CHUNK)][:, None]
+    # The prefill counted the padding; decoding writes right after the prompt.
     for layer in cache.layers:
         layer.cumulative_length.fill_(prompt)
     history, tokens = input_ids[0].tolist(), []
@@ -206,11 +215,16 @@ class ModelPromptEnhancer:
         import transformers
 
         root = Path(model_path)
-        weights = root / COMPONENT
-        config = transformers.AutoConfig.from_pretrained(weights)
+        component_dir = root / COMPONENT
+        config = transformers.AutoConfig.from_pretrained(component_dir)
         architecture = getattr(transformers, config.architectures[0])
-        self.model = architecture.from_pretrained(weights, dtype=torch.bfloat16).eval()
-        tokenizer_dir = root / "processor" if (root / "processor").is_dir() else weights
+        self.model = architecture.from_pretrained(
+            component_dir, dtype=torch.bfloat16
+        ).eval()
+        # A checkpoint with a processor/ component keeps the tokenizer there.
+        tokenizer_dir = (
+            root / "processor" if (root / "processor").is_dir() else component_dir
+        )
         self.tokenizer = transformers.AutoTokenizer.from_pretrained(tokenizer_dir)
         self.system_prompt = self._system_prompt()
         self.step = self.model.get_decoder()
@@ -269,17 +283,14 @@ _load_lock = threading.Lock()
 
 
 @functools.cache
-def _load(model_path: str, compile_model: bool) -> ModelPromptEnhancer:
+def _loaded_enhancer(model_path: str, compile_model: bool) -> ModelPromptEnhancer:
     return ModelPromptEnhancer(model_path, compile_model)
 
 
-def model_enhancer(model_path: str, compile_model: bool) -> ModelPromptEnhancer:
-    with _load_lock:  # concurrent first requests load the model once
-        return _load(model_path, compile_model)
-
-
 def enhance(model_path: str, compile_model: bool, prompt: str, task: str) -> str:
-    return model_enhancer(model_path, compile_model).enhance(prompt, task)
+    with _load_lock:  # concurrent first requests load the model once
+        enhancer = _loaded_enhancer(model_path, compile_model)
+    return enhancer.enhance(prompt, task)
 
 
 def ships_enhancer(model_path: str) -> bool:

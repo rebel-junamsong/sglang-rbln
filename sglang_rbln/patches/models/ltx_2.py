@@ -9,7 +9,7 @@ import torch
 from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry, HookType
 
 MODELS = "sglang.multimodal_gen.runtime.models"
-HOOK_TARGETS = (
+ROTARY_FORWARDS = (
     f"{MODELS}.dits.ltx_2.LTX2AudioVideoRotaryPosEmbed.forward",
     f"{MODELS}.adapter.ltx_2_connector.LTX2RotaryPosEmbed1d.forward",
 )
@@ -18,12 +18,13 @@ VAE = f"{MODELS}.vaes.ltx_2_vae.AutoencoderKLLTX2Video"
 DIFFUSION_DECODER = f"{MODELS}.decoders.ltx_2_5_diffusion_decoder"
 DIFFUSION_DECODER_INIT = f"{DIFFUSION_DECODER}.LTX2VideoDiffusionDecoder3d.__init__"
 
-
 ROTARY_TABLES = "_rbln_rotary_tables"
+# Per rotary module, least recently used first out: a denoise step reuses the newest,
+# and a server that sees many shapes keeps no more than these.
 ROTARY_TABLES_KEPT = 4
 
 
-def contiguous_rotary_tables(result, *args, **kwargs):
+def contiguous_rotary_tables(result):
     cos, sin = result
     return cos.contiguous(), sin.contiguous()
 
@@ -67,11 +68,15 @@ def cached_rotary_tables(forward, rope: torch.nn.Module, *args, **kwargs):
     return tables[key]
 
 
+# Upstream's fused ada values launch a Triton kernel, which dynamo cannot trace; None
+# takes upstream's eager path.
 def without_triton_ada_values(*args, **kwargs) -> None:
     return None
 
 
-def keyframe_tag(result, decoder, config, *args, **kwargs):
+# sglang 0.5.21's decoder does not declare the checkpoint's unused type_emb and so
+# rejects the checkpoint; 0.5.22 declares it.
+def declare_keyframe_tag(result, decoder, config, *args, **kwargs):
     if not hasattr(decoder, "type_emb"):
         decoder.type_emb = torch.nn.Parameter(
             torch.zeros(config.arch_config.latent_channels)
@@ -80,11 +85,12 @@ def keyframe_tag(result, decoder, config, *args, **kwargs):
 
 
 def _blend(a: torch.Tensor, b: torch.Tensor, extent: int, dim: int) -> torch.Tensor:
-    """Upstream's per-slice blend as whole-slab ops, with the same results."""
+    """Upstream's blend, which writes one slice per Python loop step, as three
+    whole-slab ops with the same results."""
     extent = min(a.shape[dim], b.shape[dim], extent)
     if extent <= 0:
         return b
-    ramp = torch.arange(extent, dtype=torch.float64) / extent
+    ramp = torch.arange(extent, dtype=torch.float64) / extent  # upstream's y / extent
     shape = [1] * b.dim()
     shape[dim] = extent
     head = b.narrow(dim, 0, extent)
@@ -117,14 +123,14 @@ BLENDS = {
 
 
 def register() -> tuple[str, ...]:
-    for target in HOOK_TARGETS:
+    for target in ROTARY_FORWARDS:
         HookRegistry.register(target, cached_rotary_tables, HookType.AROUND)
     HookRegistry.register(FUSED_ADA_VALUES, without_triton_ada_values, HookType.REPLACE)
-    HookRegistry.register(DIFFUSION_DECODER_INIT, keyframe_tag, HookType.AFTER)
+    HookRegistry.register(DIFFUSION_DECODER_INIT, declare_keyframe_tag, HookType.AFTER)
     for target, blend in BLENDS.items():
         HookRegistry.register(target, blend, HookType.REPLACE)
     return (
-        *HOOK_TARGETS,
+        *ROTARY_FORWARDS,
         FUSED_ADA_VALUES,
         DIFFUSION_DECODER_INIT,
         *BLENDS,

@@ -17,13 +17,9 @@ PACK_TARGET = f"{STAGE}._pack_video_latents"
 GRAPHS = "_rbln_upsample_graphs"
 
 
-def _devices(upsampler: nn.Module) -> tuple[int, ...] | None:
-    return placement.devices_of(upsampler) or placement.text_encoder_devices()
-
-
 class UpsampleLatents(nn.Module):
     """Upstream's `_upsample_video_latents` as one graph: undo the VAE's latent
-    normalisation, upsample, normalise again."""
+    normalization, upsample, normalize again."""
 
     def __init__(self, upsampler: nn.Module, mean: torch.Tensor, std: torch.Tensor):
         super().__init__()
@@ -65,12 +61,14 @@ def upsample_video_latents(original, self, latents, server_args, local_device):
         ("upsample", tuple(latents.shape), latents.dtype),
         build,
         (latents,),
-        _devices(self.spatial_upsampler),
+        placement.devices_of(self.spatial_upsampler)
+        or placement.text_encoder_devices(),
     )
     return module(latents)
 
 
 def pack_video_latents(original, batch, latents, server_args):
+    # Three dims: already packed into (batch, tokens, channels).
     if not residency._is_resident(latents) or latents.dim() == 3:
         return original(batch, latents, server_args)
     config = server_args.pipeline_config

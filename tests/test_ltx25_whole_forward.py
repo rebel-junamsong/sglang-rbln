@@ -27,7 +27,7 @@ FRAMES, HEIGHT, WIDTH, AUDIO_FRAMES, TEXT = 2, 4, 4, 8, 6
 
 def install_dit_hooks(monkeypatch):
     """The plugin's hooks on the DiT, as the rbln platform registers them."""
-    monkeypatch.setattr(ArchConfig, "__getattr__", arch_config.extra_attr)
+    monkeypatch.setattr(ArchConfig, "__getattr__", arch_config.traceable_extra_attr)
     rope = dit.LTX2AudioVideoRotaryPosEmbed
     forward = rope.forward
     monkeypatch.setattr(
