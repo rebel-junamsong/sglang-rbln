@@ -5,12 +5,14 @@ Upstream packs Gemma's hidden states (`_gemma_postprocess_func`) and rescales th
 (`_rescale_v2_features`), and its connector transformer replaces the padded tokens
 with learned registers, eagerly, on the device the hidden states live on. Here the
 packed features are returned on the connectors' NPUs rather than the platform
-device, the host, and the packing itself runs as one compiled graph of upstream's
-code, so the 368 MiB stack of Gemma's 49 layers is not taken to the host and back for
-each of its eager ops.
+device, the host, and upstream's postprocessing itself (stacking the 49 hidden
+states, then packing them) runs as one compiled graph of upstream's code on the NPUs
+that hold Gemma's outputs: eager, each op would gather those outputs to one NPU.
 """
 
 from __future__ import annotations
+
+from types import SimpleNamespace
 
 import torch
 from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry, HookType
@@ -22,11 +24,13 @@ ENCODE_TEXT = (
     "sglang.multimodal_gen.runtime.pipelines_core.stages.text_encoding."
     "TextEncodingStage.encode_text"
 )
-PACK = "sglang.multimodal_gen.configs.pipeline_configs.ltx_2.pack_text_embeds_v2"
+POSTPROCESS = (
+    "sglang.multimodal_gen.configs.pipeline_configs.ltx_2._gemma_postprocess_func"
+)
 # encode_text(text, server_args, encoder_index, return_attention_mask, return_type,
 # device, ...): the index of `device` among the arguments after server_args.
 DEVICE_POSITION = 3
-_pack_graphs: dict[tuple, nn.Module] = {}
+_postprocess_graphs: dict[tuple, nn.Module] = {}
 
 
 def encode_text(forward, self, text, server_args, *args, **kwargs):
@@ -38,33 +42,46 @@ def encode_text(forward, self, text, server_args, *args, **kwargs):
     return forward(self, text, server_args, *args, **kwargs)
 
 
-class PackTextFeatures(nn.Module):
-    """Upstream's `pack_text_embeds_v2`, unchanged, as one graph."""
+class PostprocessTextFeatures(nn.Module):
+    """Upstream's `_gemma_postprocess_func`, unchanged, as one graph over the encoder's
+    hidden states."""
 
-    def __init__(self, pack) -> None:
+    def __init__(self, postprocess, pipeline_config) -> None:
         super().__init__()
-        self.pack = pack
+        self.postprocess = postprocess
+        self.pipeline_config = pipeline_config
 
-    def forward(self, hidden_states: torch.Tensor, attention_mask: torch.Tensor):
-        return self.pack(hidden_states, attention_mask)
+    def forward(self, attention_mask: torch.Tensor, *hidden_states: torch.Tensor):
+        outputs = SimpleNamespace(hidden_states=hidden_states)
+        text_inputs = {"attention_mask": attention_mask}
+        return self.postprocess(outputs, text_inputs, self.pipeline_config)
 
 
-def pack_text_features(pack, hidden_states, attention_mask, *args, **kwargs):
-    if args or kwargs or not residency._is_resident(hidden_states):
-        return pack(hidden_states, attention_mask, *args, **kwargs)
+def postprocess_text_features(
+    postprocess, outputs, text_inputs, pipeline_config=None, *args, **kwargs
+):
+    hidden_states = getattr(outputs, "hidden_states", None)
+    resident = [state for state in hidden_states or () if residency._is_resident(state)]
+    if args or kwargs or not resident:
+        return postprocess(outputs, text_inputs, pipeline_config, *args, **kwargs)
+    attention_mask = text_inputs["attention_mask"]
     module = residency.resident_module(
-        _pack_graphs,
-        (tuple(hidden_states.shape), hidden_states.dtype, attention_mask.dtype),
-        lambda: PackTextFeatures(pack),
-        (hidden_states, attention_mask),
-        residency.npus_of(hidden_states.device),
+        _postprocess_graphs,
+        (
+            tuple((tuple(state.shape), state.dtype) for state in hidden_states),
+            tuple(attention_mask.shape),
+            attention_mask.dtype,
+        ),
+        lambda: PostprocessTextFeatures(postprocess, pipeline_config),
+        resident,
+        residency.npus_of(resident[0].device),
     )
-    return module(hidden_states, attention_mask)
+    return module(attention_mask, *hidden_states)
 
 
 HOOKS = {
     ENCODE_TEXT: encode_text,
-    PACK: pack_text_features,
+    POSTPROCESS: postprocess_text_features,
 }
 
 
