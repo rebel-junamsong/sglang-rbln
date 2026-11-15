@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 import os
 
 import torch
@@ -12,8 +11,6 @@ from sglang.multimodal_gen.runtime.platforms.cpu import CpuPlatform
 from sglang_rbln import device, envs
 from sglang_rbln.compilation import backend as compilation
 from sglang_rbln.compilation import residency
-
-logger = logging.getLogger(__name__)
 
 NUM_DEVICES_ENV = "SGLANG_RBLN_NUM_DEVICES"
 TORCH_RBLN_FALLBACK_ENV = "TORCH_RBLN_DISABLE_FALLBACK"
@@ -53,6 +50,34 @@ def take_tensor_parallel_degree(server_args) -> None:
     server_args.num_gpus = 1
 
 
+LAYERWISE_OFFLOAD_FLAGS = (
+    "dit_layerwise_offload",
+    "layerwise_offload_components",
+    "offload_during_compile",
+)
+
+
+def reject_layerwise_offload(server_args) -> None:
+    """Refuse the flags that layerwise-offload a model.
+
+    Upstream's offload manager moves a model to `device_type`, the host here, so it
+    takes the resident weights off their NPUs and nothing moves them back: every
+    request after it fails with a device mismatch. The component offload flags
+    (`--dit-cpu-offload` and the like) need no check: upstream keeps every component
+    resident on a platform that reports `is_cpu()`.
+    """
+    requested = [
+        "--" + flag.replace("_", "-")
+        for flag in LAYERWISE_OFFLOAD_FLAGS
+        if server_args.is_arg_explicitly_set(flag) and getattr(server_args, flag)
+    ]
+    if requested:
+        raise ValueError(
+            f"{', '.join(requested)}: layerwise offload moves the model's weights "
+            "off its NPUs, which the rbln platform keeps them on"
+        )
+
+
 class RBLNPlatform(CpuPlatform):
     """Upstream sees the host: its tensors are cpu ones, and the plugin's compiled
     regions take them onto their NPU sets, where their outputs and the eager ops
@@ -75,16 +100,9 @@ class RBLNPlatform(CpuPlatform):
         if not server_args.is_arg_explicitly_set("enable_torch_compile"):
             server_args.enable_torch_compile = True
         # The server warmup would layerwise-offload the DiT for its compile.
-        # Upstream's offload manager targets `device_type`, the host here, so it
-        # moves the resident DiT's weights off its NPUs; nothing moves them back.
         if not server_args.is_arg_explicitly_set("offload_during_compile"):
             server_args.offload_during_compile = False
-        elif server_args.offload_during_compile:
-            logger.warning(
-                "--offload-during-compile moves the resident DiT's weights off "
-                "its NPU set to the host for the warmup compile; requests after "
-                "it fail with a device mismatch."
-            )
+        reject_layerwise_offload(server_args)
         # Upstream's LTX2VocoderWithBWE.forward opens its float32 autocast region
         # only off the CPU, so on the host its bf16 weights meet a float32 input.
         server_args.component_precisions.setdefault("vocoder", "fp32")

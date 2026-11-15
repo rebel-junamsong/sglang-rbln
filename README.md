@@ -129,6 +129,11 @@ the NPU. A compile error fails the request: nothing falls back to the host.
   2.2-3.2 s on the CPU.
 - The first request of each shape pays the compile, which takes minutes for a
   large video DiT. Restarts reuse the on-disk cache.
+- Layerwise offload is refused: `--dit-layerwise-offload`,
+  `--layerwise-offload-components` and `--offload-during-compile true` would move a
+  model's weights off its NPUs. The component offload flags (`--dit-cpu-offload` and
+  the like) leave every component on its NPUs; `--text-encoder-cpu-offload` runs the
+  text encoder on the CPU instead.
 - The unit tests and the end-to-end serve tests run on a CPU host with
   `RBLN_FORCE_NPU_NAME` set (the serve tests without an NPU). Tests marked
   `npu` need an NPU host, so CI runs lint only.

@@ -169,6 +169,8 @@ class TestServerArgDefaults:
             enable_torch_compile=False,
             regional_compile=False,
             offload_during_compile=True,
+            dit_layerwise_offload=False,
+            layerwise_offload_components=None,
             component_precisions={},
             explicit_args=set(),
             disable_autocast=False,
@@ -190,11 +192,29 @@ class TestServerArgDefaults:
         RBLNPlatform().apply_server_args_defaults(server_args)
         assert server_args.offload_during_compile is False
 
-    def test_warns_on_an_explicit_compile_warmup_offload(self, server_args, caplog):
-        server_args.explicit_args = {"offload_during_compile"}
+    @pytest.mark.parametrize(
+        ("flag", "value"),
+        [
+            ("offload_during_compile", True),
+            ("dit_layerwise_offload", True),
+            ("layerwise_offload_components", ["transformer"]),
+        ],
+    )
+    def test_rejects_layerwise_offload(self, server_args, flag, value):
+        # it would move the resident weights to the host, and nothing moves them back
+        setattr(server_args, flag, value)
+        server_args.explicit_args = {flag}
+        with pytest.raises(ValueError, match=f"--{flag.replace('_', '-')}"):
+            RBLNPlatform().apply_server_args_defaults(server_args)
+
+    @pytest.mark.parametrize(
+        "flag", ["offload_during_compile", "dit_layerwise_offload"]
+    )
+    def test_accepts_layerwise_offload_turned_off(self, server_args, flag):
+        setattr(server_args, flag, False)
+        server_args.explicit_args = {flag}
         RBLNPlatform().apply_server_args_defaults(server_args)
-        assert server_args.offload_during_compile is True
-        assert "off its NPU set" in caplog.text
+        assert getattr(server_args, flag) is False
 
     def test_runs_the_vocoder_in_fp32(self, server_args):
         RBLNPlatform().apply_server_args_defaults(server_args)
