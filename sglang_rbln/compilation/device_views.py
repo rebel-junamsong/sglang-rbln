@@ -1,16 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
 """Feed a compiled graph the base of a strided device view, and slice inside the graph.
 
-rebel takes contiguous device inputs only, so a strided view (Gemma-4's
-``per_layer_inputs[:, :, i, :]``, one slice per decoder layer) reached the graph as an
-eager ``.contiguous()`` copy: one more eager device op per input and step, and a copy
-the runtime then failed to resolve in the next run (``RUN_INTERNAL (Invalid
-key_vaddr)``).
+A strided view (Gemma-4's ``per_layer_inputs[:, :, i, :]``, one slice per decoder
+layer) would otherwise reach the graph as an eager ``.contiguous()`` copy, one more
+device op per input and step.
 
 When such a view is ``narrow``/``select`` slices of a contiguous base, the placeholder
-takes the base instead and rebuilds the view from those slices, which rebel lowers
-where it does not lower ``as_strided``. The rebuild must reproduce the view's shape,
-strides and offset exactly; any other view keeps the contiguous copy.
+takes the base instead and rebuilds the view from those slices. The rebuild must
+reproduce the view's shape, strides and offset exactly; any other view keeps the
+contiguous copy.
 """
 
 from __future__ import annotations
@@ -108,8 +106,7 @@ def slices_of(
 
 
 def is_offset_view(value: torch.Tensor) -> bool:
-    """A device input the graph cannot take as is: strided, or starting inside its
-    storage (a one-row slice is "contiguous" but its address is not a buffer's)."""
+    """A device input that is strided, or starts inside its storage."""
     return not value.is_contiguous() or value.storage_offset() != 0
 
 
@@ -168,8 +165,8 @@ def rebase_strided_views(
         ):
             plan[index] = slices
             base_shapes[index] = tuple(base.shape)
-    # Every other input on a rebased storage is rebased onto the same base: one
-    # buffer (one runtime key) must reach the graph in one shape.
+    # Every other input on a rebased storage is rebased onto the same base, so one
+    # storage reaches the graph in one shape.
     storages = {
         example_inputs[i].untyped_storage().data_ptr(): shape
         for i, shape in base_shapes.items()

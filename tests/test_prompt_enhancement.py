@@ -71,9 +71,8 @@ class Bf16Head(torch.nn.Linear):
 
 
 @pytest.mark.parametrize("prompt_tokens", [5, 20])
-def test_bf16_softcap_ties_break_as_generate(tiny_enhancer, prompt_tokens):
-    """Logits past the softcap tie once softcapped in bf16; the model softcaps in its
-    own dtype, so the first of the tied tokens wins, as in `generate`."""
+def test_tied_logits_break_as_generate(tiny_enhancer, prompt_tokens):
+    """When logits tie, greedy decode picks the same token `generate` does."""
     model = copy.deepcopy(tiny_enhancer)
     direction = torch.nn.functional.normalize(
         torch.randn(
@@ -100,8 +99,7 @@ def test_bf16_softcap_ties_break_as_generate(tiny_enhancer, prompt_tokens):
 
 @pytest.mark.parametrize("prompt_tokens", [20, 128, 130])
 def test_step_logits_match_one_shot_forward(tiny_enhancer, prompt_tokens):
-    """The static-cache decode is the model's own forward: in float32 every step's
-    logits are a one-shot forward's over the same tokens, up to reduction order."""
+    """Every step's logits match a one-shot forward over the same tokens."""
     softcap = tiny_enhancer.config.get_text_config().final_logit_softcapping
     head = tiny_enhancer.get_output_embeddings()
     steps = []
@@ -141,13 +139,10 @@ def test_the_whole_cache_is_allocated_outside_any_graph(tiny_enhancer):
     assert {layer.keys.dtype for layer in cache.layers} == {torch.float32}
 
 
-def test_the_cache_write_compiles_to_one_device_function(tmp_path, dummy_device):
-    """The step is one graph only while the cache write has a device form.
-
-    `index_copy_` at a tensor position had none, for a decode row or a prefill chunk,
-    so the compiler left it and the ops around it on the host and split the step into
-    one graph per layer. rebel_compiler 4aea7ee411 lowers it; this is the contract the
-    plugin relies on, and it fails here rather than as a slow step on a device.
+def test_the_cache_write_compiles_into_the_step_graph(tmp_path, dummy_device):
+    """The cache write compiles into the step's graph, for a decode row and for a
+    prefill chunk. The plugin relies on this, and the test fails here rather than as
+    a slow step on a device.
     """
     import rebel
 
@@ -286,17 +281,12 @@ def test_decoding_follows_ltx_cores_recipe(monkeypatch):
     assert seen == [{"max_new_tokens": 600, "no_repeat_ngram": 5, "step": None}]
 
 
-def test_the_decode_step_compiles_to_one_device_function(
-    tmp_path, dummy_device, tiny_enhancer
-):
-    """The whole-graph default exists to make a step one graph; hold it to that.
+def test_the_decode_step_compiles_as_one_graph(tmp_path, dummy_device, tiny_enhancer):
+    """Compiled whole by default, a decode step is one graph. This compiles on a dummy
+    device.
 
-    Compiled layer by layer the same step is one device function per cache-owning
-    layer, with the embeddings, masks and rotary left on the host between them. This
-    compiles on a dummy device, which is enough to count what the compiler produced.
-
-    It counts the compiled step only: a host copy outside the traced region and a
-    graph break in ``greedy_decode`` both leave the count at 1 and pass here.
+    It checks the compiled step only: work outside the traced region, or a graph
+    break in ``greedy_decode``, is not covered here.
     """
     import rebel
 

@@ -125,21 +125,18 @@ the NPU. A compile error fails the request: nothing falls back to the host.
 
 ## Limits
 
-- RBLN NPUs have no float32 arithmetic. The audio decoder and vocoder run as one
-  bf16 graph whose convolutions accumulate with an upward gain over the vocoder's
-  ~100 convs: 12.9 dB SNR against float32 at 5 s of audio, against 16.6 dB for
-  CPU bf16 (0.34 s against 2.2-3.2 s on the CPU).
+- The audio decoder and vocoder run as one compiled graph: 0.34 s against
+  2.2-3.2 s on the CPU.
 - The first request of each shape pays the compile, which takes minutes for a
   large video DiT. Restarts reuse the on-disk cache.
 - The unit tests and the end-to-end serve tests run on a CPU host with
-  `RBLN_FORCE_NPU_NAME` set (the serve tests on rbln's dummy device). Tests marked
+  `RBLN_FORCE_NPU_NAME` set (the serve tests without an NPU). Tests marked
   `npu` need an NPU host, so CI runs lint only.
 
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). Upstream workarounds are tracked by
-`tests/test_patch_inventory.py` and `tests/test_compiler_inventory.py`, which
-fail once the upstream change lands.
+`tests/test_patch_inventory.py`, which fails once the upstream change lands.
 
 ## License
 

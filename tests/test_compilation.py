@@ -1,5 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import os
+import subprocess
+import sys
 
 import pytest
 import torch
@@ -181,10 +183,10 @@ def test_compile_only_stands_an_empty_tensor_in_for_a_device_view(
     monkeypatch.setenv("SGLANG_RBLN_COMPILE_ONLY", "1")
     view = torch.zeros(4, 6).to("rbln:0")[:, ::2]
 
-    def runs_a_graph(*args, **kwargs):
+    def copies(*args, **kwargs):
         raise AssertionError("a compile-only run copies nothing")
 
-    monkeypatch.setattr(torch.Tensor, "contiguous", runs_a_graph)
+    monkeypatch.setattr(torch.Tensor, "contiguous", copies)
     (stand_in,) = compilation.contiguous_device_inputs([view])
     assert stand_in.is_contiguous()
     assert (stand_in.shape, stand_in.dtype, stand_in.device) == (
@@ -192,3 +194,70 @@ def test_compile_only_stands_an_empty_tensor_in_for_a_device_view(
         view.dtype,
         view.device,
     )
+
+
+class _GroupedQueryAttention(nn.Module):
+    def forward(self, query, key, value):
+        return torch.nn.functional.scaled_dot_product_attention(
+            query, key, value, is_causal=True, enable_gqa=True
+        )
+
+
+@pytest.mark.npu
+@pytest.mark.parametrize("kv_heads", [1, 2, 4], ids=lambda n: f"kv{n}")
+def test_grouped_query_attention_matches_eager(monkeypatch, tmp_path, kv_heads):
+    monkeypatch.setenv("SGLANG_RBLN_CACHE_DIR", str(tmp_path))
+    monkeypatch.delenv("SGLANG_RBLN_COMPILE_ONLY", raising=False)
+    compilation.ensure_compile_backend()
+    torch.manual_seed(0)
+    module = _GroupedQueryAttention()
+    query = torch.randn(2, 8, 16, 32)
+    key = torch.randn(2, kv_heads, 16, 32)
+    value = torch.randn(2, kv_heads, 16, 32)
+    with torch.no_grad():
+        expected = module(query, key, value)
+        torch._dynamo.reset()
+        compiled = torch.compile(
+            module,
+            backend=compilation.COMPILE_BACKEND_NAME,
+            options=compilation.compile_options(module),
+            fullgraph=True,
+            dynamic=False,
+        )
+        actual = compiled(query, key, value)
+    assert actual.shape == expected.shape
+    torch.testing.assert_close(actual, expected, atol=2e-2, rtol=2e-2)
+
+
+EAGER_OP_ON_SECOND_SET = """
+import torch, torch_rbln
+weight = torch.ones(16, 8, dtype=torch.bfloat16).to("rbln:1")
+print((weight * torch.tensor(2.0, dtype=torch.bfloat16)).device)
+"""
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "the locked rebel-compiler does not run eager ops on a second multi-NPU set yet"
+    ),
+)
+def test_eager_ops_run_on_the_text_encoder_npu_set():
+    """With the text encoder on its own NPU set, the eager ops between its graphs run
+    on that set."""
+    env = {
+        **os.environ,
+        "RBLN_DUMMY_DEVICE": "1",
+        "RBLN_DEVICE_MAP": "[0,1,2,3],[4,5,6,7]",
+        "TORCH_RBLN_DISABLE_FALLBACK": "all",
+    }
+    env.setdefault("RBLN_FORCE_NPU_NAME", "RBLN-CA22")
+    run = subprocess.run(
+        [sys.executable, "-c", EAGER_OP_ON_SECOND_SET],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert run.returncode == 0, run.stderr[-1500:]
+    assert run.stdout.strip().splitlines()[-1] == "rbln:1"

@@ -16,8 +16,8 @@ from sglang_rbln.patches.models import ltx_2
 
 
 def test_decoder_keeps_upstream_attention():
-    """The decoder's neighborhood attention is upstream's flex_attention, which the
-    compiler lowers; nothing replaces it."""
+    """The decoder keeps upstream's flex_attention neighborhood attention; the
+    plugin does not replace it."""
     targets = ltx_2.register()
     assert ltx_2.DIFFUSION_DECODER_INIT in targets
     assert not [t for t in targets if t.endswith("._na3d")]
@@ -50,8 +50,9 @@ def test_decoder_loads_the_checkpoint_keyframe_tag():
     ],
     ids=str,
 )
-def test_lowered_flex_matches_eager(grid, kernel):
-    """Upstream's flex_attention, as the rbln backend lowers it, against eager."""
+def test_neighborhood_attention_compiled_by_the_backend_matches_eager(grid, kernel):
+    """The decoder's neighborhood attention, compiled through the plugin backend,
+    matches eager."""
     lower = pytest.importorskip("rebel.core._flex_attention").lower_flex_attention
 
     def lowered(graph_module, _):
@@ -71,9 +72,9 @@ def test_lowered_flex_matches_eager(grid, kernel):
 
 
 @pytest.mark.npu
-def test_a_stage_3_attention_split_over_two_npus_runs(tmp_path):
-    """Split over two NPUs, this attention once aborted on its first run: its
-    tiles take 135 spatial tiles per frame group at this grid."""
+def test_stage_3_attention_on_two_npus_matches_eager(tmp_path):
+    """The stage-3 decoder attention at this grid, compiled for two NPUs, runs and
+    matches eager."""
     visible = [
         npu for npu in os.environ.get("RBLN_VISIBLE_DEVICES", "").split(",") if npu
     ]

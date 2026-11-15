@@ -16,14 +16,9 @@ from sglang_rbln.patches.layers.attention import video_sparse_attn
 
 
 def pin_the_dummy_device_without_an_npu() -> None:
-    """Fix the device count at one dummy device when this process sees no NPU.
-
-    torch-rbln counts its devices once, at the first query, and keeps that count for
-    the process. Whichever test happens to ask first would decide it for every test
-    after: a host test asking with no NPU visible leaves 0 devices, and the
-    `dummy_device` tests that follow cannot name one. Asking here, once, under the
-    dummy flag, makes the count the same for every order. The flag is restored, so a
-    test without `dummy_device` is still held to the host.
+    """Fix the device count at one dummy device when this process sees no NPU, so
+    `dummy_device` tests can name a device in any test order. The flag is restored,
+    so a test without `dummy_device` is still held to the host.
     """
     import torch_rbln  # noqa: F401
     from torch_rbln import _C
@@ -65,10 +60,8 @@ def on_a_dummy_device() -> bool:
 class ForbidDevice(torch.overrides.TorchFunctionMode):
     """Raise on any torch call that names the RBLN device.
 
-    Checking the call rather than the process is what makes this per-test: one rbln
-    tensor opens every device node and leaves them open, so anything that reads
-    /proc/self/fd blames whichever test happens to run next and a single offender
-    poisons the rest of the run.
+    Checking each call, not the process, blames the test that names the device rather
+    than whichever test runs next.
     """
 
     MOVES = frozenset({"to", "to_empty", "_to_copy", "new_empty", "new_zeros"})
@@ -85,9 +78,7 @@ class ForbidDevice(torch.overrides.TorchFunctionMode):
             raise AssertionError(
                 f"{getattr(func, '__name__', func)} names the {named[0]} device in a "
                 "test without @pytest.mark.npu. Mark it, or keep its tensors on the "
-                "host: the gate runs -m 'not npu' on a host whose NPUs belong to "
-                "other sessions, and RBLN_VISIBLE_DEVICES= does not stop a tensor "
-                "reaching one."
+                "host: tests without the npu marker must not use an NPU."
             )
         return func(*args, **kwargs)
 
@@ -113,11 +104,9 @@ def pytest_runtest_call(item: pytest.Item):
     """Hold every test that is not marked `npu` to the host.
 
     Two ways to reach the device, so two checks. A tensor placed on it is a torch call
-    naming it, which `ForbidDevice` refuses as it happens. A compiled graph run through
-    the rbln backend reaches it without any such call, and shows up as the process
-    opening the device nodes -- which only the test that opens them first can be blamed
-    for, since they stay open for the rest of the process. So this names one opener per
-    run: mark it, run again, and the next one surfaces.
+    naming it, which `ForbidDevice` refuses as it happens. A compiled graph reaches the
+    device without such a call, so the test also fails if it opened RBLN device nodes;
+    only the first opener in a run is named.
     """
     if item.get_closest_marker("npu") or on_a_dummy_device():
         yield
@@ -149,10 +138,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
 def dummy_device(monkeypatch: pytest.MonkeyPatch) -> None:
     """A device that exists without being hardware, for one test.
 
-    Compiling and placement need a device to name; they do not need the NPUs, which on
-    this host belong to other sessions. Never set this for the whole run: a dummy
-    device runs compiled graphs and eager ops but returns garbage from both, so only
-    placement and structure may be asserted under it.
+    Compiling and placement need a device to name; they do not need the NPUs. Never
+    set this for the whole run: a dummy device has no real outputs, so only placement
+    and structure are asserted.
     """
     monkeypatch.setenv("RBLN_DUMMY_DEVICE", "1")
     monkeypatch.setenv("RBLN_FORCE_NPU_NAME", envs.RBLN_FORCE_NPU_NAME or "RBLN-CA22")

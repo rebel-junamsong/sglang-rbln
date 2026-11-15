@@ -25,17 +25,16 @@ TILE_ATTRIBUTES = (
 MIN_TILE = 128
 # The temporal windows a video decoder falls back to, in sample frames, largest
 # first. Each blends into the next over OVERLAP frames. Every blended frame is an
-# average of two decodes and loses detail (upstream's 16/8 windows blend half the
-# frames: 0.77x the Laplacian variance of an untiled decode), so a decode starts
-# untiled and takes the largest window that fits. A fixed ladder keeps the window,
-# and so the graphs, the same from one request to the next.
+# average of two decodes and loses detail, so a decode starts untiled and takes the
+# largest window that fits. A fixed ladder keeps the window, and so the graphs, the
+# same from one request to the next.
 WINDOWS = (64, 32, 16)
 OVERLAP = 8
 
 
 def _shortfall(error: BaseException) -> float | None:
     """How many times the room the graph needed, on its tightest node; None when
-    the error carries no numbers (a bare SYS_ENOMEM from the runtime)."""
+    the error carries no sizes."""
     if not isinstance(error, RegionDoesNotFit):
         return None
     ratios = [

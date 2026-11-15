@@ -151,7 +151,7 @@ def test_a_window_that_does_not_fit_takes_the_next_rung(start, after):
     if start is not None:
         coder.use_framewise_decoding = True
         coder.tile_sample_min_num_frames, coder.tile_sample_stride_num_frames = start
-    # A bare SYS_ENOMEM carries no shortfall: one rung at a time.
+    # An out-of-memory error without sizes shrinks one rung at a time.
     assert tiling.shrink_window(coder, RuntimeError("SYS_ENOMEM"), 121)
     assert window(coder) == after
 
@@ -199,12 +199,9 @@ def test_a_short_video_never_takes_a_window_as_long_as_itself():
 
 
 def test_an_eager_tensor_without_room_shrinks_the_window():
-    # The LTX 1280x704 decode failed this way: an eager tensor of the untiled decode
-    # found no room even after the runtime evicted idle programs.
-    error = RuntimeError(
-        "(Runtime) code=202 INIT_INVALID_ARGUMENT "
-        "(RBLNCachingAllocator::malloc block != nullptr)"
-    )
+    # An out-of-memory error from the untiled 1280x704 decode also moves the decode
+    # to smaller windows.
+    error = RuntimeError("RBLNCachingAllocator::malloc block != nullptr")
     coder = VideoCoder()
     attempts = []
 

@@ -25,9 +25,9 @@ SERVER_READY_TIMEOUT_SEC = 900
 HEALTH_PROBE_TIMEOUT_SEC = 30
 REQUEST_TIMEOUT_SEC = 900
 SHUTDOWN_TIMEOUT_SEC = 60
-# These tests carry no npu marker, and the host's NPUs belong to other sessions:
-# the server sees no NPU (there is no NPU 99) and runs on rbln's dummy device, whose
-# outputs are garbage, so only the serving plumbing and the shapes are asserted.
+# These tests carry no npu marker: the server sees no NPU (there is no NPU 99) and
+# runs on the dummy device. A dummy device has no real outputs, so only the serving
+# plumbing and the shapes are asserted.
 HIDDEN_NPUS = "99"
 # Upstream takes the next free port when the one asked for was taken between choosing
 # it and binding it, so the URL is read from the server's own log.

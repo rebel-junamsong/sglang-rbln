@@ -128,17 +128,16 @@ def _node_devices(device: Any, nodes: int) -> list[int]:
     return [(device or 0) + node for node in range(nodes)]
 
 
-# Buffers the runtimes of one sharing session on the same NPUs share: one block per kind
-# and node, as large as the largest runtime that has needed it.
+# Memory kinds the fit check counts beyond a runtime's reported total.
 POOLED_KEYS = ("Intermediate", "Input", "Output")
-# (session, NPUs) -> pooled kind -> bytes per node the session's pool holds now
+# (context, NPUs) -> key -> bytes per NPU recorded so far
 _pools: dict[tuple, dict[str, list[int]]] = {}
 runtimes_created = 0
 
 
 def _pooled(compiled_model: Any, needed: list[int]) -> dict[str, list[int]]:
-    """The pooled buffers the runtime needs per node, when its own total leaves them
-    out; empty when they are counted in it."""
+    """Per-NPU sizes to add to the runtime's reported total; empty when there are
+    none."""
     by_key = getattr(compiled_model, "get_alloc_per_node_by_key", None)
     if by_key is None:
         return {}
@@ -162,14 +161,8 @@ def _pool_key(compiled_model: Any, nodes: list[int]) -> tuple:
 
 
 def check_fits(compiled_model: Any, device: Any = None) -> None:
-    """Raise RegionDoesNotFit unless the runtime fits the room on its NPUs: their free
-    memory, and what evicting idle graphs' programs would free.
-
-    In a sharing session the runtime's own total leaves out the pooled buffers. A
-    pooled buffer the runtime needs larger than the session's pool holds grows: the
-    runtime frees the old block and allocates the larger one, so the growth is what
-    it takes beyond its own total.
-    """
+    """Raise RegionDoesNotFit unless the runtime fits the room rebel reports on its
+    NPUs."""
     import rebel
 
     needed = list(compiled_model.get_alloc_per_node())
@@ -181,10 +174,8 @@ def check_fits(compiled_model: Any, device: Any = None) -> None:
             for node, size in enumerate(sizes):
                 needed[node] += max(0, size - pool[node])
     infos = list(map(rebel.get_device_memory_info, nodes))
-    if None in infos:  # a dummy device reports no memory: nothing to check against
+    if None in infos:  # no memory info (compile-only): nothing to check against
         return
-    # Loading a graph evicts the programs of graphs not running now; they reload on
-    # their next run.
     free = [
         info.free - info.granularity + rebel.get_evictable_memory(index)
         for index, info in zip(nodes, infos, strict=True)
@@ -223,8 +214,9 @@ _installed = False
 def install_fit_check() -> bool:
     """Check every runtime this process creates, whatever compiled it: a block
     region, or a module compiled straight through `Module.compile` (the VAE
-    coders, the vocoder, the duration head), which otherwise fails with a bare
-    SYS_ENOMEM from the runtime instead of a RegionDoesNotFit naming what it needed.
+    coders, the vocoder, the duration head), which otherwise fails with an
+    out-of-memory error that names no sizes instead of a RegionDoesNotFit naming what
+    it needed.
     """
     from rebel import RBLNCompiledModel
 
@@ -238,8 +230,7 @@ def install_fit_check() -> bool:
     return True
 
 
-# How the runtime reports a device allocation that did not fit. torch-rbln reports
-# an eager tensor the caching allocator found no room for by its failed check.
+# The messages of out-of-device-memory errors.
 OUT_OF_DEVICE_MEMORY = (
     "Lack of device memory",
     "SYS_ENOMEM",
@@ -329,10 +320,10 @@ class Region:
         """Drop what an attempt that did not fit left loaded: an abandoned shape kept
         its runtimes on the DiT's NPUs, and every later request failed.
 
-        A fit-check refusal loads nothing; a runtime that ran out of memory after it
-        was created holds its programs until its graph goes. The groups share their
-        graphs' cache, so every group lets go of its graphs, and this region's other
-        shapes go through the fit check again when next called.
+        A fit-check refusal loads nothing; a runtime that ran out of memory holds its
+        device memory until its graph is dropped. The groups share their graphs'
+        cache, so every group lets go of its graphs, and this region's other shapes
+        go through the fit check again when next called.
         """
         release_graphs(self.group)
         self.loaded.clear()
@@ -453,7 +444,7 @@ def _become(placeholder: torch.Tensor, value: torch.Tensor) -> None:
 
     When a split region's output is also the next region's input, dynamo's guards
     hold a weakref to it and `swap_tensors` refuses it: the placeholder then takes a
-    fresh alias of its storage, with the attributes rebel left on it.
+    fresh alias of its storage, with the output's attributes.
     """
     try:
         torch.utils.swap_tensors(placeholder, value)

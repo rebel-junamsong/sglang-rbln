@@ -129,9 +129,8 @@ class TestCustomOpDispatch:
 
 class TestDeviceQueries:
     def test_attention_backend_is_upstreams(self):
-        """The plugin named its own kv-expanding SDPA subclass until the
-        compiler honoured `enable_gqa`. `Platform`'s method is a stub returning
-        "", so the override stays -- it just defers to upstream now.
+        """The plugin uses upstream's SDPA backend. `Platform`'s method is a stub
+        returning "", so the override stays and defers to upstream.
         """
         backend_cls = resolve_name(
             RBLNPlatform().get_attn_backend_cls_str(None, 128, torch.bfloat16)
@@ -267,7 +266,7 @@ def test_amp_query_traces_without_a_graph_break():
 
 class TestTensorParallelDegree:
     """`sglang serve --tp-size N` splits each model over N NPUs, as upstream's flag
-    does on GPUs; the compiler shards the graphs, so one worker drives them."""
+    does on GPUs, with one worker driving them."""
 
     @pytest.fixture
     def server_args(self, monkeypatch) -> _ServerArgs:

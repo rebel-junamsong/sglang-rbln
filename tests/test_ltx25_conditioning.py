@@ -118,7 +118,7 @@ def test_compiles_the_duration_head_once_on_the_dit_set(
 def test_duration_head_compiles_for_the_set_of_its_inputs(
     duration_stage, compiled, monkeypatch, placed, devices
 ):
-    # each NPU set is one logical device that holds the head's inputs
+    # the head compiles for the NPU set that holds its inputs
     monkeypatch.setenv("SGLANG_RBLN_NUM_DEVICES", "4")
     monkeypatch.setattr(placement, "text_encoder_devices", lambda: placed)
     duration.compile_duration_head(forward, duration_stage, AUTO, COMPILE)

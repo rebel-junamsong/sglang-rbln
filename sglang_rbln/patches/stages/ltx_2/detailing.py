@@ -7,7 +7,7 @@ are appended clean (timestep 0) after the noisy tokens, at the stage-1 grid's
 positions with height and width scaled by the LoRA's ``reference_downscale_factor``,
 and attend to the whole sequence. The LoRA is sglang's own dynamic LoRA. Stage 1
 keeps it at strength 0 rather than deactivated, so both stages compile against
-the same weights and share one device weight pool.
+the same weights and share one copy of the DiT weights on the NPUs.
 """
 
 from __future__ import annotations

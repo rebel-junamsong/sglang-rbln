@@ -238,12 +238,12 @@ def _kernel_bytes(cache) -> list[int]:
         pytest.param(None, False, id="deactivated"),
     ],
 )
-def test_both_stages_compile_against_one_weight_pool(
+def test_stage2_reuses_the_base_weights_stage1_loaded(
     monkeypatch, tmp_path, npu_name, stage1_strength, shares_pool
 ):
-    """A stage-1 graph without the LoRA weights is another weight group than the
-    stage-2 graph with them, so stage 2 lays out a second copy of the base
-    weights. Keeping the LoRA at strength 0 in stage 1 keeps one pool."""
+    """Stage 1 keeps the detailing LoRA loaded at strength 0, so stage 2 reuses the
+    base weights stage 1 loaded instead of loading a second copy; turning the LoRA
+    off in stage 1 loses that."""
     import rebel
     import rebel.core.torch_compile  # noqa: F401
     from sglang.multimodal_gen.runtime.distributed.parallel_state import (

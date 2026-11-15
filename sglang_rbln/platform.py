@@ -18,8 +18,7 @@ logger = logging.getLogger(__name__)
 NUM_DEVICES_ENV = "SGLANG_RBLN_NUM_DEVICES"
 TORCH_RBLN_FALLBACK_ENV = "TORCH_RBLN_DISABLE_FALLBACK"
 TORCH_RBLN_FALLBACK_DEFAULT = "compile_error"
-# A compile-only run builds the artifacts a device run loads, so it compiles on device
-# tensors as that run does: rbln's dummy device gives them without any NPU.
+# A compile-only run builds the artifacts a device run loads, without an NPU.
 DUMMY_DEVICE_ENV = "RBLN_DUMMY_DEVICE"
 
 compilation.ensure_compile_backend()
@@ -28,9 +27,9 @@ compilation.ensure_compile_backend()
 def take_tensor_parallel_degree(server_args) -> None:
     """Split each model over the NPUs `--tp-size` (else `--num-gpus`) asks for.
 
-    The compiler shards a graph over its NPUs, so one worker process drives them:
-    the degree becomes `SGLANG_RBLN_NUM_DEVICES`, which the spawned workers inherit,
-    and upstream's own degree goes back to 1.
+    One worker process drives all of a model's NPUs: the degree becomes
+    `SGLANG_RBLN_NUM_DEVICES`, which the spawned workers inherit, and upstream's
+    own degree goes back to 1.
     """
     degree = next(
         (

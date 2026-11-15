@@ -491,11 +491,7 @@ def test_kept_outputs_reach_every_block_caller(sized_graphs, room, shape):
 
 @pytest.mark.parametrize(
     "message",
-    [
-        "Lack of device memory, key=Kernel",
-        "(System) code=510 SYS_ENOMEM: Out of memory. (Failed to allocate device "
-        "memory, key=Input, size=12478054400, node_id=0)",
-    ],
+    ["Lack of device memory", "SYS_ENOMEM"],
 )
 def test_load_time_out_of_memory_halves_the_region(monkeypatch, message):
     monkeypatch.delenv("SGLANG_RBLN_BLOCKS_PER_REGION", raising=False)
@@ -546,7 +542,7 @@ def test_a_region_that_ran_out_after_loading_releases_its_graphs(monkeypatch):
 def test_a_released_attempt_holds_no_runtime(monkeypatch):
     # The failed call's frames held its runtime while the caught error lived, so
     # releasing the group freed nothing: the abandoned attempts' buffers piled up on
-    # the device beside the smaller graphs (1.4 GiB of DRAM tensors on node 0).
+    # the device beside the smaller graphs (1.4 GiB on node 0).
     monkeypatch.delenv("SGLANG_RBLN_BLOCKS_PER_REGION", raising=False)
     runtimes, alive = [], []
 
@@ -604,8 +600,8 @@ def test_other_compile_errors_do_not_split(monkeypatch):
 def test_installed_check_covers_a_module_no_block_group_compiled(
     device_memory, monkeypatch
 ):
-    """A VAE coder or vocoder reaches the device through Module.compile, outside
-    any block region: it used to fail with a bare SYS_ENOMEM."""
+    """A module compiled outside any block region, such as a VAE coder or vocoder,
+    gets the same fit check and raises RegionDoesNotFit with the memory it needs."""
     import rebel
 
     free, _ = device_memory
@@ -676,7 +672,7 @@ def test_kept_outputs_stay_on_the_region_npus(monkeypatch, dummy_device):
 
 
 class SessionRegion(SimpleNamespace):
-    """A sharing-session artifact: its own total leaves the pooled buffers out."""
+    """A compiled region whose reported size leaves out memory it shares with others."""
 
     def __init__(self, counted: int, intermediate: int, session: str = "s") -> None:
         super().__init__(counted=counted, intermediate=intermediate, session=session)
@@ -696,36 +692,38 @@ def no_pools(monkeypatch):
     monkeypatch.setattr(regions, "_pools", {}, raising=False)
 
 
-def test_a_region_that_grows_the_shared_pool_past_free_memory_does_not_fit(
+def test_a_region_needing_more_than_free_memory_at_run_does_not_fit(
     device_memory, no_pools
 ):
-    # The resident cookbook's 6-block region: 1.546 GB counted against 2.057 GB free
-    # passed, then grew the session's 2.28 GB Intermediate pool to 3.94 GB at run.
+    # A region whose reported size fits in free memory, but which needs more once it
+    # runs, is refused before it loads.
     free, _ = device_memory
     create_runtime = regions._checked_create_runtime(lambda model, **kwargs: model)
     free["bytes"] = 4_000_000_000
     create_runtime(SessionRegion(0, 2_279_484_288), device=0)
-    free["bytes"] = 2_057_306_112 + BLOCK_BYTES // 10  # the pool now holds 2.28 GB
+    free["bytes"] = 2_057_306_112 + BLOCK_BYTES // 10
     with pytest.raises(regions.RegionDoesNotFit) as error:
         create_runtime(SessionRegion(1_545_601_024, 3_939_358_336), device=0)
     assert error.value.needed == [1_545_601_024 + 3_939_358_336 - 2_279_484_288]
 
 
-def test_a_region_within_the_shared_pool_needs_no_more(device_memory, no_pools):
-    # Its Intermediate exceeds the free memory, but the session's pool holds it.
+def test_a_region_reusing_memory_already_held_needs_no_more(device_memory, no_pools):
+    # It needs more than is free, but memory already held by its compile context
+    # covers it.
     free, _ = device_memory
     create_runtime = regions._checked_create_runtime(lambda model, **kwargs: model)
     free["bytes"] = 6 * BLOCK_BYTES
     create_runtime(SessionRegion(0, 5 * BLOCK_BYTES), device=0)
-    free["bytes"] = 2 * BLOCK_BYTES  # the pool now takes its 5 blocks
+    free["bytes"] = 2 * BLOCK_BYTES
     create_runtime(SessionRegion(BLOCK_BYTES, 5 * BLOCK_BYTES), device=0)
-    with pytest.raises(regions.RegionDoesNotFit):  # another session's pool is empty
+    # a region in another compile context gets no such credit
+    with pytest.raises(regions.RegionDoesNotFit):
         create_runtime(SessionRegion(BLOCK_BYTES, 5 * BLOCK_BYTES, "t"), device=0)
 
 
-def test_idle_graphs_programs_make_room_once_evictable(device_memory, monkeypatch):
-    # Compared with free memory alone, a region that evicting stage 1's programs
-    # would fit was split: 3 recompiles of 8-15 min each, and nothing evicted.
+def test_evictable_memory_counts_as_room(device_memory, monkeypatch):
+    # Memory the runtime reports as evictable counts toward the room: without it, a
+    # region that would have fit was split and recompiled needlessly.
     import rebel
 
     free, _ = device_memory
@@ -744,8 +742,8 @@ def test_idle_graphs_programs_make_room_once_evictable(device_memory, monkeypatc
 
 
 def test_a_device_without_memory_info_has_nothing_to_check(monkeypatch):
-    # The dummy device of a compile-only run: torch-rbln runs each eager device op
-    # as a graph of its own, whose runtime this check sees too.
+    # On the dummy device of a compile-only run there is no memory information, so
+    # there is nothing to check.
     import rebel
 
     monkeypatch.setattr(rebel, "get_device_memory_info", lambda index: None)
@@ -753,9 +751,8 @@ def test_a_device_without_memory_info_has_nothing_to_check(monkeypatch):
     assert regions.check_fits(region, 0) is None
 
 
-def test_a_split_region_compiles_in_its_parents_sharing_session(monkeypatch):
-    # The halves must join the session (compile context) whose weight pool the whole
-    # region filled, not open one of their own.
+def test_a_split_region_reuses_its_parents_compile_context(monkeypatch):
+    # The halves compile in the parent region's compile context, not a new one.
     monkeypatch.delenv("SGLANG_RBLN_BLOCKS_PER_REGION", raising=False)
     context = object()
 

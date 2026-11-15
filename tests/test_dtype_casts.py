@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Every dtype cast in the plugin, each with the reason it is not a deviation.
+"""Every dtype cast in the plugin, each with the upstream code it mirrors.
 
-The modeling keeps upstream's dtypes; precision is the compiler's. A new
+The modeling keeps upstream's dtypes. A new
 ``.float()``/``.half()``/``.bfloat16()``/``.double()`` or ``.to(<dtype>)`` fails
 here until it is either removed or listed with the upstream cast it mirrors.
 """
@@ -42,12 +42,12 @@ ALLOWED = {
         "patches/models/ltx_2.py",
         "_blend",
         "(1 - ramp).to(torch.float32)",
-    ): "upstream's blend weights are Python floats, rounded to float32 opmath",
+    ): "upstream's blend weights are Python floats",
     (
         "patches/models/ltx_2.py",
         "_blend",
         "ramp.to(torch.float32)",
-    ): "upstream's blend weights are Python floats, rounded to float32 opmath",
+    ): "upstream's blend weights are Python floats",
     (
         "patches/stages/ltx_2/detailing.py",
         "append_reference",

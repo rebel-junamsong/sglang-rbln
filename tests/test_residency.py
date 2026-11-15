@@ -10,9 +10,8 @@ from torch import nn
 from sglang_rbln.compilation import placement, residency
 from sglang_rbln.compilation.backend import COMPILE_BACKEND_NAME
 
-# These need a device to name, not the hardware: placement and graph structure
-# only. A dummy device runs compiled graphs and eager ops but returns garbage, so
-# nothing here may assert on values from one.
+# These need a device to name, not the hardware. A dummy device has no real
+# outputs, so only placement and structure are asserted.
 pytestmark = pytest.mark.usefixtures("dummy_device")
 
 
@@ -319,17 +318,17 @@ SHARDED_COLS = '{"on_device": {"allocs": [{"node_id": 0}, {"node_id": 1}], "axis
     ids=[
         "first-read",
         "same-layout",
-        "other-shard-axis",
+        "other-form",
         "other-set-size",
         "no-config",
     ],
 )
-def test_a_cross_set_copy_keeps_only_a_layout_its_reader_reads(
+def test_a_cross_set_copy_keeps_its_form_only_for_a_reader_that_accepts_it(
     monkeypatch, destination_npus, config, read_as, kept
 ):
-    """A layout crosses NPU sets only when the destination set is as large and the graph
-    reading it there reads that layout; anything else comes over dense, with no tags,
-    so no graph ever reads a buffer as a layout it does not have."""
+    """A tensor copied to another NPU set keeps its multi-NPU form only when that set
+    is as large and the graph reading it accepts that form; otherwise it arrives as a
+    plain tensor."""
     sizes = {0: 4, 1: destination_npus}
     monkeypatch.setattr(
         residency, "npus_of", lambda device: tuple(range(sizes[device.index or 0]))
@@ -342,9 +341,8 @@ def test_a_cross_set_copy_keeps_only_a_layout_its_reader_reads(
 
 
 def test_a_strided_host_tensor_uploads_dense():
-    # LTX-2 packs its latents as a transposed view. Uploaded with its strides, the
-    # graph that reads it ran a one-NPU transpose first, compiled on the first step,
-    # whose output view made the DiT's cache key differ from compile-only's.
+    # LTX-2 packs its latents as a transposed view. Uploading it dense keeps the
+    # first request's graphs identical to those a compile-only run prepared.
     host = (
         torch.arange(128 * 60, dtype=torch.float32).reshape(1, 128, 60).transpose(1, 2)
     )

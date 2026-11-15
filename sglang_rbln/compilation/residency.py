@@ -40,8 +40,7 @@ _TENSOR_QUERIES = frozenset(
 # every parameter it casts or moves, and it compares the two tensors' types without
 # reading any data.
 _PASSED_BY_NAME = frozenset({"__get__", "__set__", "_has_compatible_shallow_copy_type"})
-# What rebel leaves on a compiled graph's device output: the view it wrote and its
-# device config (rebel.core.io_placement).
+# Attributes rebel sets on a compiled graph's device output.
 PRODUCER_VIEW = "_rbln_producer_view"
 PRODUCER_CONFIG = "_rbln_producer_config"
 
@@ -109,13 +108,9 @@ def npus_of(device: torch.device) -> tuple[int, ...]:
 
 
 def layout_to_keep(tensor: torch.Tensor, device: torch.device, read_as: str | None):
-    """The device config to write `tensor` in on `device`, or None for a dense copy.
-
-    The layout a graph wrote can be kept on another NPU set of the same size: a config
-    names its buffers by node within the set. It is kept only while the graph that reads
-    it there reads that layout, the one it first ran with (`read_as`), which it was
-    compiled against. Another layout comes over dense, and the runtime lays it out.
-    """
+    """The device config to copy `tensor` with onto `device`, or None for a dense
+    copy. It is kept only between NPU sets of the same size, and only while the
+    reading graph was compiled against it (`read_as`)."""
     config = getattr(tensor, PRODUCER_CONFIG, None)
     if config is None or not tensor.is_contiguous():
         return None
@@ -129,8 +124,8 @@ def layout_to_keep(tensor: torch.Tensor, device: torch.device, read_as: str | No
 def copy_across_devices(
     tensor: torch.Tensor, device: torch.device, config=None
 ) -> torch.Tensor:
-    """`tensor` on `device`, copied on the device between the two NPU sets: in the
-    layout `config` describes, which it keeps for the next graph, or else dense."""
+    """`tensor` on `device`, copied device to device: with `config` when given, else
+    dense."""
     from rebel._C import vmem
 
     source = tensor if config is not None else tensor.contiguous()
@@ -147,8 +142,7 @@ def copy_across_devices(
 
 
 def _upload(tensor: torch.Tensor, device: torch.device) -> torch.Tensor:
-    # Dense on the host first: a strided upload keeps its strides, and the graph that
-    # reads it lays it out with a transpose graph of its own on one NPU.
+    # Dense on the host first, so the graph that reads it gets a contiguous input.
     return tensor.contiguous().to(device)
 
 
@@ -276,8 +270,8 @@ def _outside_boundary() -> contextlib.AbstractContextManager:
 
 def resident_call(module: torch.nn.Module, compiled: Callable) -> Callable:
     device: torch.device | None = None
-    # The layout each input from another NPU set first came in, which the graph was
-    # compiled against.
+    # The config each input from another NPU set first came with, which the graph
+    # was compiled with.
     read_as: dict[int, str] = {}
 
     @functools.wraps(compiled)

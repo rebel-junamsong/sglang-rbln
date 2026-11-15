@@ -71,11 +71,8 @@ def release_cached_device_memory() -> None:
     """Give the freed device blocks of the decode back once its video is on the host.
 
     The VAE's tiles and the video they join are a request's largest device tensors
-    (2.2 GB on the VAE's first NPU at 1280x704x121). Kept in the caching allocator, the
-    next request's smaller tensors split those blocks, its tiles fill the old video's
-    block, and its video finds room only by evicting the decoder's programs and
-    setting the decoder's pool aside. The request after that loads them and grows
-    the pool again. Released, every request places them as the first one did.
+    (2.2 GB on the VAE's first NPU at 1280x704x121). Released, every request's decode
+    places them as the first one did.
     """
     torch.rbln.empty_cache()
 

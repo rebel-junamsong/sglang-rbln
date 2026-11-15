@@ -80,7 +80,7 @@ def keyframe_tag(result, decoder, config, *args, **kwargs):
 
 
 def _blend(a: torch.Tensor, b: torch.Tensor, extent: int, dim: int) -> torch.Tensor:
-    """Upstream's per-slice blend as whole-slab ops, rounding at the same steps."""
+    """Upstream's per-slice blend as whole-slab ops, with the same results."""
     extent = min(a.shape[dim], b.shape[dim], extent)
     if extent <= 0:
         return b

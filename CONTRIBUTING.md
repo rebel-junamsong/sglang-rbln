@@ -25,8 +25,8 @@ host has no NPU, and run for real otherwise.
 ## Rules
 
 - Comments and docstrings state an invariant or why the code is the way it is
-  (the upstream behaviour it works around, the device limit it respects), not
-  a narrative of what the code does or how it got there.
+  (the upstream behaviour it works around), not a narrative of what the code
+  does or how it got there.
 - Prefer a `Platform` seam or `CustomOp.register_oot_forward` over a hook.
   A hook works around exactly one upstream line and comes with a row in
   `tests/test_patch_inventory.py`, so a bump that removes the line fails the
@@ -34,8 +34,8 @@ host has no NPU, and run for real otherwise.
 - A patch lives at the path of the upstream module it patches under
   `sglang_rbln/patches/`, exposes `register()`, and is called from
   `sglang_rbln.patches.register`.
-- A workaround for a compiler gap comes with a row in
-  `tests/test_compiler_inventory.py` and a link to the compiler fix.
+- A workaround for a compiler gap comes with a test that fails once the
+  compiler no longer needs it.
 - Environment variables are read through `sglang_rbln.envs`; every
   `SGLANG_RBLN_*` one has a row in the README configuration table.
 - `activate()` runs in every spawned process: never import `rebel` or `torch`

@@ -299,9 +299,9 @@ def test_released_graphs_include_those_after_a_graph_break():
     assert [runtime() for runtime in runtimes] == [None, None]
 
 
-def test_a_decode_gives_its_cached_blocks_back(stage, monkeypatch):
-    # The next request's tiles and video find the room the first request's did, so
-    # its video evicts neither the decoder's programs nor its pool.
+def test_a_decode_releases_cached_device_memory(stage, monkeypatch):
+    # Each decode returns its cached device memory, so the next request has the room
+    # the first one had.
     calls = []
     monkeypatch.setattr(
         torch,

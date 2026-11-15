@@ -1,13 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """Autocast for rbln tensors, with CUDA autocast's cast policy.
 
-torch-rbln declares no AMP dtype, so ``torch.autocast("rbln")`` disables itself, and
-registers no kernel at ``AutocastPrivateUse1``, so every op would fall through and a
-bf16 module fed float32 inputs fails at its first conv or linear. These kernels cast as
-``aten/src/ATen/autocast_mode.cpp`` does for CUDA, on exactly the overloads the
-installed torch registers for CUDA: the lower-precision ops run in the autocast dtype,
-the float32 ops in float32, the promote ops in the widest input dtype, and the ops
-CUDA bans raise.
+These kernels cast as ``aten/src/ATen/autocast_mode.cpp`` does for CUDA, on exactly
+the overloads the installed torch registers for CUDA: the lower-precision ops run in
+the autocast dtype, the float32 ops in float32, the promote ops in the widest input
+dtype, and the ops CUDA bans raise.
 """
 
 from __future__ import annotations

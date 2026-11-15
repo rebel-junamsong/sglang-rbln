@@ -38,7 +38,7 @@ def test_convs_and_linears_run_in_the_autocast_dtype(fake, dtype, channels):
 
 
 @pytest.mark.parametrize("features", [16, 128])
-def test_norms_and_softmax_run_in_float32(fake, features):
+def test_norms_and_softmax_follow_cuda_autocast(fake, features):
     x = fake(2, 8, features, dtype=torch.bfloat16)
     weight = fake(features, dtype=torch.bfloat16)
     with torch.autocast("rbln", torch.bfloat16):
@@ -80,7 +80,7 @@ def test_covers_exactly_cuda_autocasts_overloads(fake):
 
 
 @pytest.mark.parametrize("dim", [None, -1], ids=["all", "last"])
-def test_norms_reduce_in_float32(fake, dim):
+def test_norms_follow_cuda_autocast(fake, dim):
     x = fake(4, 32, dtype=torch.bfloat16)
     with torch.autocast("rbln", torch.bfloat16):
         norm = torch.norm(x) if dim is None else torch.norm(x, 2, dim)

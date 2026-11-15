@@ -36,8 +36,7 @@ class AudioChain(nn.Module):
 
     def forward(self, latents: torch.Tensor) -> torch.Tensor:
         spectrogram = align_tensor_to_module_dtype(self.decoder(latents), self.vocoder)
-        # The class forward: an instance-level forward on the vocoder makes the
-        # traced program read the wrong weights on the device.
+        # The class forward, bypassing any instance-level forward.
         return type(self.vocoder).forward(self.vocoder, spectrogram)
 
 
