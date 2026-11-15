@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 import builtins
+import json
 import os
+import subprocess
+import sys
 from importlib.metadata import entry_points
 from pkgutil import resolve_name
 from types import SimpleNamespace
@@ -293,3 +296,34 @@ class TestTensorParallelDegree:
         server_args.tp_size, server_args.explicit_args = 4, {"tp_size"}
         with pytest.raises(ValueError, match="contradicts"):
             platform_module.take_tensor_parallel_degree(server_args)
+
+
+CPU_REFERENCE_PROBE = """
+import json, sys
+from sglang.multimodal_gen.runtime import platforms
+from sglang.multimodal_gen.runtime.platforms import plugins
+from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry
+plugins.load_plugins(); plugins.apply_plugin_hooks()
+print(json.dumps({
+    "platform": type(platforms.current_platform).__name__,
+    "hooks": sorted(HookRegistry._hooks),
+    "plugin_platform": "sglang_rbln.platform" in sys.modules,
+}))
+"""
+
+
+def test_a_cpu_reference_run_leaves_the_plugin_out():
+    """The README's CPU reference: upstream's own platform, with no plugin hook."""
+    env = {**os.environ, "SGLANG_DIFFUSION_PLATFORM_OVERRIDE": "cpu"}
+    completed = subprocess.run(
+        [sys.executable, "-c", CPU_REFERENCE_PROBE],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert json.loads(completed.stdout.strip().splitlines()[-1]) == {
+        "platform": "CpuPlatform",
+        "hooks": [],
+        "plugin_platform": False,
+    }
