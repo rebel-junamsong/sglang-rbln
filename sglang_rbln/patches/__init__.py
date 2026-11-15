@@ -7,7 +7,6 @@ from sglang_rbln.compilation import placement, regions, residency, timeline
 from sglang_rbln.patches import ffmpeg_spawn
 from sglang_rbln.patches.configs import arch_config
 from sglang_rbln.patches.entrypoints import frames, prompt_enhancement
-from sglang_rbln.patches.layers import layernorm
 from sglang_rbln.patches.layers.attention import video_sparse_attn
 from sglang_rbln.patches.managers import gpu_worker
 from sglang_rbln.patches.models import (
@@ -38,7 +37,6 @@ def register() -> None:
     placement.register()
     video_sparse_attn.register()
     regions.register()
-    layernorm.register()
     ltx_2.register()
     ltx_2_tile_ranks.register()
     text_encoding.register()

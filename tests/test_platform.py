@@ -174,16 +174,17 @@ class TestServerArgDefaults:
             disable_autocast=False,
         )
 
-    def test_compiles_per_block_through_the_platform(self, server_args):
+    def test_compiles_through_the_platform(self, server_args):
+        """The LTX DiT compiles whole, as upstream's default does; an explicit
+        `--regional-compile` makes it block regions instead."""
         RBLNPlatform().apply_server_args_defaults(server_args)
         assert server_args.enable_torch_compile is True
-        assert server_args.regional_compile is True
+        assert server_args.regional_compile is False
 
-    @pytest.mark.parametrize("flag", ["enable_torch_compile", "regional_compile"])
-    def test_keeps_an_explicit_choice(self, server_args, flag):
-        server_args.explicit_args = {flag}
+    def test_keeps_an_explicit_choice(self, server_args):
+        server_args.explicit_args = {"enable_torch_compile"}
         RBLNPlatform().apply_server_args_defaults(server_args)
-        assert getattr(server_args, flag) is False
+        assert server_args.enable_torch_compile is False
 
     def test_runs_the_vocoder_in_fp32(self, server_args):
         RBLNPlatform().apply_server_args_defaults(server_args)

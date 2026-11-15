@@ -9,24 +9,8 @@ import torch
 from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry, HookType
 
 from sglang_rbln.patches import cuda_imports
-from sglang_rbln.patches.layers import layernorm
 from sglang_rbln.patches.layers.attention import video_sparse_attn
 from sglang_rbln.patches.models import ltx_2
-
-
-class TestTritonNormExports:
-    def test_binds_only_missing_names(self):
-        exports_module = ModuleType("fake_exports")
-        exports_module.rms_norm_fn = real_kernel = object()
-        assert layernorm.register(exports_module) == ["norm_infer"]
-        assert exports_module.rms_norm_fn is real_kernel
-        with pytest.raises(NotImplementedError):
-            exports_module.norm_infer()
-
-    def test_is_idempotent(self):
-        exports_module = ModuleType("fake_exports")
-        assert layernorm.register(exports_module) == list(layernorm.TRITON_NORM_EXPORTS)
-        assert layernorm.register(exports_module) == []
 
 
 class TestCudaImportGuard:

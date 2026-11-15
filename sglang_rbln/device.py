@@ -6,8 +6,6 @@ import importlib.util
 from pathlib import Path
 from typing import NamedTuple
 
-import psutil
-
 from sglang_rbln import envs
 
 DEVICE_NODE_DIR = Path("/dev")
@@ -54,8 +52,3 @@ def npu_memory_info(device_id: int = 0) -> MemoryInfo:
 
     info = rebel.get_device_memory_info(device_id)
     return MemoryInfo(int(info.total), int(info.used), int(info.free))
-
-
-def host_memory_info() -> MemoryInfo:
-    memory = psutil.virtual_memory()
-    return MemoryInfo(int(memory.total), int(memory.used), int(memory.available))

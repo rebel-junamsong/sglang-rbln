@@ -5,9 +5,8 @@ from __future__ import annotations
 import os
 
 import torch
-from sglang.multimodal_gen.runtime.platforms import Platform, PlatformEnum
+from sglang.multimodal_gen.runtime.platforms import PlatformEnum
 from sglang.multimodal_gen.runtime.platforms.cpu import CpuPlatform
-from sglang.multimodal_gen.runtime.platforms.interface import AttentionBackendEnum
 
 from sglang_rbln import device, envs
 from sglang_rbln.compilation import backend as compilation
@@ -52,15 +51,15 @@ def take_tensor_parallel_degree(server_args) -> None:
     server_args.num_gpus = 1
 
 
-class RBLNPlatform(Platform):
+class RBLNPlatform(CpuPlatform):
     """Upstream sees the host: its tensors are cpu ones, and the plugin's compiled
     regions take them onto their NPU sets, where their outputs and the eager ops
-    between the regions stay (`compilation.residency`)."""
+    between the regions stay (`compilation.residency`). So every answer is the CPU
+    platform's but the platform's identity, the compile backend and the device
+    names."""
 
     _enum = PlatformEnum.OOT
     device_name = "rbln"
-    device_type = "cpu"
-    dispatch_key = "CPU"
     simple_compile_backend = compilation.COMPILE_BACKEND_NAME
 
     def init_backend(self) -> None:
@@ -73,8 +72,6 @@ class RBLNPlatform(Platform):
         take_tensor_parallel_degree(server_args)
         if not server_args.is_arg_explicitly_set("enable_torch_compile"):
             server_args.enable_torch_compile = True
-        if not server_args.is_arg_explicitly_set("regional_compile"):
-            server_args.regional_compile = True
         # Upstream's LTX2VocoderWithBWE.forward opens its float32 autocast region
         # only off the CPU, so on the host its bf16 weights meet a float32 input.
         server_args.component_precisions.setdefault("vocoder", "fp32")
@@ -87,10 +84,6 @@ class RBLNPlatform(Platform):
 
     def get_dispatch_key_name(self) -> str:
         return "rbln"
-
-    @classmethod
-    def get_local_torch_device(cls) -> torch.device:
-        return torch.device("cpu")
 
     def get_device(self, local_rank: int) -> torch.device:
         return torch.device("cpu")
@@ -119,41 +112,5 @@ class RBLNPlatform(Platform):
         return True
 
     @classmethod
-    def is_async_output_supported(cls, enforce_eager: bool | None) -> bool:
-        return True
-
-    @classmethod
-    def get_device_total_memory(cls, device_id: int = 0) -> int:
-        return device.host_memory_info().total
-
-    @classmethod
-    def get_current_memory_usage(cls, device=None) -> float:
-        return float(device.host_memory_info().used)
-
-    @classmethod
-    def get_available_gpu_memory(cls, device_id=None, *args, **kwargs) -> float:
-        return device.host_memory_info().free / (1 << 30)
-
-    @classmethod
     def inference_mode(cls):
         return torch.no_grad()
-
-    def get_attn_backend_cls_str(
-        self,
-        selected_backend: AttentionBackendEnum | None,
-        head_size: int,
-        dtype: torch.dtype,
-    ) -> str:
-        # `Platform`'s own returns "": take the CPU platform's SDPA selection.
-        return CpuPlatform.get_attn_backend_cls_str(selected_backend, head_size, dtype)
-
-    def get_torch_distributed_backend_str(self) -> str:
-        return "gloo"
-
-    @classmethod
-    def get_device_communicator_cls(cls) -> str:
-        return CpuPlatform.get_device_communicator_cls()
-
-    @classmethod
-    def enable_dit_layerwise_offload_by_default(cls) -> bool:
-        return False

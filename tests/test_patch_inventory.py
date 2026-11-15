@@ -35,15 +35,6 @@ PATCH_DEBTS = [
         upstream_fix="let the platform name every device type autocast covers",
     ),
     PatchDebt(
-        patch="layers/layernorm",
-        module="sglang.multimodal_gen.runtime.layers.layernorm",
-        upstream_pattern=(
-            "if not _is_cpu:\n"
-            "    from sglang.kernels.ops.diffusion import norm_infer, rms_norm_fn"
-        ),
-        upstream_fix="gate the Triton norm import on has_triton()",
-    ),
-    PatchDebt(
         patch="layers/attention/video_sparse_attn",
         module="sglang.multimodal_gen.runtime.layers.attention.backends"
         ".video_sparse_attn",

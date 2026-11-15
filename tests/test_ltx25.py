@@ -19,12 +19,7 @@ import sglang.multimodal_gen.runtime.entrypoints.cli.serve
 import sglang.multimodal_gen.runtime.models.dits.ltx_2
 import sglang.multimodal_gen.runtime.models.vaes.ltx_2_audio
 import sglang.multimodal_gen.runtime.pipelines.ltx_2_pipeline
-import sglang.kernels.ops.diffusion as diffusion_exports
 from sglang.multimodal_gen.runtime.layers.attention.backends import video_sparse_attn
-try:
-    diffusion_exports.norm_infer(); raise SystemExit("norm_infer did not raise")
-except NotImplementedError:
-    pass
 print(json.dumps({{
     "platform": type(platforms.current_platform).__name__,
     "device_type": platforms.current_platform.device_type,
