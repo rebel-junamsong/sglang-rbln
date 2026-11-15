@@ -49,6 +49,16 @@ LISTED_CASTS = {
         "ramp.to(torch.float32)",
     ): "upstream's blend weights are Python floats",
     (
+        "patches/models/ltx_2_vae_assembly.py",
+        "blend",
+        "(tail * keep).to(b.dtype)",
+    ): "upstream's tile times a Python float stays in the tile's dtype",
+    (
+        "patches/models/ltx_2_vae_assembly.py",
+        "blend",
+        "(head * take).to(b.dtype)",
+    ): "upstream's tile times a Python float stays in the tile's dtype",
+    (
         "patches/stages/ltx_2/detailing.py",
         "append_reference",
         "reference[0].to(device=latents.device, dtype=latents.dtype)",
