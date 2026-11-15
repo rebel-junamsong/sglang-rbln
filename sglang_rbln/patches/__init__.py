@@ -23,7 +23,6 @@ from sglang_rbln.patches.stages.ltx_2 import (
     image_encoding,
     upsampling,
 )
-from sglang_rbln.patches.torch_rbln import ops_utils
 from sglang_rbln.patches.utils import precision
 
 __all__ = ["register", "register_resident"]
@@ -53,7 +52,6 @@ def register() -> None:
     ffmpeg_spawn.register()
     frames.register()
     if device.torch_rbln_available():
-        ops_utils.register()
         precision.register()
     if envs.SGLANG_RBLN_COMPILE_ONLY:
         compile_only.register()

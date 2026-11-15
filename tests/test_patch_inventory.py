@@ -8,8 +8,6 @@ from pathlib import Path
 
 import pytest
 
-from sglang_rbln import device
-
 STAGES = "sglang.multimodal_gen.runtime.pipelines_core.stages.model_specific_stages"
 
 
@@ -140,21 +138,6 @@ PATCH_DEBTS = [
         module=f"{STAGES}.ltx_2.upsampling",
         upstream_pattern="latents = spatial_upsampler(latents)",
         upstream_fix="compile the latent upsampler through the platform backend",
-    ),
-    pytest.param(
-        PatchDebt(
-            patch="torch_rbln/ops_utils",
-            module="torch_rbln._internal.ops_utils",
-            upstream_pattern=(
-                "promoted_dtype = torch.promote_types(promoted_dtype, tensor.dtype)"
-            ),
-            upstream_fix="promote like torch.result_type (zero-dim tensors do not"
-            " raise the result dtype within a category)",
-        ),
-        id="torch_rbln/ops_utils",
-        marks=pytest.mark.xfail(
-            not device.torch_rbln_available(), reason="torch-rbln is not installed"
-        ),
     ),
 ]
 

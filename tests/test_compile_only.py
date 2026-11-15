@@ -23,11 +23,6 @@ COMPILE_ONE_GRAPH = textwrap.dedent(
 
     from sglang_rbln.compilation import backend
 
-    if sys.argv[1] == "run":
-        # A dummy device refuses to execute; the artifact is written before that.
-        import torch_rbln._internal.torch_compile_patch_helpers as helpers
-
-        helpers.raise_if_dummy_execution = lambda *args, **kwargs: None
     backend.ensure_compile_backend()
     device = sys.argv[2]
     torch.manual_seed(0)

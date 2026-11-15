@@ -183,8 +183,8 @@ def describe_graph(graph: torch.fx.GraphModule, example_inputs) -> str:
 
 
 def contiguous_device_inputs(args):
-    # A dummy device runs no graph, the eager copy behind contiguous() included; a
-    # compile-only run reads only the shape, so an empty tensor of it stands in.
+    # A compile-only run reads only the shape, so an empty tensor of it stands in for
+    # the eager copy behind contiguous().
     contiguous = (
         torch.empty_like if envs.SGLANG_RBLN_COMPILE_ONLY else torch.Tensor.contiguous
     )

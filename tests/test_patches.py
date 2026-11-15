@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 import importlib
 import importlib.util
-import itertools
 import sys
 from types import ModuleType
 
@@ -13,7 +12,6 @@ from sglang_rbln.patches import cuda_imports
 from sglang_rbln.patches.layers import layernorm
 from sglang_rbln.patches.layers.attention import video_sparse_attn
 from sglang_rbln.patches.models import ltx_2
-from sglang_rbln.patches.torch_rbln import ops_utils
 
 
 class TestTritonNormExports:
@@ -102,47 +100,3 @@ class TestLtx2RopeHook:
         )
         table = torch.zeros(9, 256, dtype=torch.bfloat16)
         assert ltx_2.without_triton_ada_values(table, 1, table.view(1, 1, -1)) is None
-
-
-class TestTorchRblnPromotion:
-    REAL_DTYPES = (
-        torch.bool,
-        torch.int32,
-        torch.int64,
-        torch.bfloat16,
-        torch.float16,
-        torch.float32,
-        torch.float64,
-    )
-
-    @pytest.mark.parametrize("shapes", [((), ()), ((), (2,)), ((2,), ()), ((2,), (2,))])
-    def test_matches_torch_result_type(self, shapes):
-        for left, right in itertools.product(self.REAL_DTYPES, repeat=2):
-            tensors = [
-                torch.ones(shapes[0], dtype=left),
-                torch.ones(shapes[1], dtype=right),
-            ]
-            assert ops_utils.result_dtype(tensors) == torch.result_type(*tensors)
-
-    def test_zero_dim_float32_scale_keeps_a_bfloat16_output(self):
-        scale = torch.tensor(0.5)
-        sample = torch.ones(4, dtype=torch.bfloat16)
-        assert ops_utils.is_type_promotion_allowed((scale, sample), sample)
-        assert not ops_utils.is_type_promotion_allowed(
-            (scale.expand(4), sample), sample
-        )
-
-    def test_rejects_inputs_without_tensors(self):
-        with pytest.raises(TypeError, match="No tensor inputs"):
-            ops_utils.is_type_promotion_allowed((1.0,), torch.ones(1))
-
-    def test_binds_into_both_torch_rbln_modules(self, monkeypatch):
-        fakes = {name: ModuleType(name) for name in ops_utils.PATCHED_MODULES}
-        for name, module in fakes.items():
-            module.is_type_promotion_allowed = object()
-            monkeypatch.setitem(sys.modules, name, module)
-        ops_utils.register()
-        assert all(
-            module.is_type_promotion_allowed is ops_utils.is_type_promotion_allowed
-            for module in fakes.values()
-        )
