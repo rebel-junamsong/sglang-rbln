@@ -14,7 +14,7 @@ UPSTREAM = {
 }
 
 
-@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32], ids=str)
 @pytest.mark.parametrize("name", ["blend_v", "blend_h", "blend_t"])
 @pytest.mark.parametrize("extent", [0, 1, 7, 64, 200])
 def test_blend_matches_upstream_bit_for_bit(name, dtype, extent):
@@ -28,7 +28,7 @@ def test_blend_matches_upstream_bit_for_bit(name, dtype, extent):
 
 
 @pytest.mark.parametrize("target", ltx_2.BLENDS)
-def test_replaces_the_upstream_blend(target):
+def test_replaces_each_upstream_blend(target):
     assert target in ltx_2.register()
     assert any(
         hook is ltx_2.BLENDS[target] and kind is HookType.REPLACE

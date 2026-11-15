@@ -13,7 +13,7 @@ imageio_ffmpeg = pytest.importorskip("imageio_ffmpeg")
 
 
 @pytest.fixture
-def patched(monkeypatch):
+def patched_imageio_modules(monkeypatch):
     from imageio_ffmpeg import _io, _utils
 
     for module in (_utils, _io):
@@ -22,27 +22,29 @@ def patched(monkeypatch):
     return _utils, _io
 
 
-def test_writer_spawns_ffmpeg_in_its_own_group_without_preexec_fn(patched):
-    for module in patched:
+def test_writer_spawns_ffmpeg_in_its_own_group_without_preexec_fn(
+    patched_imageio_modules,
+):
+    for module in patched_imageio_modules:
         popen = module._popen_kwargs(prevent_sigint=True)
         assert popen["preexec_fn"] is None
         assert popen["process_group"] == 0
 
 
-def test_other_spawns_are_unchanged(patched):
-    utils, _ = patched
+def test_other_spawns_are_unchanged(patched_imageio_modules):
+    utils, _ = patched_imageio_modules
     assert "process_group" not in utils._popen_kwargs()
 
 
-def test_register_twice_wraps_once(patched):
-    utils, _ = patched
+def test_registering_twice_wraps_once(patched_imageio_modules):
+    utils, _ = patched_imageio_modules
     wrapped = utils._popen_kwargs
     ffmpeg_spawn.register()
     assert utils._popen_kwargs is wrapped
 
 
-def test_child_gets_its_own_process_group(patched):
-    utils, _ = patched
+def test_child_gets_its_own_process_group(patched_imageio_modules):
+    utils, _ = patched_imageio_modules
     child = subprocess.run(
         [sys.executable, "-c", "import os; print(os.getpgrp())"],
         capture_output=True,

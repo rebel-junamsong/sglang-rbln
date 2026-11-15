@@ -14,10 +14,10 @@ from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry
 from sglang_rbln.compilation import backend as compilation
 from sglang_rbln.patches.models import ltx_2
 
+STAGE_3_GRID = (18, 68, 120)  # frames, height, width
+
 
 def test_decoder_keeps_upstream_attention():
-    """The decoder keeps upstream's flex_attention neighborhood attention; the
-    plugin does not replace it."""
     targets = ltx_2.register()
     assert ltx_2.DIFFUSION_DECODER_INIT in targets
     assert not [t for t in targets if t.endswith("._na3d")]
@@ -51,8 +51,6 @@ def test_decoder_loads_the_checkpoint_keyframe_tag():
     ids=str,
 )
 def test_neighborhood_attention_compiled_by_the_backend_matches_eager(grid, kernel):
-    """The decoder's neighborhood attention, compiled through the plugin backend,
-    matches eager."""
     lower = pytest.importorskip("rebel.core._flex_attention").lower_flex_attention
 
     def lowered(graph_module, _):
@@ -73,8 +71,6 @@ def test_neighborhood_attention_compiled_by_the_backend_matches_eager(grid, kern
 
 @pytest.mark.npu
 def test_stage_3_attention_on_two_npus_matches_eager(tmp_path):
-    """The stage-3 decoder attention at this grid, compiled for two NPUs, runs and
-    matches eager."""
     visible = [
         npu for npu in os.environ.get("RBLN_VISIBLE_DEVICES", "").split(",") if npu
     ]
@@ -86,7 +82,7 @@ def test_stage_3_attention_on_two_npus_matches_eager(tmp_path):
         512, (3, 5, 5)
     )
     attention = attention.to(torch.bfloat16).eval()
-    hidden_states = torch.randn(1, 18, 68, 120, 512, dtype=torch.bfloat16)
+    hidden_states = torch.randn(1, *STAGE_3_GRID, 512, dtype=torch.bfloat16)
     options = {"num_devices": 2, "cache_dir": str(tmp_path), "mode": ["strict"]}
     with torch.no_grad():
         reference = attention(hidden_states)

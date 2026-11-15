@@ -24,7 +24,7 @@ class _TinyMlp(nn.Module):
         return self.down(torch.nn.functional.gelu(self.up(hidden)))
 
 
-def test_rebel_backend_is_available():
+def test_the_rbln_backend_is_registered_with_static_shapes():
     compilation.ensure_compile_backend()
     assert "rbln" in list_backends()
     assert torch._dynamo.config.automatic_dynamic_shapes is False
@@ -39,11 +39,14 @@ class _Block(nn.Module):
         return hidden + self.proj(hidden)
 
 
+LTX2_DIT_BLOCKS = 48
+
+
 def test_every_block_compiles_for_every_request_shape():
     compilation.ensure_compile_backend()
     torch._dynamo.reset()
     counter = CompileCounter()
-    blocks = nn.ModuleList(_Block() for _ in range(48))
+    blocks = nn.ModuleList(_Block() for _ in range(LTX2_DIT_BLOCKS))
     for block in blocks:
         block.compile(backend=counter, dynamic=False)
     shapes = range(8, 40, 4)
@@ -87,7 +90,9 @@ def test_wraps_the_registered_backend_once(monkeypatch):
 
 
 @pytest.mark.parametrize("flag", ["RBLN_POOL_IO_BUFFERS", "RBLN_RSD_GROUPING"])
-@pytest.mark.parametrize(("preset", "expected"), [(None, "1"), ("0", "0")])
+@pytest.mark.parametrize(
+    ("preset", "expected"), [(None, "1"), ("0", "0")], ids=["unset", "set-to-0"]
+)
 def test_compiler_flags_default_on_unless_told_otherwise(
     monkeypatch, flag, preset, expected
 ):
@@ -101,13 +106,13 @@ def test_compiler_flags_default_on_unless_told_otherwise(
 
 class TestCompileOptions:
     @pytest.fixture(autouse=True)
-    def clean_env(self, monkeypatch):
+    def no_plugin_env(self, monkeypatch):
         for name in envs.environment_variables:
             monkeypatch.delenv(name, raising=False)
         monkeypatch.setenv("SGLANG_RBLN_DISABLE_COMPILE_CACHE", "1")
 
     @staticmethod
-    def switches(module=None) -> dict:
+    def compile_switches(module=None) -> dict:
         options = compilation.compile_options(module or _TinyMlp())
         del options["compile_context"]
         return options
@@ -144,10 +149,10 @@ class TestCompileOptions:
         ],
         ids=["always-strict", "num-devices", "compile-only"],
     )
-    def test_switches(self, monkeypatch, env, expected):
+    def test_compile_switches_follow_the_environment(self, monkeypatch, env, expected):
         for name, value in env.items():
             monkeypatch.setenv(name, value)
-        assert self.switches() == expected
+        assert self.compile_switches() == expected
 
 
 @pytest.mark.npu

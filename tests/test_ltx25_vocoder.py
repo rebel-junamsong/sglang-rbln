@@ -18,7 +18,7 @@ from sglang_rbln.patches.stages.ltx_2 import decoding_av, vocoder
 pytestmark = pytest.mark.usefixtures("rbln_platform")
 
 
-def forward(stage, batch, server_args):
+def upstream_forward(stage, batch, server_args):
     return "output"
 
 
@@ -53,8 +53,8 @@ def audio_stage_fixture():
     return SimpleNamespace(audio_vae=AudioVae(), vocoder=Vocoder())
 
 
-@pytest.fixture(name="chained")
-def chained_fixture(monkeypatch):
+@pytest.fixture
+def compiled_modules(monkeypatch):
     calls = []
     monkeypatch.setattr(
         nn.Module, "compile", lambda module, **kwargs: calls.append((module, kwargs))
@@ -73,8 +73,8 @@ def audio_forward(stage, batch, server_args):
     return stage.vocoder(spectrogram)
 
 
-def test_compiles_the_audio_chain_once(audio_stage, chained, monkeypatch):
-    # with no set of its own it runs across the DiT's
+def test_compiles_the_audio_chain_once(audio_stage, compiled_modules, monkeypatch):
+    # no text-encoder NPUs, so the chain runs across the DiT's
     monkeypatch.setenv("SGLANG_RBLN_NUM_DEVICES", "4")
     monkeypatch.setattr(placement, "text_encoder_devices", lambda: None)
     server_args = SimpleNamespace(enable_torch_compile=True)
@@ -82,8 +82,8 @@ def test_compiles_the_audio_chain_once(audio_stage, chained, monkeypatch):
         vocoder.compile_audio(audio_forward, audio_stage, None, server_args)
         for _ in range(2)
     ]
-    assert len(chained) == 1
-    chain, kwargs = chained[0]
+    assert len(compiled_modules) == 1
+    chain, kwargs = compiled_modules[0]
     assert isinstance(chain, vocoder.AudioChain)
     assert (kwargs["backend"], kwargs["dynamic"]) == ("rbln", False)
     assert kwargs["options"]["num_devices"] == 4
@@ -101,25 +101,27 @@ def test_chain_takes_the_latents_and_returns_the_waveform(audio_stage, frames):
     assert torch.equal(waveform, torch.full((1, 2, frames, 4), 3.0))
 
 
-def test_chain_runs_on_the_vocoders_placed_npu(audio_stage, chained):
+def test_chain_runs_on_the_vocoders_placed_npu(audio_stage, compiled_modules):
     placement.place(audio_stage.vocoder, (8,))
     server_args = SimpleNamespace(enable_torch_compile=True)
     vocoder.compile_audio(audio_forward, audio_stage, None, server_args)
-    options = chained[0][1]["options"]
+    options = compiled_modules[0][1]["options"]
     assert (options["num_devices"], options["device"]) == (1, [8])
 
 
-def test_leaves_the_audio_modules_eager_without_torch_compile(audio_stage, chained):
+def test_leaves_the_audio_modules_eager_without_torch_compile(
+    audio_stage, compiled_modules
+):
     server_args = SimpleNamespace(enable_torch_compile=False)
-    vocoder.compile_audio(forward, audio_stage, None, server_args)
-    assert chained == []
+    vocoder.compile_audio(upstream_forward, audio_stage, None, server_args)
+    assert compiled_modules == []
     assert audio_stage.audio_vae.latents_mean is not None
     assert torch.equal(
         audio_forward(audio_stage, None, None), torch.full((1, 2, 3, 4), 9.0)
     )
 
 
-def test_decode_hook_compiles_video_decoder_and_audio_chain(chained):
+def test_decode_hook_compiles_video_decoder_and_audio_chain(compiled_modules):
     av_stage = SimpleNamespace(
         vae=SimpleNamespace(decoder=nn.Linear(4, 4)),
         audio_vae=AudioVae(),
@@ -128,9 +130,10 @@ def test_decode_hook_compiles_video_decoder_and_audio_chain(chained):
     batch = SimpleNamespace(use_diffusion_decoder=False)
     server_args = SimpleNamespace(enable_torch_compile=True)
     assert (
-        decoding_av.compile_decoders(forward, av_stage, batch, server_args) == "output"
+        decoding_av.compile_decoders(upstream_forward, av_stage, batch, server_args)
+        == "output"
     )
-    modules = [module for module, _ in chained]
+    modules = [module for module, _ in compiled_modules]
     assert modules[0] is av_stage.vae.decoder
     assert isinstance(modules[1], vocoder.AudioChain)
     assert len(modules) == 2
@@ -189,13 +192,13 @@ def test_vocoder_runs_on_the_npu(caplog, monkeypatch, tmp_path):
     assert snr > 30
 
 
-def test_the_audio_chain_compiles_beside_the_text_encoder(
-    audio_stage, chained, monkeypatch
+def test_the_audio_chain_compiles_for_the_text_encoder_npus(
+    audio_stage, compiled_modules, monkeypatch
 ):
     # the DiT's set has no room for it beside both DiT shapes
     monkeypatch.setenv("SGLANG_RBLN_NUM_DEVICES", "4")
     monkeypatch.setattr(placement, "text_encoder_devices", lambda: (4, 5, 6, 7))
     compile_on = SimpleNamespace(enable_torch_compile=True)
     vocoder.compile_audio(audio_forward, audio_stage, None, compile_on)
-    options = chained[0][1]["options"]
+    options = compiled_modules[0][1]["options"]
     assert (options["num_devices"], options["device"]) == (4, [4, 5, 6, 7])

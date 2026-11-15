@@ -65,5 +65,4 @@ def test_compile_only_writes_the_artifact_a_device_run_loads(artifacts):
 
 
 def test_a_host_compile_is_keyed_apart_from_the_device_run(artifacts):
-    """A compile with host inputs writes a different artifact from a device run."""
     assert artifacts["compile_only", "cpu"] != artifacts["run", "rbln"]

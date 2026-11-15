@@ -17,7 +17,7 @@ def autocast_context(dtype, disable_autocast, *, enabled=None):
 
 
 @pytest.fixture(autouse=True)
-def policy(dummy_device):
+def rbln_autocast_policy(dummy_device):
     precision.rbln_autocast.register()
 
 

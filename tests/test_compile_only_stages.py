@@ -23,17 +23,18 @@ def _uninitialised_embedding() -> VerificationResult:
 
 
 def test_upstream_rejects_a_compile_only_stage_output():
-    # What would stop a compile-only run before the DiT compiled.
+    # A compile-only run leaves stage outputs uninitialised; this check would stop
+    # it before the DiT compiles.
     with pytest.raises(Exception, match="prompt_embeds"):
         RUN_VERIFICATION(object(), _uninitialised_embedding(), "Stage", "input")
 
 
-def test_compile_only_checks_no_stage_values():
+def test_compile_only_skips_stage_output_verification():
     result = _uninitialised_embedding()
     assert compile_only.skip_verification(object(), result, "Stage", "input") is None
 
 
-def test_registers_over_the_stage_verification():
+def test_replaces_the_upstream_stage_verification():
     target = compile_only.register()
     assert any(
         hook is compile_only.skip_verification and kind is HookType.REPLACE

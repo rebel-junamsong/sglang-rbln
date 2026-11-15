@@ -32,7 +32,7 @@ TORCH_DTYPES = {
     "bool",
 }
 
-ALLOWED = {
+LISTED_CASTS = {
     (
         "patches/entrypoints/prompt_enhancement.py",
         "greedy_decode",
@@ -115,5 +115,5 @@ def test_every_cast_is_listed_with_its_reason():
         for path in sorted(PACKAGE.rglob("*.py"))
         for scope, source in _casts(path)
     }
-    assert found - ALLOWED.keys() == set(), "new dtype casts in the plugin"
-    assert ALLOWED.keys() - found == set(), "listed casts that are gone"
+    assert found - LISTED_CASTS.keys() == set(), "new dtype casts in the plugin"
+    assert LISTED_CASTS.keys() - found == set(), "listed casts that are gone"

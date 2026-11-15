@@ -25,7 +25,7 @@ def stage():
 
 
 @pytest.fixture
-def compiled(monkeypatch):
+def compiled_modules(monkeypatch):
     calls = []
     monkeypatch.setattr(
         nn.Module, "compile", lambda module, **kwargs: calls.append((module, kwargs))
@@ -49,7 +49,7 @@ def test_registers_around_the_video_decode():
     assert decoding_av.decode_within_memory in hooks
 
 
-def test_compiles_the_decoder_once(stage, compiled):
+def test_compiles_the_decoder_once(stage, compiled_modules):
     batch = SimpleNamespace(use_diffusion_decoder=False)
     server_args = SimpleNamespace(enable_torch_compile=True)
     outputs = [
@@ -59,44 +59,46 @@ def test_compiles_the_decoder_once(stage, compiled):
         for _ in range(2)
     ]
     assert outputs == [("video", print)] * 2
-    assert [module for module, _ in compiled] == [stage.vae.decoder]
-    assert compiled[0][1]["backend"] == "rbln"
-    assert compiled[0][1]["dynamic"] is False
+    assert [module for module, _ in compiled_modules] == [stage.vae.decoder]
+    assert compiled_modules[0][1]["backend"] == "rbln"
+    assert compiled_modules[0][1]["dynamic"] is False
     # Every frame in one window, as upstream decodes; a window is taken only when
     # the decode does not fit (decode_within_memory).
     assert not stage.vae.use_framewise_decoding
-    assert compiled[0][1]["options"]["compile_context"].state.use_weight_sharing
+    assert compiled_modules[0][1]["options"]["compile_context"].state.use_weight_sharing
 
 
-def test_decoder_spans_the_tensor_parallel_devices(stage, compiled, monkeypatch):
+def test_decoder_spans_the_tensor_parallel_devices(
+    stage, compiled_modules, monkeypatch
+):
     monkeypatch.setenv("SGLANG_RBLN_NUM_DEVICES", "4")
     batch = SimpleNamespace(use_diffusion_decoder=False)
     server_args = SimpleNamespace(enable_torch_compile=True)
     decoding_av.compile_video_decoder(decode_video, stage, batch, server_args)
-    options = compiled[0][1]["options"]
+    options = compiled_modules[0][1]["options"]
     assert options["num_devices"] == 4
     assert "device" not in options
 
 
-def test_decoder_shares_the_transformer_context(stage, compiled, monkeypatch):
+def test_decoder_shares_the_transformer_context(stage, compiled_modules, monkeypatch):
     monkeypatch.setenv("SGLANG_RBLN_NUM_DEVICES", "4")
     monkeypatch.setattr(compilation, "_device_set_contexts", {})
     transformer = compilation.compile_options(nn.Linear(4, 4))["compile_context"]
     batch = SimpleNamespace(use_diffusion_decoder=False)
     server_args = SimpleNamespace(enable_torch_compile=True)
     decoding_av.compile_video_decoder(decode_video, stage, batch, server_args)
-    assert compiled[0][1]["options"]["compile_context"] is transformer
+    assert compiled_modules[0][1]["options"]["compile_context"] is transformer
 
 
 def test_decoder_keeps_the_devices_declared_for_its_component(
-    stage, compiled, monkeypatch
+    stage, compiled_modules, monkeypatch
 ):
     monkeypatch.setenv("SGLANG_RBLN_NUM_DEVICES", "4")
     placement.place(stage.vae.decoder, (7,))
     batch = SimpleNamespace(use_diffusion_decoder=False)
     server_args = SimpleNamespace(enable_torch_compile=True)
     decoding_av.compile_video_decoder(decode_video, stage, batch, server_args)
-    options = compiled[0][1]["options"]
+    options = compiled_modules[0][1]["options"]
     assert (options["num_devices"], options["device"]) == (1, [7])
 
 
@@ -106,12 +108,12 @@ def test_decoder_keeps_the_devices_declared_for_its_component(
     ids=["compile-disabled", "diffusion-decoder"],
 )
 def test_leaves_the_decoder_eager(
-    stage, compiled, enable_torch_compile, use_diffusion_decoder
+    stage, compiled_modules, enable_torch_compile, use_diffusion_decoder
 ):
     batch = SimpleNamespace(use_diffusion_decoder=use_diffusion_decoder)
     server_args = SimpleNamespace(enable_torch_compile=enable_torch_compile)
     decoding_av.compile_video_decoder(decode_video, stage, batch, server_args)
-    assert compiled == []
+    assert compiled_modules == []
     assert not stage.vae.use_framewise_decoding
 
 
@@ -153,8 +155,8 @@ def test_video_decoder_runs_on_the_npu(caplog, monkeypatch, tmp_path):
 
 
 def test_another_graph_that_does_not_fit_leaves_the_tiles_alone(stage):
-    # The vocoder did not fit beside the DiT; the stage-wide retry shrank the VAE
-    # tiles three times over, each time compiling another tile size, and failed.
+    # Here the vocoder does not fit beside the DiT. Shrinking the VAE tiles cannot
+    # help it, and each shrink would compile another tile size.
     stage.vae.__dict__.update(
         tile_sample_min_height=512,
         tile_sample_min_width=512,
@@ -179,7 +181,7 @@ class TiledDecoder(nn.Module):
 
 
 def test_vae_decode_retries_on_smaller_tiles_without_the_old_graphs(monkeypatch):
-    # Each given-up tile size left its graphs' runtimes on the device.
+    # A given-up tile size's graphs are released, so their runtimes leave the device.
     released = []
     monkeypatch.setattr(decoding_av, "release_graphs", released.append)
     vae = SimpleNamespace(
@@ -275,8 +277,8 @@ class BreakingDecoder(nn.Module):
 
 
 def test_released_graphs_include_those_after_a_graph_break():
-    # The graphs cached on the resume function stayed, and with them the runtimes
-    # of every given-up decode: 2.3 GiB of device outputs on the DiT's first NPU.
+    # Graphs cached on the resume function hold runtimes too; left behind, every
+    # given-up decode keeps its device outputs (2.3 GiB on the DiT's first NPU).
     runtimes = []
 
     class Runtime:

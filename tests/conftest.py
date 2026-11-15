@@ -166,7 +166,7 @@ def fresh_platform(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture
-def rbln_override(monkeypatch: pytest.MonkeyPatch, npu_name: str) -> dict[str, str]:
+def rbln_platform_env(monkeypatch: pytest.MonkeyPatch, npu_name: str) -> dict[str, str]:
     env = {
         "RBLN_FORCE_NPU_NAME": npu_name,
         "SGLANG_DIFFUSION_PLATFORM_OVERRIDE": "rbln",
@@ -177,16 +177,19 @@ def rbln_override(monkeypatch: pytest.MonkeyPatch, npu_name: str) -> dict[str, s
 
 
 @pytest.fixture
-def rbln_platform(fresh_platform: None, rbln_override: dict[str, str]):
+def rbln_platform(fresh_platform: None, rbln_platform_env: dict[str, str]):
     platform = platforms.current_platform
     assert platform.device_name == "rbln"
     return platform
 
 
 @pytest.fixture
-def run_probe(rbln_override: dict[str, str]) -> Callable[[str], dict]:
+def run_probe(rbln_platform_env: dict[str, str]) -> Callable[[str], dict]:
+    """Run `code` in a fresh process on the RBLN platform; return the JSON it
+    prints last."""
+
     def run(code: str) -> dict:
-        probe_env = {**os.environ, **rbln_override, "PYTHONWARNINGS": "ignore"}
+        probe_env = {**os.environ, **rbln_platform_env, "PYTHONWARNINGS": "ignore"}
         completed = subprocess.run(
             [sys.executable, "-c", code],
             env=probe_env,

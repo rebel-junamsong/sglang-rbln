@@ -17,7 +17,7 @@ class _Layer(nn.Linear):
     pass
 
 
-def _encoder(*layer_names: str) -> nn.Module:
+def _text_encoder(*layer_names: str) -> nn.Module:
     encoder = nn.Module()
     encoder.language_model = nn.Module()
     encoder.language_model.layers = nn.ModuleList([_Layer(4, 4), _Layer(4, 4)])
@@ -30,7 +30,7 @@ def _encoder(*layer_names: str) -> nn.Module:
 
 
 @pytest.fixture
-def compiled(monkeypatch):
+def compiled_modules(monkeypatch):
     calls = []
     monkeypatch.setattr(
         nn.Module, "compile", lambda module, **kwargs: calls.append((module, kwargs))
@@ -38,7 +38,7 @@ def compiled(monkeypatch):
     return calls
 
 
-def forward(stage, batch, server_args):
+def upstream_forward(stage, batch, server_args):
     return "encoded"
 
 
@@ -60,34 +60,36 @@ def test_registers_both_text_stages():
     ],
 )
 def test_compiles_each_declared_layer_list_once_as_one_region(
-    monkeypatch, compiled, layer_names, per_region, expected
+    monkeypatch, compiled_modules, layer_names, per_region, expected
 ):
     if per_region:
         monkeypatch.setenv("SGLANG_RBLN_BLOCKS_PER_REGION", str(per_region))
     else:
         monkeypatch.delenv("SGLANG_RBLN_BLOCKS_PER_REGION", raising=False)
-    stage = SimpleNamespace(text_encoders=[_encoder(*layer_names), None])
+    stage = SimpleNamespace(text_encoders=[_text_encoder(*layer_names), None])
     server_args = SimpleNamespace(
         enable_torch_compile=True, text_encoder_cpu_offload=False
     )
     outputs = [
-        text_encoding.compile_text_encoders(forward, stage, None, server_args)
+        text_encoding.compile_text_encoders(upstream_forward, stage, None, server_args)
         for _ in range(2)
     ]
     assert outputs == ["encoded", "encoded"]
-    assert [type(module) for module, _ in compiled] == expected
-    assert all(kwargs["backend"] == "rbln" for _, kwargs in compiled)
-    assert all(kwargs["dynamic"] is False for _, kwargs in compiled)
+    assert [type(module) for module, _ in compiled_modules] == expected
+    assert all(kwargs["backend"] == "rbln" for _, kwargs in compiled_modules)
+    assert all(kwargs["dynamic"] is False for _, kwargs in compiled_modules)
 
 
-def test_layers_of_one_module_share_its_compile_context(compiled):
-    stage = SimpleNamespace(connectors=_encoder("language_model.layers", "blocks"))
+def test_layers_of_one_module_share_its_compile_context(compiled_modules):
+    stage = SimpleNamespace(connectors=_text_encoder("language_model.layers", "blocks"))
     server_args = SimpleNamespace(
         enable_torch_compile=True, text_encoder_cpu_offload=False
     )
-    text_encoding.compile_connectors(forward, stage, None, server_args)
-    contexts = {id(kwargs["options"]["compile_context"]) for _, kwargs in compiled}
-    (group, _), *rest = compiled
+    text_encoding.compile_connectors(upstream_forward, stage, None, server_args)
+    contexts = {
+        id(kwargs["options"]["compile_context"]) for _, kwargs in compiled_modules
+    }
+    (group, _), *rest = compiled_modules
     layers = stage.connectors.language_model.layers
     assert [block.weight for block in group.blocks] == [
         layer.weight for layer in layers
@@ -99,30 +101,30 @@ def test_layers_of_one_module_share_its_compile_context(compiled):
     assert len(contexts) == 1
 
 
-def test_respects_disabled_compile(compiled):
+def test_nothing_compiles_without_torch_compile(compiled_modules):
     stage = SimpleNamespace(
-        text_encoders=[_encoder("language_model.layers")],
-        connectors=_encoder("blocks"),
+        text_encoders=[_text_encoder("language_model.layers")],
+        connectors=_text_encoder("blocks"),
     )
     server_args = SimpleNamespace(
         enable_torch_compile=False, text_encoder_cpu_offload=False
     )
-    text_encoding.compile_text_encoders(forward, stage, None, server_args)
-    text_encoding.compile_connectors(forward, stage, None, server_args)
-    assert compiled == []
+    text_encoding.compile_text_encoders(upstream_forward, stage, None, server_args)
+    text_encoding.compile_connectors(upstream_forward, stage, None, server_args)
+    assert compiled_modules == []
 
 
-def test_text_encoder_offloaded_to_cpu_stays_eager(compiled):
+def test_text_encoder_offloaded_to_cpu_stays_eager(compiled_modules):
     stage = SimpleNamespace(
-        text_encoders=[_encoder("language_model.layers")],
-        connectors=_encoder("blocks"),
+        text_encoders=[_text_encoder("language_model.layers")],
+        connectors=_text_encoder("blocks"),
     )
     server_args = SimpleNamespace(
         enable_torch_compile=True, text_encoder_cpu_offload=True
     )
-    text_encoding.compile_text_encoders(forward, stage, None, server_args)
-    text_encoding.compile_connectors(forward, stage, None, server_args)
-    assert [module for module, _ in compiled] == [
+    text_encoding.compile_text_encoders(upstream_forward, stage, None, server_args)
+    text_encoding.compile_connectors(upstream_forward, stage, None, server_args)
+    assert [module for module, _ in compiled_modules] == [
         *stage.connectors.blocks,
         stage.connectors.video_aggregate_embed,
     ]
@@ -149,6 +151,9 @@ def test_projections_trace_into_a_graph_that_owns_their_weights(monkeypatch):
     torch.testing.assert_close(projection(hidden_states), expected)
     assert isinstance(projection, nn.Linear)
     assert graph_inputs == [(2, 8)]
+
+
+PLAIN_WORDS = 124  # the tokenizer's 128-word vocabulary less its 4 special tokens
 
 
 def _tiny_gemma():
@@ -216,11 +221,11 @@ def test_capture_hooks_stay_out_of_compiled_layers(monkeypatch, declared):
             assert torch.equal(output, reference)
 
 
-def _tokenizer():
+def _word_tokenizer():
     from tokenizers import Tokenizer, models, pre_tokenizers
     from transformers import PreTrainedTokenizerFast
 
-    words = ["<pad>", "<bos>", "<eos>", "<unk>", *(f"w{i}" for i in range(124))]
+    words = ["<pad>", "<bos>", "<eos>", "<unk>", *(f"w{i}" for i in range(PLAIN_WORDS))]
     backend = Tokenizer(
         models.WordLevel({word: i for i, word in enumerate(words)}, unk_token="<unk>")
     )
@@ -234,8 +239,8 @@ def _tokenizer():
     )
 
 
-def _prompt(words: int) -> str:
-    return " ".join(f"w{i % 124}" for i in range(words))
+def _prompt_of(words: int) -> str:
+    return " ".join(f"w{i % PLAIN_WORDS}" for i in range(words))
 
 
 @pytest.mark.parametrize("caption_proj_before_connector", [False, True])
@@ -261,7 +266,7 @@ def test_encoder_regions_match_eager_at_one_shape_for_any_prompt_length(
         "caption_proj_before_connector",
         caption_proj_before_connector,
     )
-    tokenizer = _tokenizer()
+    tokenizer = _word_tokenizer()
     torch.manual_seed(0)
     model = _tiny_gemma().to(torch.bfloat16)
 
@@ -276,8 +281,8 @@ def test_encoder_regions_match_eager_at_one_shape_for_any_prompt_length(
         )
         return ltx_2._gemma_postprocess_func(outputs, text_inputs, config)
 
-    requests = [(_prompt(words), 32) for words in (0, 1, 7, 31, 40)]
-    requests.append((_prompt(11), 48))
+    requests = [(_prompt_of(words), 32) for words in (0, 1, 7, 31, 40)]
+    requests.append((_prompt_of(11), 48))
     with torch.no_grad():
         expected = [encode(*request) for request in requests]
         torch._dynamo.reset()

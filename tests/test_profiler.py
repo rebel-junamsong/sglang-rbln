@@ -10,7 +10,7 @@ from sglang_rbln.patches.managers import gpu_worker
 
 
 @pytest.fixture
-def window(monkeypatch):
+def fake_profiler(monkeypatch):
     state = SimpleNamespace(active=False, dirs=[], profiled=[])
 
     @contextlib.contextmanager
@@ -25,10 +25,10 @@ def window(monkeypatch):
     return state
 
 
-def serve(window, *warmups):
+def serve_requests(fake_profiler, *warmups):
     def execute_forward(worker, batch):
-        if window.active:
-            window.profiled.append(batch[0].request_id)
+        if fake_profiler.active:
+            fake_profiler.profiled.append(batch[0].request_id)
         return batch[0].request_id
 
     return [
@@ -39,28 +39,35 @@ def serve(window, *warmups):
     ]
 
 
-def test_does_nothing_without_a_profile_dir(monkeypatch, window):
+def test_no_profile_dir_profiles_nothing(monkeypatch, fake_profiler):
     monkeypatch.delenv("SGLANG_RBLN_PROFILE_DIR", raising=False)
-    assert serve(window, False, False, False, False) == ["r0", "r1", "r2", "r3"]
-    assert window.dirs == []
+    assert serve_requests(fake_profiler, False, False, False, False) == [
+        "r0",
+        "r1",
+        "r2",
+        "r3",
+    ]
+    assert fake_profiler.dirs == []
 
 
 @pytest.mark.parametrize(
-    ("request_index", "expected"), [("1", "r1"), ("", "r3"), ("3", "r3")]
+    ("request_index", "expected"),
+    [("1", "r1"), ("", "r3"), ("3", "r3")],
+    ids=["first", "unset-means-third", "third"],
 )
 def test_profiles_only_the_chosen_request_after_warmup(
-    monkeypatch, tmp_path, window, request_index, expected
+    monkeypatch, tmp_path, fake_profiler, request_index, expected
 ):
     trace_dir = tmp_path / "trace"
     monkeypatch.setenv("SGLANG_RBLN_PROFILE_DIR", str(trace_dir))
     monkeypatch.setenv("SGLANG_RBLN_PROFILE_REQUEST", request_index)
-    assert serve(window, True, False, False, False, False) == [
+    assert serve_requests(fake_profiler, True, False, False, False, False) == [
         "r0",
         "r1",
         "r2",
         "r3",
         "r4",
     ]
-    assert window.profiled == [expected]
-    assert window.dirs == [str(trace_dir)]
+    assert fake_profiler.profiled == [expected]
+    assert fake_profiler.dirs == [str(trace_dir)]
     assert trace_dir.is_dir()

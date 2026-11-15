@@ -43,7 +43,7 @@ def install_dit_hooks(monkeypatch):
 
 
 @pytest.fixture
-def model(monkeypatch):
+def tiny_ltx25_dit(monkeypatch):
     install_dit_hooks(monkeypatch)
     monkeypatch.setattr(
         server_args_module,
@@ -94,7 +94,7 @@ def model(monkeypatch):
     return transformer
 
 
-def test_dit_forward_traces_as_one_graph(model):
+def test_dit_forward_traces_as_one_graph(tiny_ltx25_dit):
     """--regional-compile false compiles the whole DiT: latents in, velocities
     out, with the patchify, adaLN, rotary tables and output layers on the device.
     The eager reference fills the plugin's rotary-table cache first; the compiled
@@ -118,10 +118,12 @@ def test_dit_forward_traces_as_one_graph(model):
 
     torch._dynamo.reset()
     with set_forward_context(current_timestep=0, attn_metadata=None), torch.no_grad():
-        expected = model(**inputs)
-        compiled = torch.compile(model, backend=backend, fullgraph=True, dynamic=False)
+        expected = tiny_ltx25_dit(**inputs)
+        compiled = torch.compile(
+            tiny_ltx25_dit, backend=backend, fullgraph=True, dynamic=False
+        )
         outputs = compiled(**inputs)
     assert len(graphs) == 1
-    assert ltx_2_patch.ROTARY_TABLES in model.rope.__dict__
+    assert ltx_2_patch.ROTARY_TABLES in tiny_ltx25_dit.rope.__dict__
     for output, reference in zip(outputs, expected, strict=True):
         torch.testing.assert_close(output, reference)

@@ -49,7 +49,7 @@ def test_finds_the_slices_of_a_sliced_view(make, slices):
     ],
     ids=["transpose", "step-2", "strided-step"],
 )
-def test_leaves_views_slicing_cannot_rebuild(make):
+def test_views_slicing_cannot_rebuild_are_left_alone(make):
     assert device_views.slices_of(make(base_tensor())) is None
 
 

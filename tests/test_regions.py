@@ -81,7 +81,7 @@ class ResidualModel(nn.Module):
 
 
 @pytest.fixture
-def graphs():
+def capturing_backend():
     captured = []
 
     def backend(graph, example_inputs):
@@ -91,7 +91,7 @@ def graphs():
     return captured, {"backend": backend, "dynamic": False}
 
 
-def _plain_compile(module, *, compile_kwargs):
+def _upstream_compile(module, *, compile_kwargs):
     from sglang.multimodal_gen.runtime.utils.torch_compile import (
         compile_matching_submodules,
     )
@@ -100,16 +100,16 @@ def _plain_compile(module, *, compile_kwargs):
 
 
 @pytest.mark.parametrize("size", [2, 3, 7])
-def test_grouped_blocks_match_eager(monkeypatch, graphs, size):
+def test_grouped_blocks_match_eager(monkeypatch, capturing_backend, size):
     monkeypatch.setenv("SGLANG_RBLN_BLOCKS_PER_REGION", str(size))
-    captured, compile_kwargs = graphs
+    captured, compile_kwargs = capturing_backend
     torch.manual_seed(0)
     model = Model().eval()
     x = torch.randn(2, 8)
     with torch.no_grad():
         expected = model(x)
         count = regions.compile_block_groups(
-            _plain_compile, model, compile_kwargs=compile_kwargs
+            _upstream_compile, model, compile_kwargs=compile_kwargs
         )
         outputs = [model(x) for _ in range(3)]
     assert count == math.ceil(len(model.blocks) / size)
@@ -130,7 +130,7 @@ def test_first_call_returns_the_compiled_region_output(keep_outputs):
         return run
 
     torch.manual_seed(0)
-    model = (RecordingModel if keep_outputs else Model)(depth=4).eval()
+    model = (EveryOutputModel if keep_outputs else Model)(depth=4).eval()
     x = torch.randn(2, 8)
     regions.group_blocks(
         list(model.blocks), None, {"backend": backend, "dynamic": False}, keep_outputs
@@ -221,13 +221,13 @@ def test_first_call_of_key_carrying_blocks_runs_compiled_and_matches_eager():
     assert expected[1] == {layer: torch.Size([2, 8]) for layer in range(3)}
 
 
-def test_default_compiles_each_block_list_as_one_region(monkeypatch, graphs):
+def test_default_compiles_each_block_list_as_one_region(monkeypatch, capturing_backend):
     monkeypatch.delenv("SGLANG_RBLN_BLOCKS_PER_REGION", raising=False)
-    captured, compile_kwargs = graphs
+    captured, compile_kwargs = capturing_backend
     model = Model().eval()
     with torch.no_grad():
         count = regions.compile_block_groups(
-            _plain_compile, model, compile_kwargs=compile_kwargs
+            _upstream_compile, model, compile_kwargs=compile_kwargs
         )
         for _ in range(2):
             model(torch.randn(2, 8))
@@ -235,10 +235,12 @@ def test_default_compiles_each_block_list_as_one_region(monkeypatch, graphs):
     assert len(captured) == 1
 
 
-def test_a_module_compiled_by_two_stages_keeps_one_region(monkeypatch, graphs):
+def test_a_module_compiled_by_two_stages_keeps_one_region(
+    monkeypatch, capturing_backend
+):
     """Each denoising stage of a two-stage pipeline compiles the shared transformer."""
     monkeypatch.delenv("SGLANG_RBLN_BLOCKS_PER_REGION", raising=False)
-    captured, compile_kwargs = graphs
+    captured, compile_kwargs = capturing_backend
     torch.manual_seed(0)
     model = Model().eval()
     x = torch.randn(2, 8)
@@ -246,7 +248,7 @@ def test_a_module_compiled_by_two_stages_keeps_one_region(monkeypatch, graphs):
         expected = model(x)
         counts = [
             regions.compile_block_groups(
-                _plain_compile, model, compile_kwargs=compile_kwargs
+                _upstream_compile, model, compile_kwargs=compile_kwargs
             )
             for _ in range(2)
         ]
@@ -258,16 +260,18 @@ def test_a_module_compiled_by_two_stages_keeps_one_region(monkeypatch, graphs):
 
 
 @pytest.mark.parametrize("size", [2, 4, 6])
-def test_outputs_feed_keyword_and_positional_slots(monkeypatch, graphs, size):
+def test_outputs_feed_keyword_and_positional_slots(
+    monkeypatch, capturing_backend, size
+):
     monkeypatch.setenv("SGLANG_RBLN_BLOCKS_PER_REGION", str(size))
-    captured, compile_kwargs = graphs
+    captured, compile_kwargs = capturing_backend
     torch.manual_seed(0)
     model = ResidualModel().eval()
     x = torch.randn(2, 8)
     with torch.no_grad():
         expected = model(x)
         count = regions.compile_block_groups(
-            _plain_compile, model, compile_kwargs=compile_kwargs
+            _upstream_compile, model, compile_kwargs=compile_kwargs
         )
         outputs = [model(x) for _ in range(3)]
     for output in outputs:
@@ -275,50 +279,54 @@ def test_outputs_feed_keyword_and_positional_slots(monkeypatch, graphs, size):
     assert len(captured) == count == math.ceil(len(model.layers) / size)
 
 
-def test_outputs_changed_between_blocks_are_rejected(monkeypatch, graphs):
+def test_outputs_changed_between_blocks_are_rejected(monkeypatch, capturing_backend):
     monkeypatch.setenv("SGLANG_RBLN_BLOCKS_PER_REGION", "2")
-    _, compile_kwargs = graphs
+    _, compile_kwargs = capturing_backend
     model = ResidualModel(depth=2).eval()
-    regions.compile_block_groups(_plain_compile, model, compile_kwargs=compile_kwargs)
+    regions.compile_block_groups(
+        _upstream_compile, model, compile_kwargs=compile_kwargs
+    )
     with torch.no_grad(), pytest.raises(RuntimeError, match="not passed unchanged"):
         model(torch.randn(2, 8), rescale=True)
 
 
-def test_one_block_per_region_keeps_upstream_behaviour(monkeypatch, graphs):
+def test_one_block_per_region_keeps_upstream_behaviour(monkeypatch, capturing_backend):
     monkeypatch.setenv("SGLANG_RBLN_BLOCKS_PER_REGION", "1")
-    captured, compile_kwargs = graphs
+    captured, compile_kwargs = capturing_backend
     model = Model(depth=3).eval()
     with torch.no_grad():
         count = regions.compile_block_groups(
-            _plain_compile, model, compile_kwargs=compile_kwargs
+            _upstream_compile, model, compile_kwargs=compile_kwargs
         )
         model(torch.randn(2, 8))
     assert count == 3
     assert not any(isinstance(m.forward, regions.DeferredBlock) for m in model.blocks)
 
 
-def test_groups_stay_inside_one_module_list(monkeypatch, graphs):
+def test_groups_stay_inside_one_module_list(monkeypatch, capturing_backend):
     monkeypatch.setenv("SGLANG_RBLN_BLOCKS_PER_REGION", "4")
-    _, compile_kwargs = graphs
+    _, compile_kwargs = capturing_backend
     model = Model(depth=3).eval()
     model.extra = nn.ModuleList(Block(8) for _ in range(2))
     count = regions.compile_block_groups(
-        _plain_compile, model, compile_kwargs=compile_kwargs
+        _upstream_compile, model, compile_kwargs=compile_kwargs
     )
     assert count == 2
     assert model.blocks[2].forward.group is not model.extra[0].forward.group
 
 
-def test_out_of_order_block_call_is_rejected(monkeypatch, graphs):
+def test_out_of_order_block_call_is_rejected(monkeypatch, capturing_backend):
     monkeypatch.setenv("SGLANG_RBLN_BLOCKS_PER_REGION", "2")
-    _, compile_kwargs = graphs
+    _, compile_kwargs = capturing_backend
     model = Model(depth=2).eval()
-    regions.compile_block_groups(_plain_compile, model, compile_kwargs=compile_kwargs)
+    regions.compile_block_groups(
+        _upstream_compile, model, compile_kwargs=compile_kwargs
+    )
     with torch.no_grad(), pytest.raises(RuntimeError, match="out of order"):
         model.blocks[1](torch.randn(2, 8), torch.zeros(()), 1.0, shift=0.0)
 
 
-def test_registers_an_around_hook():
+def test_registers_around_the_upstream_block_compile():
     assert regions.register() == regions.HOOK_TARGET
     assert any(
         hook is regions.compile_block_groups
@@ -327,6 +335,11 @@ def test_registers_an_around_hook():
 
 
 BLOCK_BYTES = 100
+
+
+def _room_for(blocks: int) -> int:
+    """Free memory that holds `blocks` blocks and no more."""
+    return blocks * BLOCK_BYTES + BLOCK_BYTES // 10
 
 
 def _blocks_in(graph: torch.fx.GraphModule) -> int:
@@ -350,7 +363,7 @@ def device_memory(monkeypatch):
 
 
 @pytest.fixture
-def sized_graphs(device_memory):
+def fit_checked_backend(device_memory):
     free, _ = device_memory
     sizes = []
 
@@ -364,12 +377,12 @@ def sized_graphs(device_memory):
     return free, sizes, {"backend": backend, "dynamic": False}
 
 
-def _grouped_run(model, compile_kwargs):
+def _assert_grouped_run_matches_eager(model, compile_kwargs):
     x = torch.randn(2, 8)
     with torch.no_grad():
         expected = model(x)
         regions.compile_block_groups(
-            _plain_compile, model, compile_kwargs=compile_kwargs
+            _upstream_compile, model, compile_kwargs=compile_kwargs
         )
         outputs = [model(x) for _ in range(2)]
     for output in outputs:
@@ -385,13 +398,13 @@ def _grouped_run(model, compile_kwargs):
     ],
 )
 def test_region_halves_until_the_device_holds_it(
-    monkeypatch, sized_graphs, caplog, room, sizes, splits
+    monkeypatch, fit_checked_backend, caplog, room, sizes, splits
 ):
     monkeypatch.delenv("SGLANG_RBLN_BLOCKS_PER_REGION", raising=False)
-    free, compiled, compile_kwargs = sized_graphs
-    free["bytes"] = room * BLOCK_BYTES + BLOCK_BYTES // 10
+    free, compiled, compile_kwargs = fit_checked_backend
+    free["bytes"] = _room_for(room)
     torch.manual_seed(0)
-    _grouped_run(Model(depth=4).eval(), compile_kwargs)
+    _assert_grouped_run_matches_eager(Model(depth=4).eval(), compile_kwargs)
     assert compiled == sizes
     logged = [
         record for record in caplog.records if "does not fit" in record.getMessage()
@@ -409,28 +422,26 @@ def request_shape(height: int):
         shapes.current_shape_key.reset(token)
 
 
-def _room(blocks: int) -> int:
-    return blocks * BLOCK_BYTES + BLOCK_BYTES // 10
-
-
 @pytest.fixture
-def two_shape_model(sized_graphs):
-    free, compiled, compile_kwargs = sized_graphs
+def two_shape_model(fit_checked_backend):
+    free, compiled, compile_kwargs = fit_checked_backend
     torch.manual_seed(0)
     model = Model(depth=4).eval()
     inputs = {2: torch.randn(2, 8), 6: torch.randn(6, 8)}
     with torch.no_grad():
         expected = {rows: model(x) for rows, x in inputs.items()}
-    regions.compile_block_groups(_plain_compile, model, compile_kwargs=compile_kwargs)
+    regions.compile_block_groups(
+        _upstream_compile, model, compile_kwargs=compile_kwargs
+    )
     return model, inputs, expected, free, compiled
 
 
 def test_a_later_shape_that_does_not_fit_splits_only_itself(two_shape_model, caplog):
     model, inputs, expected, free, compiled = two_shape_model
-    free["bytes"] = _room(4)
+    free["bytes"] = _room_for(4)
     with torch.no_grad(), request_shape(2):
         first = model(inputs[2])
-    free["bytes"] = _room(2)
+    free["bytes"] = _room_for(2)
     with torch.no_grad(), request_shape(6):
         second = [model(inputs[6]) for _ in range(2)]
     with torch.no_grad(), request_shape(2):
@@ -445,7 +456,7 @@ def test_a_later_shape_that_does_not_fit_splits_only_itself(two_shape_model, cap
 
 def test_a_later_shape_that_fits_keeps_the_whole_region(two_shape_model):
     model, inputs, expected, free, compiled = two_shape_model
-    free["bytes"] = _room(4)
+    free["bytes"] = _room_for(4)
     with torch.no_grad():
         for rows in (2, 6, 2, 6):
             with request_shape(rows):
@@ -455,15 +466,15 @@ def test_a_later_shape_that_fits_keeps_the_whole_region(two_shape_model):
 
 def test_a_second_tensor_shape_under_one_shape_key_is_fit_checked(two_shape_model):
     model, inputs, expected, free, compiled = two_shape_model
-    free["bytes"] = _room(4)
+    free["bytes"] = _room_for(4)
     with torch.no_grad(), request_shape(2):
         model(inputs[2])
-        free["bytes"] = _room(2)
+        free["bytes"] = _room_for(2)
         assert torch.equal(model(inputs[6]), expected[6])
     assert compiled == [4, 4, 2, 2]
 
 
-class RecordingModel(Model):
+class EveryOutputModel(Model):
     def forward(self, x):
         y, seen = torch.zeros(()), []
         for index, block in enumerate(self.blocks):
@@ -474,11 +485,11 @@ class RecordingModel(Model):
 
 @pytest.mark.parametrize("shape", [(2, 8), (3, 16)], ids=str)
 @pytest.mark.parametrize("room", [4, 2, 1], ids=["fits", "halved", "single"])
-def test_kept_outputs_reach_every_block_caller(sized_graphs, room, shape):
-    free, compiled, compile_kwargs = sized_graphs
-    free["bytes"] = room * BLOCK_BYTES + BLOCK_BYTES // 10
+def test_kept_outputs_reach_every_block_caller(fit_checked_backend, room, shape):
+    free, compiled, compile_kwargs = fit_checked_backend
+    free["bytes"] = _room_for(room)
     torch.manual_seed(0)
-    model = RecordingModel(depth=4, width=shape[-1]).eval()
+    model = EveryOutputModel(depth=4, width=shape[-1]).eval()
     x = torch.randn(shape)
     with torch.no_grad():
         expected = model(x)
@@ -505,24 +516,28 @@ def test_load_time_out_of_memory_halves_the_region(monkeypatch, message):
         return graph
 
     torch.manual_seed(0)
-    _grouped_run(Model(depth=4).eval(), {"backend": backend, "dynamic": False})
+    _assert_grouped_run_matches_eager(
+        Model(depth=4).eval(), {"backend": backend, "dynamic": False}
+    )
     assert sizes == [4, 2, 2]
 
 
-def test_a_block_that_never_fits_raises(monkeypatch, sized_graphs):
+def test_a_block_that_never_fits_raises(monkeypatch, fit_checked_backend):
     monkeypatch.delenv("SGLANG_RBLN_BLOCKS_PER_REGION", raising=False)
-    free, compiled, compile_kwargs = sized_graphs
+    free, compiled, compile_kwargs = fit_checked_backend
     free["bytes"] = BLOCK_BYTES // 2
     model = Model(depth=2).eval()
-    regions.compile_block_groups(_plain_compile, model, compile_kwargs=compile_kwargs)
+    regions.compile_block_groups(
+        _upstream_compile, model, compile_kwargs=compile_kwargs
+    )
     with torch.no_grad(), pytest.raises(Exception, match="free"):
         model(torch.randn(2, 8))
     assert compiled == [2, 1]
 
 
 def test_a_region_that_ran_out_after_loading_releases_its_graphs(monkeypatch):
-    # An abandoned attempt kept what it had loaded: one bad shape left the DiT's
-    # NPUs full, and every later request failed, a 2-block region too.
+    # An abandoned attempt must not keep what it loaded, or one oversized shape
+    # leaves the DiT's NPUs full and every later request fails.
     monkeypatch.delenv("SGLANG_RBLN_BLOCKS_PER_REGION", raising=False)
     released = []
     monkeypatch.setattr(
@@ -536,14 +551,16 @@ def test_a_region_that_ran_out_after_loading_releases_its_graphs(monkeypatch):
         return graph
 
     torch.manual_seed(0)
-    _grouped_run(Model(depth=4).eval(), {"backend": backend, "dynamic": False})
+    _assert_grouped_run_matches_eager(
+        Model(depth=4).eval(), {"backend": backend, "dynamic": False}
+    )
     assert released == [4, 2, 2]  # each failed group, before its halves
 
 
 def test_a_released_attempt_holds_no_runtime(monkeypatch):
-    # The failed call's frames held its runtime while the caught error lived, so
-    # releasing the group freed nothing: the abandoned attempts' buffers piled up on
-    # the device beside the smaller graphs (1.4 GiB on node 0).
+    # A caught error keeps the failed call's frames, and the runtime they hold,
+    # alive. Releasing before they are dropped would free nothing, and the
+    # abandoned attempts' buffers (1.4 GiB) would pile up beside the smaller graphs.
     monkeypatch.delenv("SGLANG_RBLN_BLOCKS_PER_REGION", raising=False)
     runtimes, alive = [], []
 
@@ -564,18 +581,24 @@ def test_a_released_attempt_holds_no_runtime(monkeypatch):
 
     monkeypatch.setattr(regions, "release_graphs", release)
     torch.manual_seed(0)
-    _grouped_run(Model(depth=4).eval(), {"backend": backend, "dynamic": False})
+    _assert_grouped_run_matches_eager(
+        Model(depth=4).eval(), {"backend": backend, "dynamic": False}
+    )
     assert alive == [False, False, False]
 
 
-def test_a_refusal_that_loaded_nothing_releases_nothing(monkeypatch, sized_graphs):
+def test_a_refusal_that_loaded_nothing_releases_nothing(
+    monkeypatch, fit_checked_backend
+):
     monkeypatch.delenv("SGLANG_RBLN_BLOCKS_PER_REGION", raising=False)
     released = []
     monkeypatch.setattr(regions, "release_graphs", released.append)
-    free, _, compile_kwargs = sized_graphs
+    free, _, compile_kwargs = fit_checked_backend
     free["bytes"] = BLOCK_BYTES // 2
     model = Model(depth=2).eval()
-    regions.compile_block_groups(_plain_compile, model, compile_kwargs=compile_kwargs)
+    regions.compile_block_groups(
+        _upstream_compile, model, compile_kwargs=compile_kwargs
+    )
     with torch.no_grad(), pytest.raises(Exception, match="free"):
         model(torch.randn(2, 8))
     assert released == []
@@ -591,14 +614,14 @@ def test_other_compile_errors_do_not_split(monkeypatch):
 
     model = Model(depth=4).eval()
     regions.compile_block_groups(
-        _plain_compile, model, compile_kwargs={"backend": backend, "dynamic": False}
+        _upstream_compile, model, compile_kwargs={"backend": backend, "dynamic": False}
     )
     with torch.no_grad(), pytest.raises(Exception, match="unsupported operator"):
         model(torch.randn(2, 8))
     assert sizes == [4]
 
 
-def test_installed_check_covers_a_module_no_block_group_compiled(
+def test_modules_compiled_outside_block_regions_are_fit_checked_too(
     device_memory, monkeypatch
 ):
     """A module compiled outside any block region, such as a VAE coder or vocoder,
@@ -655,13 +678,13 @@ def test_a_region_runs_on_the_npus_of_its_blocks():
 
 
 def test_kept_outputs_stay_on_the_region_npus(monkeypatch, dummy_device):
-    # The text encoder keeps every layer's output; a host placeholder made each one
-    # cross to the host once the region ran, and back up for the connector.
+    # The text encoder keeps every layer's output for the connector, which reads
+    # them on the NPUs; a round trip through the host would cost a copy each way.
 
     def backend(graph, example_inputs):
         return lambda *args: [out.to("rbln:0") for out in graph(*args)]
 
-    model = RecordingModel(depth=4).eval()
+    model = EveryOutputModel(depth=4).eval()
     regions.group_blocks(
         list(model.blocks), None, {"backend": backend, "dynamic": False}, True
     )
@@ -689,26 +712,29 @@ class SessionRegion(SimpleNamespace):
 
 
 @pytest.fixture
-def no_pools(monkeypatch):
+def no_shared_context_memory(monkeypatch):
     monkeypatch.setattr(regions, "_pools", {}, raising=False)
 
 
 def test_a_region_needing_more_than_free_memory_at_run_does_not_fit(
-    device_memory, no_pools
+    device_memory, no_shared_context_memory
 ):
     # A region whose reported size fits in free memory, but which needs more once it
     # runs, is refused before it loads.
     free, _ = device_memory
     create_runtime = regions._checked_create_runtime(lambda model, **kwargs: model)
+    held, counted, run_time = 2_279_484_288, 1_545_601_024, 3_939_358_336
     free["bytes"] = 4_000_000_000
-    create_runtime(SessionRegion(0, 2_279_484_288), device=0)
+    create_runtime(SessionRegion(0, held), device=0)
     free["bytes"] = 2_057_306_112 + BLOCK_BYTES // 10
     with pytest.raises(regions.RegionDoesNotFit) as error:
-        create_runtime(SessionRegion(1_545_601_024, 3_939_358_336), device=0)
-    assert error.value.needed == [1_545_601_024 + 3_939_358_336 - 2_279_484_288]
+        create_runtime(SessionRegion(counted, run_time), device=0)
+    assert error.value.needed == [counted + run_time - held]
 
 
-def test_a_region_reusing_memory_already_held_needs_no_more(device_memory, no_pools):
+def test_a_region_reusing_memory_already_held_needs_no_more(
+    device_memory, no_shared_context_memory
+):
     # It needs more than is free, but memory already held by its compile context
     # covers it.
     free, _ = device_memory
@@ -722,15 +748,14 @@ def test_a_region_reusing_memory_already_held_needs_no_more(device_memory, no_po
         create_runtime(SessionRegion(BLOCK_BYTES, 5 * BLOCK_BYTES, "t"), device=0)
 
 
-def test_evictable_memory_counts_as_room(device_memory, monkeypatch):
-    # Memory the runtime reports as evictable counts toward the room: without it, a
-    # region that would have fit was split and recompiled needlessly.
+def test_memory_the_runtime_can_free_counts_as_room(device_memory, monkeypatch):
+    # Otherwise a region that would fit is split and recompiled needlessly.
     import rebel
 
     free, _ = device_memory
     free["bytes"] = 2 * BLOCK_BYTES + BLOCK_BYTES // 10
     region = SimpleNamespace(get_alloc_per_node=lambda: [5 * BLOCK_BYTES])
-    with pytest.raises(regions.RegionDoesNotFit):  # nothing evictable
+    with pytest.raises(regions.RegionDoesNotFit):  # nothing the runtime can free
         regions.check_fits(region, 0)
     asked = []
     monkeypatch.setattr(
@@ -753,7 +778,6 @@ def test_a_device_without_memory_info_has_nothing_to_check(monkeypatch):
 
 
 def test_a_split_region_reuses_its_parents_compile_context(monkeypatch):
-    # The halves compile in the parent region's compile context, not a new one.
     monkeypatch.delenv("SGLANG_RBLN_BLOCKS_PER_REGION", raising=False)
     context = object()
 

@@ -76,7 +76,7 @@ def test_registers_the_request_hook_around_execute_forward():
     ]
 
 
-class _Block(nn.Module):
+class ResidualBlock(nn.Module):
     def __init__(self):
         super().__init__()
         self.proj = nn.Linear(16, 16)
@@ -86,7 +86,7 @@ class _Block(nn.Module):
 
 
 @pytest.fixture
-def recording(monkeypatch) -> Iterator[SimpleNamespace]:
+def recompile_recorder(monkeypatch) -> Iterator[SimpleNamespace]:
     monkeypatch.setattr(shapes, "_seen_compiles", set())
     torch._dynamo.reset()
     repeats: list[bool] = []
@@ -99,7 +99,7 @@ def recording(monkeypatch) -> Iterator[SimpleNamespace]:
         yield SimpleNamespace(backend=compile_backend, repeats=repeats)
 
 
-def run_under(key, block, hidden):
+def run_under_key(key, block, hidden):
     token = shapes.current_shape_key.set(key)
     try:
         with torch.no_grad():
@@ -112,26 +112,28 @@ KEY = ShapeKey("LTX2Pipeline", (("height", 64), ("width", 96), ("num_frames", 5)
 OTHER_KEY = ShapeKey("LTX2Pipeline", (("height", 96), ("width", 64), ("num_frames", 5)))
 
 
-def test_new_shapes_and_new_blocks_are_not_repeats(recording):
-    blocks = [_Block() for _ in range(3)]
+def test_new_shapes_and_new_blocks_are_not_repeats(recompile_recorder):
+    blocks = [ResidualBlock() for _ in range(3)]
     for block in blocks:
-        block.compile(backend=recording.backend, dynamic=False)
+        block.compile(backend=recompile_recorder.backend, dynamic=False)
     for key, tokens in [(KEY, 8), (OTHER_KEY, 12)]:
         hidden = torch.randn(1, tokens, 16)
         for block in blocks:
-            hidden = run_under(key, block, hidden)
-    assert recording.repeats == [False] * 6
+            hidden = run_under_key(key, block, hidden)
+    assert recompile_recorder.repeats == [False] * 6
 
 
-def test_a_stride_recompile_at_the_same_key_is_a_repeat(recording):
-    block = _Block()
+def test_a_stride_recompile_at_the_same_key_is_a_repeat(recompile_recorder):
+    block = ResidualBlock()
     hidden = torch.randn(1, 8, 16)
     with torch.no_grad():
         expected = block(hidden)
-    block.compile(backend=recording.backend, dynamic=False)
-    contiguous = run_under(KEY, block, hidden)
-    strided = run_under(KEY, block, hidden.transpose(1, 2).contiguous().transpose(1, 2))
-    assert recording.repeats == [False, True]
+    block.compile(backend=recompile_recorder.backend, dynamic=False)
+    contiguous = run_under_key(KEY, block, hidden)
+    strided = run_under_key(
+        KEY, block, hidden.transpose(1, 2).contiguous().transpose(1, 2)
+    )
+    assert recompile_recorder.repeats == [False, True]
     assert torch.equal(contiguous, expected)
     assert torch.equal(strided, expected)
 
@@ -139,7 +141,7 @@ def test_a_stride_recompile_at_the_same_key_is_a_repeat(recording):
 def test_backend_warns_on_a_repeat_with_the_key(monkeypatch, caplog):
     monkeypatch.setattr(shapes, "_seen_compiles", set())
     instrumented = backend._instrumented_backend(lambda graph, inputs: graph.forward)
-    graph = torch.fx.symbolic_trace(_Block())
+    graph = torch.fx.symbolic_trace(ResidualBlock())
     inputs = [torch.randn(1, 8, 16)]
     token = shapes.current_shape_key.set(KEY)
     try:

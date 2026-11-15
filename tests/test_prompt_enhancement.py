@@ -42,9 +42,7 @@ def tiny_enhancer() -> transformers.PreTrainedModel:
 
 @pytest.mark.parametrize("no_repeat_ngram", [0, 3])
 @pytest.mark.parametrize("prompt_tokens", [20, 128, 130])
-def test_static_cache_decode_matches_generate(
-    tiny_enhancer, prompt_tokens, no_repeat_ngram
-):
+def test_greedy_decode_matches_generate(tiny_enhancer, prompt_tokens, no_repeat_ngram):
     # past the 8-token sliding window, around the 128-token prefill bucket edge
     input_ids = torch.randint(
         1, 500, (1, prompt_tokens), generator=torch.Generator().manual_seed(1)
@@ -71,8 +69,7 @@ class Bf16Head(torch.nn.Linear):
 
 
 @pytest.mark.parametrize("prompt_tokens", [5, 20])
-def test_tied_logits_break_as_generate(tiny_enhancer, prompt_tokens):
-    """When logits tie, greedy decode picks the same token `generate` does."""
+def test_tied_logits_pick_the_token_generate_picks(tiny_enhancer, prompt_tokens):
     model = copy.deepcopy(tiny_enhancer)
     direction = torch.nn.functional.normalize(
         torch.randn(
@@ -99,7 +96,6 @@ def test_tied_logits_break_as_generate(tiny_enhancer, prompt_tokens):
 
 @pytest.mark.parametrize("prompt_tokens", [20, 128, 130])
 def test_step_logits_match_one_shot_forward(tiny_enhancer, prompt_tokens):
-    """Every step's logits match a one-shot forward over the same tokens."""
     softcap = tiny_enhancer.config.get_text_config().final_logit_softcapping
     head = tiny_enhancer.get_output_embeddings()
     steps = []
@@ -126,7 +122,7 @@ def test_step_logits_match_one_shot_forward(tiny_enhancer, prompt_tokens):
 
 def test_kv_shared_layers_get_no_cache_of_their_own(tiny_enhancer):
     cache = prompt_enhancement.window_cache(tiny_enhancer, window=256)
-    assert len(cache.layers) == 4
+    assert len(cache.layers) == 4  # 6 layers, the last 2 sharing earlier ones' KV
     assert {layer.max_cache_len for layer in cache.layers} == {256}
 
 
@@ -190,7 +186,7 @@ def test_the_cache_write_compiles_into_the_step_graph(tmp_path, dummy_device):
         assert host_ops == set(), (written, host_ops)
 
 
-def recorded_shapes(model, prompt_tokens: int, monkeypatch) -> set:
+def step_input_shapes(model, prompt_tokens: int) -> set:
     """The shapes the step is called with for a prompt of `prompt_tokens`."""
     shapes = set()
     decoder = model.get_decoder()
@@ -213,8 +209,8 @@ def test_the_graphs_do_not_follow_the_prompt_length(tiny_enhancer, monkeypatch):
     # every new length it sees
     monkeypatch.setattr(prompt_enhancement, "CACHE_WINDOW", 512)
 
-    short = recorded_shapes(tiny_enhancer, 20, monkeypatch)
-    long = recorded_shapes(tiny_enhancer, 300, monkeypatch)
+    short = step_input_shapes(tiny_enhancer, 20)
+    long = step_input_shapes(tiny_enhancer, 300)
 
     assert short == long == {((1, 128), (1, 512)), ((1, 1), (1, 512))}
 
@@ -222,18 +218,16 @@ def test_the_graphs_do_not_follow_the_prompt_length(tiny_enhancer, monkeypatch):
 def test_a_prompt_past_the_cache_window_still_runs(tiny_enhancer, monkeypatch):
     monkeypatch.setattr(prompt_enhancement, "CACHE_WINDOW", 128)
 
-    shapes = recorded_shapes(tiny_enhancer, 200, monkeypatch)
+    shapes = step_input_shapes(tiny_enhancer, 200)
 
     assert shapes == {((1, 128), (1, 256)), ((1, 1), (1, 256))}
 
 
-def test_the_cache_window_is_what_the_cache_is_compiled_for(monkeypatch):
+def test_the_cache_window_grows_by_whole_chunks_past_its_default(monkeypatch):
     monkeypatch.setattr(prompt_enhancement, "CACHE_WINDOW", 1024)
     assert prompt_enhancement.cache_window(900) == 1024
     assert prompt_enhancement.cache_window(1024) == 1024
-    assert (
-        prompt_enhancement.cache_window(1025) == 1152
-    )  # its own graphs, chunk-aligned
+    assert prompt_enhancement.cache_window(1025) == 1152
 
 
 def bare_enhancer(**attributes):
@@ -282,10 +276,7 @@ def test_decoding_follows_ltx_cores_recipe(monkeypatch):
 
 
 def test_the_decode_step_compiles_as_one_graph(tmp_path, dummy_device, tiny_enhancer):
-    """Compiled whole by default, a decode step is one graph. This compiles on a dummy
-    device.
-
-    It checks the compiled step only: work outside the traced region, or a graph
+    """It checks the compiled step only: work outside the traced region, or a graph
     break in ``greedy_decode``, is not covered here.
     """
     import rebel
@@ -373,7 +364,7 @@ def test_the_compiled_step_runs_where_the_enhancer_is_placed(
 
 
 @pytest.fixture
-def served(monkeypatch, tmp_path):
+def enhancer_server(monkeypatch, tmp_path):
     """A server whose model directory ships a prompt_enhancer/ component."""
     (tmp_path / "prompt_enhancer").mkdir()
     (tmp_path / "prompt_enhancer" / "config.json").write_text("{}")
@@ -392,26 +383,28 @@ def served(monkeypatch, tmp_path):
     return SimpleNamespace(path=str(tmp_path), calls=calls)
 
 
-def request(external=None):
+def http_request(external=None):
     return SimpleNamespace(
         app=SimpleNamespace(state=SimpleNamespace(prompt_enhancer=external))
     )
 
 
-async def upstream(request, prompt, *, enabled, task, image_paths=None):
+async def upstream_enhance(request, prompt, *, enabled, task, image_paths=None):
     return f"upstream: {prompt}" if enabled else prompt
 
 
-def run(req, **kwargs):
+def enhance_prompt(req, **kwargs):
     kwargs = {"enabled": True, "task": "video"} | kwargs
     return asyncio.run(
-        prompt_enhancement.enhance_with_model_enhancer(upstream, req, "a fox", **kwargs)
+        prompt_enhancement.enhance_with_model_enhancer(
+            upstream_enhance, req, "a fox", **kwargs
+        )
     )
 
 
-def test_rewrites_with_the_models_enhancer(served):
-    assert run(request()) == "rewritten: a fox"
-    assert served.calls == [(served.path, True, "a fox", "video")]
+def test_rewrites_with_the_models_enhancer(enhancer_server):
+    assert enhance_prompt(http_request()) == "rewritten: a fox"
+    assert enhancer_server.calls == [(enhancer_server.path, True, "a fox", "video")]
 
 
 @pytest.mark.parametrize(
@@ -422,25 +415,28 @@ def test_rewrites_with_the_models_enhancer(served):
         ("opt-in off", {}),
         ("no prompt_enhancer component", {}),
     ],
+    ids=["not-requested", "external-endpoint", "opt-in-off", "no-component"],
 )
-def test_leaves_the_request_to_upstream(served, monkeypatch, tmp_path, case, kwargs):
-    req = request()
+def test_leaves_the_request_to_upstream(
+    enhancer_server, monkeypatch, tmp_path, case, kwargs
+):
+    req = http_request()
     if case == "external endpoint configured":
-        req = request(external=object())
+        req = http_request(external=object())
     elif case == "opt-in off":
         monkeypatch.delenv("SGLANG_RBLN_PROMPT_ENHANCER")
     elif case == "no prompt_enhancer component":
         (tmp_path / "prompt_enhancer" / "config.json").unlink()
     expected = "a fox" if case == "not requested" else "upstream: a fox"
-    assert run(req, **kwargs) == expected
-    assert served.calls == []
+    assert enhance_prompt(req, **kwargs) == expected
+    assert enhancer_server.calls == []
 
 
-def test_refuses_image_prompts(served):
+def test_refuses_image_prompts(enhancer_server):
     with pytest.raises(HTTPException) as error:
-        run(request(), image_paths=["frame.png"])
+        enhance_prompt(http_request(), image_paths=["frame.png"])
     assert error.value.status_code == 400
-    assert served.calls == []
+    assert enhancer_server.calls == []
 
 
 def test_the_user_turn_matches_the_system_prompt_in_use(monkeypatch, tmp_path):

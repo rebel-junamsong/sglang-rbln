@@ -11,8 +11,9 @@ from sglang_rbln.patches.torch_rbln import autocast
 DEVICE = "rbln:0"
 
 
-@pytest.fixture(name="fake")
-def fake_fixture(dummy_device):
+@pytest.fixture
+def fake_rbln_tensor(dummy_device):
+    """Makes FakeTensorMode tensors on the RBLN device, with the policy registered."""
     autocast.register()
     with FakeTensorMode():
         yield lambda *shape, dtype=torch.float32: torch.empty(
@@ -20,17 +21,17 @@ def fake_fixture(dummy_device):
         )
 
 
-def test_declares_the_dtypes_autocast_takes(fake):
+def test_autocast_turns_on_for_rbln(fake_rbln_tensor):
     with torch.autocast("rbln", torch.bfloat16):
         assert torch.is_autocast_enabled("rbln")
 
 
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32], ids=str)
 @pytest.mark.parametrize("channels", [8, 64])
-def test_convs_and_linears_run_in_the_autocast_dtype(fake, dtype, channels):
-    x = fake(1, channels, 4, 4, dtype=torch.float32)
-    weight = fake(channels, channels, 3, 3, dtype=torch.bfloat16)
-    bias = fake(channels, dtype=torch.bfloat16)
+def test_convs_and_linears_run_in_the_autocast_dtype(fake_rbln_tensor, dtype, channels):
+    x = fake_rbln_tensor(1, channels, 4, 4, dtype=torch.float32)
+    weight = fake_rbln_tensor(channels, channels, 3, 3, dtype=torch.bfloat16)
+    bias = fake_rbln_tensor(channels, dtype=torch.bfloat16)
     with torch.autocast("rbln", dtype):
         assert F.conv2d(x, weight, bias, padding=1).dtype == dtype
         tokens = x.flatten(2).transpose(1, 2)
@@ -38,9 +39,9 @@ def test_convs_and_linears_run_in_the_autocast_dtype(fake, dtype, channels):
 
 
 @pytest.mark.parametrize("features", [16, 128])
-def test_norms_and_softmax_follow_cuda_autocast(fake, features):
-    x = fake(2, 8, features, dtype=torch.bfloat16)
-    weight = fake(features, dtype=torch.bfloat16)
+def test_normalizations_and_softmax_follow_cuda_autocast(fake_rbln_tensor, features):
+    x = fake_rbln_tensor(2, 8, features, dtype=torch.bfloat16)
+    weight = fake_rbln_tensor(features, dtype=torch.bfloat16)
     with torch.autocast("rbln", torch.bfloat16):
         assert F.layer_norm(x, (features,), weight, weight).dtype == torch.float32
         assert F.group_norm(x.transpose(1, 2), 4).dtype == torch.float32
@@ -49,27 +50,27 @@ def test_norms_and_softmax_follow_cuda_autocast(fake, features):
         assert torch.softmax(x, -1, dtype=torch.bfloat16).dtype == torch.bfloat16
 
 
-def test_promote_ops_take_the_widest_input(fake):
-    low, high = fake(4, dtype=torch.bfloat16), fake(4)
+def test_promote_ops_take_the_widest_input(fake_rbln_tensor):
+    low, high = fake_rbln_tensor(4, dtype=torch.bfloat16), fake_rbln_tensor(4)
     with torch.autocast("rbln", torch.bfloat16):
         assert torch.addcmul(low, high, low).dtype == torch.float32
 
 
-def test_other_ops_fall_through(fake):
-    x = fake(4, 4)
+def test_ops_outside_the_policy_keep_their_input_dtype(fake_rbln_tensor):
+    x = fake_rbln_tensor(4, 4)
     with torch.autocast("rbln", torch.bfloat16):
         assert (x.to(torch.float16) + 1).dtype == torch.float16
         assert torch.relu(x).dtype == torch.float32
 
 
-def test_leaves_host_tensors_to_cpu_autocast(fake):
+def test_leaves_host_tensors_to_cpu_autocast(fake_rbln_tensor):
     x = torch.empty(1, 8, 4, 4)
     weight = torch.empty(8, 8, 3, 3, dtype=torch.bfloat16)
     with torch.autocast("rbln", torch.bfloat16), pytest.raises(RuntimeError):
         F.conv2d(x, weight)
 
 
-def test_covers_exactly_cuda_autocasts_overloads(fake):
+def test_covers_exactly_cuda_autocasts_overloads(fake_rbln_tensor):
     rbln = {
         name.removeprefix("aten::")
         for name in torch._C._dispatch_get_all_op_names()
@@ -80,15 +81,15 @@ def test_covers_exactly_cuda_autocasts_overloads(fake):
 
 
 @pytest.mark.parametrize("dim", [None, -1], ids=["all", "last"])
-def test_norms_follow_cuda_autocast(fake, dim):
-    x = fake(4, 32, dtype=torch.bfloat16)
+def test_torch_norm_follows_cuda_autocast(fake_rbln_tensor, dim):
+    x = fake_rbln_tensor(4, 32, dtype=torch.bfloat16)
     with torch.autocast("rbln", torch.bfloat16):
         norm = torch.norm(x) if dim is None else torch.norm(x, 2, dim)
     assert norm.dtype == torch.float32
 
 
-def test_bans_what_cuda_autocast_bans(fake):
-    x = fake(4, dtype=torch.bfloat16)
+def test_bans_what_cuda_autocast_bans(fake_rbln_tensor):
+    x = fake_rbln_tensor(4, dtype=torch.bfloat16)
     with (
         torch.autocast("rbln", torch.bfloat16),
         pytest.raises(RuntimeError, match="unsafe to autocast"),

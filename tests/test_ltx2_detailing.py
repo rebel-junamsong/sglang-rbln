@@ -19,7 +19,7 @@ FRAMES, HEIGHT, WIDTH, CHANNELS, FPS = 3, 2, 4, 8, 24.0
 
 
 @pytest.fixture
-def lora(monkeypatch, tmp_path):
+def detailing_lora(monkeypatch, tmp_path):
     path = tmp_path / "ic_lora.safetensors"
     save_file(
         {"w.lora_A.weight": torch.zeros(2, 2)},
@@ -31,7 +31,7 @@ def lora(monkeypatch, tmp_path):
 
 
 @pytest.fixture
-def model():
+def rope_model():
     rope = LTX2AudioVideoRotaryPosEmbed(dim=64, modality="video")
     return SimpleNamespace(rope=rope)
 
@@ -51,7 +51,7 @@ def stage1_latents():
 
 
 @pytest.fixture
-def upsampled(lora, server_args, stage1_latents):
+def upsampled_batch(detailing_lora, server_args, stage1_latents):
     def upsample(stage, batch, server_args):
         batch.latents = torch.randn(1, FRAMES * HEIGHT * WIDTH * 4, CHANNELS)
         batch.height, batch.width = batch.height * 2, batch.width * 2
@@ -82,7 +82,7 @@ def test_registers_around_the_two_stage_path():
 
 
 @pytest.mark.parametrize(("phase", "strength"), [("stage1", 0.0), ("stage2", 0.5)])
-def test_keeps_the_lora_dynamic_in_both_stages(lora, phase, strength):
+def test_keeps_the_lora_dynamic_in_both_stages(detailing_lora, phase, strength):
     switched, calls = [], []
     pipeline = SimpleNamespace(set_lora=lambda *a, **k: calls.append((a, k)))
     detailing.switch_lora_phase(
@@ -91,7 +91,7 @@ def test_keeps_the_lora_dynamic_in_both_stages(lora, phase, strength):
     assert switched == [phase]
     assert calls == [
         (
-            (detailing.ADAPTER_NAME, str(lora)),
+            (detailing.ADAPTER_NAME, str(detailing_lora)),
             {"target": "transformer", "strength": strength, "merge_weights": False},
         )
     ]
@@ -108,18 +108,18 @@ def test_leaves_the_pipeline_alone_without_the_lora(monkeypatch):
     assert batch.extra == {}
 
 
-def test_keeps_the_stage1_latent_as_tokens(upsampled, stage1_latents):
-    tokens, grid = upsampled.extra[detailing.REFERENCE_KEY]
+def test_keeps_the_stage1_latent_as_tokens(upsampled_batch, stage1_latents):
+    tokens, grid = upsampled_batch.extra[detailing.REFERENCE_KEY]
     torch.testing.assert_close(tokens, pack(stage1_latents, 1, None))
     assert grid == (FRAMES, HEIGHT, WIDTH, FPS, 2)
 
 
-def test_reference_lands_on_the_target_grid(model, upsampled):
+def test_reference_lands_on_the_target_grid(rope_model, upsampled_batch):
     """ltx-core scales a reference token's height and width by the downscale
     factor, so reference cell (f, i, j) starts where target cell (f, 2i, 2j) does."""
-    reference = upsampled.extra[detailing.REFERENCE_KEY]
-    coords = detailing.reference_coords(model, reference, 1, "cpu")
-    target = model.rope.prepare_video_coords(
+    reference = upsampled_batch.extra[detailing.REFERENCE_KEY]
+    coords = detailing.reference_coords(rope_model, reference, 1, "cpu")
+    target = rope_model.rope.prepare_video_coords(
         1, FRAMES, 2 * HEIGHT, 2 * WIDTH, "cpu", FPS
     )
     grid = coords.view(3, FRAMES, HEIGHT, WIDTH, 2)
@@ -141,15 +141,15 @@ def stage2_context(latents):
     )
 
 
-def test_appends_clean_reference_tokens(upsampled):
+def test_appends_clean_reference_tokens(upsampled_batch):
     noisy = torch.randn(1, FRAMES * HEIGHT * WIDTH * 4, CHANNELS)
-    upsampled.did_sp_shard_latents = False
+    upsampled_batch.did_sp_shard_latents = False
     ctx = detailing.append_reference(
-        lambda *a: stage2_context(noisy), None, upsampled, None
+        lambda *a: stage2_context(noisy), None, upsampled_batch, None
     )
-    tokens = upsampled.extra[detailing.REFERENCE_KEY][0]
+    tokens = upsampled_batch.extra[detailing.REFERENCE_KEY][0]
     count = noisy.shape[1]
-    assert upsampled.extra[detailing.TARGET_TOKENS_KEY] == count
+    assert upsampled_batch.extra[detailing.TARGET_TOKENS_KEY] == count
     torch.testing.assert_close(ctx.latents, torch.cat([noisy, tokens], dim=1))
     torch.testing.assert_close(ctx.clean_latent[:, count:], tokens)
     # Timestep = sigma * mask per token: the reference stays at timestep 0.
@@ -158,31 +158,33 @@ def test_appends_clean_reference_tokens(upsampled):
     assert ctx.denoise_mask.shape == (1, count + tokens.shape[1], 1)
 
 
-def test_conditions_only_stage2(upsampled):
+def test_stage1_gets_no_reference_tokens(upsampled_batch):
     ctx = stage2_context(torch.zeros(1, 4, CHANNELS))
     ctx.stage = "stage1"
-    assert detailing.append_reference(lambda *a: ctx, None, upsampled, None) is ctx
+    assert (
+        detailing.append_reference(lambda *a: ctx, None, upsampled_batch, None) is ctx
+    )
     assert ctx.latents.shape[1] == 4
 
 
-def test_model_sees_reference_positions(model, upsampled):
+def test_model_sees_reference_positions(rope_model, upsampled_batch):
     noisy = torch.randn(1, FRAMES * HEIGHT * WIDTH * 4, CHANNELS)
-    upsampled.did_sp_shard_latents = False
+    upsampled_batch.did_sp_shard_latents = False
     ctx = detailing.append_reference(
-        lambda *a: stage2_context(noisy), None, upsampled, None
+        lambda *a: stage2_context(noisy), None, upsampled_batch, None
     )
     inputs = SimpleNamespace(latent_model_input=ctx.latents, video_coords=None)
-    step = SimpleNamespace(current_model=model)
+    step = SimpleNamespace(current_model=rope_model)
     inputs = detailing.reference_positions(
-        lambda *a: inputs, None, ctx, step, upsampled
+        lambda *a: inputs, None, ctx, step, upsampled_batch
     )
-    reference = upsampled.extra[detailing.REFERENCE_KEY]
+    reference = upsampled_batch.extra[detailing.REFERENCE_KEY]
     expected = torch.cat(
         [
-            model.rope.prepare_video_coords(
+            rope_model.rope.prepare_video_coords(
                 1, FRAMES, 2 * HEIGHT, 2 * WIDTH, "cpu", FPS
             ),
-            detailing.reference_coords(model, reference, 1, "cpu"),
+            detailing.reference_coords(rope_model, reference, 1, "cpu"),
         ],
         dim=2,
     )
@@ -190,21 +192,21 @@ def test_model_sees_reference_positions(model, upsampled):
     assert inputs.video_coords.shape[2] == ctx.latents.shape[1]
 
 
-def test_decodes_only_the_target_tokens(upsampled):
-    upsampled.extra[detailing.TARGET_TOKENS_KEY] = 5
+def test_decodes_only_the_target_tokens(upsampled_batch):
+    upsampled_batch.extra[detailing.TARGET_TOKENS_KEY] = 5
     seen = []
     detailing.drop_reference(
         lambda stage, batch, latents, **k: seen.append(latents),
         None,
-        upsampled,
+        upsampled_batch,
         torch.zeros(1, 9, CHANNELS),
         server_args=None,
     )
     assert seen[0].shape == (1, 5, CHANNELS)
-    assert upsampled.extra == {}
+    assert upsampled_batch.extra == {}
 
 
-class _Blocks(torch.nn.Module):
+class _TwoProjections(torch.nn.Module):
     def __init__(self, width):
         super().__init__()
         from sglang.multimodal_gen.runtime.layers.linear import ColumnParallelLinear
@@ -222,7 +224,7 @@ class _Blocks(torch.nn.Module):
         return x
 
 
-def _kernel_bytes(cache) -> list[int]:
+def _kernel_bytes_per_artifact(cache) -> list[int]:
     import rebel
 
     return [
@@ -232,14 +234,14 @@ def _kernel_bytes(cache) -> list[int]:
 
 
 @pytest.mark.parametrize(
-    ("stage1_strength", "shares_pool"),
+    ("stage1_strength", "reuses_base_weights"),
     [
         pytest.param(0.0, True, id="strength-0"),
         pytest.param(None, False, id="deactivated"),
     ],
 )
 def test_stage2_reuses_the_base_weights_stage1_loaded(
-    monkeypatch, tmp_path, npu_name, stage1_strength, shares_pool
+    monkeypatch, tmp_path, npu_name, stage1_strength, reuses_base_weights
 ):
     """Stage 1 keeps the detailing LoRA loaded at strength 0, so stage 2 reuses the
     base weights stage 1 loaded instead of loading a second copy; turning the LoRA
@@ -269,7 +271,7 @@ def test_stage2_reuses_the_base_weights_stage1_loaded(
     monkeypatch.setenv("RBLN_FORCE_NPU_NAME", npu_name)
     width, rank = 256, 8
     torch.manual_seed(0)
-    model = _Blocks(width).eval()
+    model = _TwoProjections(width).eval()
     adapter = {}
     for index in range(2):
         name = f"projections.{index}"
@@ -304,6 +306,6 @@ def test_stage2_reuses_the_base_weights_stage1_loaded(
                         clear_existing=True,
                     )
             compiled(torch.randn(1, 64 * stage, width, dtype=torch.bfloat16))
-    stage1, stage2 = _kernel_bytes(tmp_path)
+    stage1, stage2 = _kernel_bytes_per_artifact(tmp_path)
     assert stage1 > 0
-    assert (stage2 == 0) is shares_pool
+    assert (stage2 == 0) is reuses_base_weights

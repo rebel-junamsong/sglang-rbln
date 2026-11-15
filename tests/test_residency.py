@@ -94,8 +94,9 @@ def test_boundary_writes_into_a_host_buffer_on_the_host():
 
 def test_a_fake_tensor_probe_leaves_the_upload_cache_alone(transfers):
     # The audio chain finds its waveform length under FakeTensorMode before its
-    # first run, while its buffers are still on the host: the probe uploaded them
-    # and cached fake tensors, so the next real op on a buffer returned a fake.
+    # first run, while its buffers are still on the host. A probe that uploaded
+    # them would cache fake tensors, and the next real op on a buffer would
+    # return a fake.
     from torch._subclasses.fake_tensor import FakeTensor, FakeTensorMode
 
     buffer = torch.ones(8, dtype=torch.bfloat16)
@@ -136,7 +137,7 @@ GROUP_CASES = {
 
 
 @pytest.fixture
-def layout(monkeypatch):
+def npu_layout(monkeypatch):
     def set_layout(env: dict, visible: int) -> None:
         monkeypatch.setenv("SGLANG_RBLN_NUM_DEVICES", "4")
         monkeypatch.delenv("SGLANG_RBLN_COMPONENT_DEVICES", raising=False)
@@ -148,14 +149,14 @@ def layout(monkeypatch):
 
 
 @pytest.mark.parametrize("case", GROUP_CASES)
-def test_device_groups_put_each_component_set_on_its_own_device(layout, case):
+def test_device_groups_put_each_component_set_on_its_own_device(npu_layout, case):
     env, visible, groups = GROUP_CASES[case]
-    layout(env, visible)
+    npu_layout(env, visible)
     assert residency.device_groups() == groups
 
 
-def test_component_sets_may_not_share_npus(layout):
-    layout({"SGLANG_RBLN_COMPONENT_DEVICES": "text_encoder=3,4"}, 8)
+def test_component_sets_may_not_share_npus(npu_layout):
+    npu_layout({"SGLANG_RBLN_COMPONENT_DEVICES": "text_encoder=3,4"}, 8)
     with pytest.raises(ValueError, match="share"):
         residency.device_groups()
 
@@ -170,9 +171,9 @@ def test_component_sets_may_not_share_npus(layout):
     ids=["from-layout", "map-given", "width-given"],
 )
 def test_device_map_follows_the_layout_unless_given(
-    layout, monkeypatch, given, device_map
+    npu_layout, monkeypatch, given, device_map
 ):
-    layout({}, 8)
+    npu_layout({}, 8)
     for name in ("RBLN_DEVICE_MAP", "RBLN_NPUS_PER_DEVICE"):
         monkeypatch.delenv(name, raising=False)
     for name, value in given.items():
@@ -183,9 +184,9 @@ def test_device_map_follows_the_layout_unless_given(
 
 
 def test_a_placed_module_runs_on_the_device_of_its_npus(monkeypatch):
-    rsd = types.ModuleType("torch_rbln._internal.rsd_utils")
-    rsd.get_physical_device_ids = {0: [0, 1, 2, 3], 1: [4, 5, 6, 7]}.get
-    monkeypatch.setitem(sys.modules, "torch_rbln._internal.rsd_utils", rsd)
+    physical_ids = types.ModuleType("torch_rbln._internal.rsd_utils")
+    physical_ids.get_physical_device_ids = {0: [0, 1, 2, 3], 1: [4, 5, 6, 7]}.get
+    monkeypatch.setitem(sys.modules, "torch_rbln._internal.rsd_utils", physical_ids)
     monkeypatch.setattr(
         torch, "rbln", types.SimpleNamespace(device_count=lambda: 2), raising=False
     )
@@ -302,22 +303,22 @@ def test_a_resident_component_survives_the_manager_move(monkeypatch, hooked):
     assert (module.weight.device.type == "rbln") is hooked
 
 
-SHARDED_ROWS = '{"on_device": {"allocs": [{"node_id": 0}, {"node_id": 1}], "axis": 0}}'
-SHARDED_COLS = '{"on_device": {"allocs": [{"node_id": 0}, {"node_id": 1}], "axis": 1}}'
+ROW_FORM = '{"on_device": {"allocs": [{"node_id": 0}, {"node_id": 1}], "axis": 0}}'
+COLUMN_FORM = '{"on_device": {"allocs": [{"node_id": 0}, {"node_id": 1}], "axis": 1}}'
 
 
 @pytest.mark.parametrize(
     ("destination_npus", "config", "read_as", "kept"),
     [
-        (4, SHARDED_ROWS, None, True),
-        (4, SHARDED_ROWS, SHARDED_ROWS, True),
-        (4, SHARDED_ROWS, SHARDED_COLS, False),
-        (2, SHARDED_ROWS, None, False),
+        (4, ROW_FORM, None, True),
+        (4, ROW_FORM, ROW_FORM, True),
+        (4, ROW_FORM, COLUMN_FORM, False),
+        (2, ROW_FORM, None, False),
         (4, None, None, False),
     ],
     ids=[
         "first-read",
-        "same-layout",
+        "same-form",
         "other-form",
         "other-set-size",
         "no-config",
@@ -352,8 +353,8 @@ def test_a_strided_host_tensor_uploads_dense():
 
 
 def test_casting_a_resident_module_moves_no_parameter(transfers):
-    # Upstream casts the VAE around each decode: under the old host boundary it
-    # brought the whole decoder down (776.6 MiB) to compare tensor types.
+    # Upstream casts the VAE around each decode; that must not bring the whole
+    # decoder (776.6 MiB) to the host.
     module = nn.Linear(8, 8).to("rbln:0")
     residency.stage_on_device_boundary(lambda stage: module.to(torch.float32), None)
     assert transfers == []

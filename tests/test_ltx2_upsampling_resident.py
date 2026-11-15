@@ -23,7 +23,7 @@ PACK = STAGE.__dict__["_pack_video_latents"].__func__
 
 
 @pytest.fixture
-def on_the_npus(monkeypatch):
+def built_on_the_npus(monkeypatch):
     """Take the device path on the host: every tensor counts as resident, and each
     module runs eagerly instead of compiling."""
     built = []
@@ -54,8 +54,10 @@ def stage():
     )
 
 
-@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
-def test_upsampling_on_the_npus_matches_upstream_bit_for_bit(on_the_npus, stage, dtype):
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32], ids=str)
+def test_upsampling_on_the_npus_matches_upstream_bit_for_bit(
+    built_on_the_npus, stage, dtype
+):
     stage.spatial_upsampler.to(dtype)
     latents = torch.randn(1, 4, 3, 6, 10).to(dtype)
     with torch.no_grad():
@@ -63,23 +65,23 @@ def test_upsampling_on_the_npus_matches_upstream_bit_for_bit(on_the_npus, stage,
         actual = upsampling.upsample_video_latents(
             UPSAMPLE, stage, latents, None, torch.device("cpu")
         )
-    assert on_the_npus == ["upsample"]
+    assert built_on_the_npus == ["upsample"]
     assert torch.equal(actual, expected)
 
 
-@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
-def test_packing_on_the_npus_matches_upstream_bit_for_bit(on_the_npus, dtype):
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32], ids=str)
+def test_packing_on_the_npus_matches_upstream_bit_for_bit(built_on_the_npus, dtype):
     server_args = SimpleNamespace(pipeline_config=LTX2PipelineConfig())
     latents = torch.randn(1, 128, 3, 6, 10).to(dtype)
     expected, actual = SimpleNamespace(), SimpleNamespace()
     PACK(expected, latents, server_args)
     upsampling.pack_video_latents(PACK, actual, latents, server_args)
-    assert on_the_npus == ["pack"]
+    assert built_on_the_npus == ["pack"]
     assert torch.equal(actual.latents, expected.latents)
     assert actual.raw_latent_shape == expected.raw_latent_shape
 
 
-def test_host_latents_take_upstream(stage, monkeypatch):
+def test_host_latents_go_through_upstream_as_is(stage, monkeypatch):
     calls = []
     monkeypatch.setattr(
         residency, "resident_module", lambda *args, **kwargs: calls.append(args)

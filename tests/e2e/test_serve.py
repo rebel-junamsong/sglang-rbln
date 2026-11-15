@@ -19,7 +19,7 @@ pytestmark = pytest.mark.e2e
 SMOKE_MODEL_ID = "hf-internal-testing/tiny-sdxl-pipe"
 # Two budgets: starting up (imports and model load, which take minutes on a cold
 # shared filesystem under load) until /liveness answers, then the warmup until
-# /health does. One budget for both timed a slow start out mid-warmup.
+# /health does, so a slow start does not eat into the warmup's time.
 SERVER_LIVE_TIMEOUT_SEC = 1800
 SERVER_READY_TIMEOUT_SEC = 900
 HEALTH_PROBE_TIMEOUT_SEC = 30
@@ -66,7 +66,7 @@ def _alive(pid: int) -> bool:
     return state != "Z"
 
 
-def _stop(server: subprocess.Popen) -> None:
+def _stop_server_and_children(server: subprocess.Popen) -> None:
     """Stop the server and everything it started, then check nothing is left."""
     children = _descendants(server.pid)
     if server.poll() is None:
@@ -126,10 +126,10 @@ def serve_url(npu_name, tmp_path_factory):
             ("liveness", SERVER_LIVE_TIMEOUT_SEC),
             ("health", SERVER_READY_TIMEOUT_SEC),
         ):
-            _wait_for(server, log_path, f"{base_url}/{endpoint}", budget)
+            _wait_for_200(server, log_path, f"{base_url}/{endpoint}", budget)
         yield base_url
     finally:
-        _stop(server)
+        _stop_server_and_children(server)
 
 
 def _served_url(server: subprocess.Popen, log_path: Path, budget: int) -> str:
@@ -145,7 +145,7 @@ def _served_url(server: subprocess.Popen, log_path: Path, budget: int) -> str:
     raise RuntimeError(f"the server did not start serving within {budget} s:\n{tail}")
 
 
-def _wait_for(server: subprocess.Popen, log_path: Path, url: str, budget: int):
+def _wait_for_200(server: subprocess.Popen, log_path: Path, url: str, budget: int):
     deadline = time.monotonic() + budget
     while time.monotonic() < deadline:
         if server.poll() is not None:
@@ -168,7 +168,7 @@ def test_server_reports_the_smoke_model(serve_url):
     assert [entry["id"] for entry in served_models["data"]] == [SMOKE_MODEL_ID]
 
 
-def test_image_generation_round_trip(serve_url):
+def test_image_generation_returns_an_image_of_the_requested_size(serve_url):
     response = requests.post(
         f"{serve_url}/v1/images/generations",
         json={

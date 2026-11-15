@@ -29,8 +29,15 @@ def test_flags_accept_truthy_spellings(monkeypatch, value, expected):
         ("SGLANG_RBLN_PROFILE_DIR", "/tmp/trace", Path("/tmp/trace")),
         ("SGLANG_RBLN_PROFILE_REQUEST", "5", 5),
     ],
+    ids=[
+        "num-devices",
+        "component-devices",
+        "detailing-lora",
+        "profile-dir",
+        "profile-request",
+    ],
 )
-def test_values_are_parsed(monkeypatch, name, value, expected):
+def test_values_parse_to_their_types(monkeypatch, name, value, expected):
     monkeypatch.setenv(name, value)
     assert getattr(envs, name) == expected
 
@@ -47,8 +54,18 @@ def test_values_are_parsed(monkeypatch, name, value, expected):
         ("SGLANG_RBLN_BLOCKS_PER_REGION", None),
         ("SGLANG_RBLN_CACHE_DIR", Path.home() / ".cache" / "sglang_rbln"),
     ],
+    ids=[
+        "force-npu-name",
+        "num-devices",
+        "component-devices",
+        "detailing-lora",
+        "profile-dir",
+        "profile-request",
+        "blocks-per-region",
+        "cache-dir",
+    ],
 )
-def test_defaults(monkeypatch, name, expected):
+def test_unset_variables_take_their_defaults(monkeypatch, name, expected):
     monkeypatch.delenv(name, raising=False)
     assert getattr(envs, name) == expected
 

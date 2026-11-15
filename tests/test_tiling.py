@@ -120,7 +120,7 @@ class VideoCoder(Coder):
         self.tile_sample_stride_num_frames = 8
 
 
-def window(coder: VideoCoder) -> tuple[int, int] | None:
+def decode_window(coder: VideoCoder) -> tuple[int, int] | None:
     if not coder.use_framewise_decoding:
         return None
     return coder.tile_sample_min_num_frames, coder.tile_sample_stride_num_frames
@@ -129,22 +129,24 @@ def window(coder: VideoCoder) -> tuple[int, int] | None:
 def test_a_decode_that_fits_keeps_every_frame_in_one_window():
     coder = VideoCoder()
     assert tiling.with_smaller_tiles(lambda: "video", coder, frames=121) == "video"
-    assert window(coder) is None
+    assert decode_window(coder) is None
 
 
 def test_takes_the_largest_window_the_shortfall_allows():
     coder = VideoCoder()
     # 121 frames needed 1.5x the room: 80 would fit, the ladder's largest is 64.
     assert tiling.shrink_window(coder, does_not_fit([150 * MiB], [100 * MiB]), 121)
-    assert window(coder) == (64, 56)
+    assert decode_window(coder) == (64, 56)
     # 4x: 30 frames would fit, so 16, not the next rung down.
     coder = VideoCoder()
     assert tiling.shrink_window(coder, does_not_fit([400 * MiB], [100 * MiB]), 121)
-    assert window(coder) == (16, 8)
+    assert decode_window(coder) == (16, 8)
 
 
 @pytest.mark.parametrize(
-    ("start", "after"), [(None, (64, 56)), ((64, 56), (32, 24)), ((32, 24), (16, 8))]
+    ("start", "after"),
+    [(None, (64, 56)), ((64, 56), (32, 24)), ((32, 24), (16, 8))],
+    ids=["whole-to-64", "64-to-32", "32-to-16"],
 )
 def test_a_window_that_does_not_fit_takes_the_next_rung(start, after):
     coder = VideoCoder()
@@ -153,7 +155,7 @@ def test_a_window_that_does_not_fit_takes_the_next_rung(start, after):
         coder.tile_sample_min_num_frames, coder.tile_sample_stride_num_frames = start
     # An out-of-memory error without sizes shrinks one rung at a time.
     assert tiling.shrink_window(coder, RuntimeError("SYS_ENOMEM"), 121)
-    assert window(coder) == after
+    assert decode_window(coder) == after
 
 
 def test_frames_shrink_before_the_spatial_tiles():
@@ -161,7 +163,7 @@ def test_frames_shrink_before_the_spatial_tiles():
     attempts = []
 
     def call():
-        attempts.append((window(coder), coder.tile_sample_min_height))
+        attempts.append((decode_window(coder), coder.tile_sample_min_height))
         if coder.tile_sample_min_height > 256:
             raise RuntimeError("SYS_ENOMEM")
         return "video"
@@ -185,7 +187,7 @@ def test_the_window_holds_for_the_next_request():
         error = next(sizes, None)
         if error is not None:
             raise error
-        return window(coder)
+        return decode_window(coder)
 
     assert tiling.with_smaller_tiles(call, coder, frames=121) == (64, 56)
     assert tiling.with_smaller_tiles(call, coder, frames=121) == (64, 56)
@@ -195,18 +197,18 @@ def test_a_short_video_never_takes_a_window_as_long_as_itself():
     coder = VideoCoder()
     # 33 frames: only the 32 and 16 rungs are shorter.
     assert tiling.shrink_window(coder, does_not_fit([150 * MiB], [100 * MiB]), 33)
-    assert window(coder) == (16, 8)
+    assert decode_window(coder) == (16, 8)
 
 
-def test_an_eager_tensor_without_room_shrinks_the_window():
-    # An out-of-memory error from the untiled 1280x704 decode also moves the decode
-    # to smaller windows.
+def test_an_allocator_out_of_memory_error_shrinks_the_window():
+    # Raised by an eager tensor in the untiled 1280x704 decode, not by a graph that
+    # does not fit; it moves the decode to smaller windows all the same.
     error = RuntimeError("RBLNCachingAllocator::malloc block != nullptr")
     coder = VideoCoder()
     attempts = []
 
     def call():
-        attempts.append(window(coder))
+        attempts.append(decode_window(coder))
         if not coder.use_framewise_decoding:
             raise error
         return "video"
@@ -215,9 +217,10 @@ def test_an_eager_tensor_without_room_shrinks_the_window():
     assert attempts == [None, (64, 56)]
 
 
-def test_a_given_up_size_is_released_free_of_its_frames():
-    # The given-up decode's frames held its runtime while the caught error lived, so
-    # its buffers stayed on the device beside every smaller window tried after it.
+def test_a_given_up_size_is_released_after_its_frames_are_dropped():
+    # A caught error keeps the failed call's frames, and the runtime they hold,
+    # alive. Releasing before they are dropped would leave its buffers on the
+    # device beside every smaller window tried after it.
     coder = VideoCoder()
     runtimes, alive = [], []
 

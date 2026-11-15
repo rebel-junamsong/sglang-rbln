@@ -8,7 +8,7 @@ from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry, HookTy
 from sglang_rbln.compilation import placement, residency
 from sglang_rbln.patches.models import ltx_2_text_features as features
 
-LENGTH = 16
+TOKENS = 16
 
 
 @pytest.mark.parametrize(
@@ -23,7 +23,7 @@ LENGTH = 16
 def test_text_features_are_returned_on_the_connectors_npus(
     monkeypatch, placed, given, expected
 ):
-    # Upstream returned them on the platform device, the host: 367 MiB down, and up
+    # Upstream returns them on the platform device, the host: 367 MiB down, and up
     # again into each connector.
     monkeypatch.setattr(placement, "_components", {"connectors": placed})
     monkeypatch.setattr(residency, "logical_device_on", lambda devices: 1)
@@ -37,7 +37,7 @@ def test_text_features_are_returned_on_the_connectors_npus(
 
 
 @pytest.mark.parametrize("target", features.HOOKS)
-def test_wraps_upstream_around(target):
+def test_wraps_text_encoding_and_packing(target):
     assert target in features.register()
     assert any(
         hook is features.HOOKS[target] and kind is HookType.AROUND
@@ -52,8 +52,8 @@ def test_host_hidden_states_are_packed_by_upstream_as_is():
         seen.append(hidden_states.device.type)
         return "packed"
 
-    hidden = torch.zeros(1, LENGTH, 8, 3)
-    assert features.pack_text_features(upstream, hidden, torch.ones(1, LENGTH)) == (
+    hidden = torch.zeros(1, TOKENS, 8, 3)
+    assert features.pack_text_features(upstream, hidden, torch.ones(1, TOKENS)) == (
         "packed"
     )
     assert seen == ["cpu"]

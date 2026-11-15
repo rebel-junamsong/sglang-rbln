@@ -66,7 +66,7 @@ def test_the_backend_times_each_graph_run_when_asked(monkeypatch, clock, caplog)
     assert "before graph[2, 3]x1" in caplog.text
 
 
-def test_wraps_every_stage_around():
+def test_wraps_every_pipeline_stage():
     target = timeline.register()
     assert any(
         hook is timeline.timed_stage and kind is HookType.AROUND

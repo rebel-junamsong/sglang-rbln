@@ -15,7 +15,7 @@ from sglang_rbln.patches.models import ltx_2
 
 class TestCudaImportGuard:
     @pytest.fixture(autouse=True)
-    def clean_meta_path(self, monkeypatch):
+    def without_blocked_import_finders(self, monkeypatch):
         monkeypatch.setattr(
             sys,
             "meta_path",
@@ -59,7 +59,7 @@ class TestCudaImportGuard:
         assert not video_sparse_attn.register()
 
 
-class TestLtx2RopeHook:
+class TestLtx2Hooks:
     def test_returns_contiguous_tables(self):
         table = torch.arange(2 * 4 * 3 * 8, dtype=torch.bfloat16).view(2, 4, 3, 8)
         cos, sin = ltx_2.contiguous_rotary_tables(
@@ -69,7 +69,7 @@ class TestLtx2RopeHook:
         assert torch.equal(cos, table.swapaxes(1, 2))
 
     @pytest.mark.parametrize("target", ltx_2.ROTARY_FORWARDS)
-    def test_registers_an_around_hook(self, target):
+    def test_wraps_each_rotary_forward_with_the_table_cache(self, target):
         assert target in ltx_2.register()
         assert any(
             hook is ltx_2.cached_rotary_tables and kind is HookType.AROUND

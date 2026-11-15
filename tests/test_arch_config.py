@@ -14,7 +14,9 @@ def traceable_config(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    ("extras", "expected"), [({}, 4.0), ({"variant": "scaled"}, 6.0)]
+    ("extras", "expected"),
+    [({}, 4.0), ({"variant": "scaled"}, 6.0)],
+    ids=["unset", "set"],
 )
 def test_extra_attrs_trace_without_graph_breaks(traceable_config, extras, expected):
     config = ArchConfig()
@@ -36,5 +38,5 @@ def test_missing_extra_attr_still_raises(traceable_config):
         _ = ArchConfig().variant
 
 
-def test_registers_a_replace_hook():
+def test_registers_on_the_arch_config_attribute_lookup():
     assert arch_config.register() == arch_config.HOOK_TARGET

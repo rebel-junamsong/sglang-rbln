@@ -14,7 +14,7 @@ EDGES = [0, 1, -0.0, 1e-9, 1 - 1e-7, 0.5 / 255, 254.5 / 255, 2, -3, np.inf, -np.
 
 
 @pytest.mark.parametrize("channels", [1, 3, 4])
-def test_frames_are_upstreams_bytes(channels):
+def test_frames_match_upstream_byte_for_byte(channels):
     rng = np.random.default_rng(0)
     sample = rng.random((5, 17, 33, channels), dtype=np.float32) * 1.2 - 0.1
     sample.reshape(-1)[: len(EDGES)] = EDGES
@@ -28,6 +28,7 @@ def test_frames_are_upstreams_bytes(channels):
 
 
 def test_every_value_in_range_rounds_as_upstream():
+    # 12M evenly spaced values just past [0, 1], as four 1000x1000 RGB frames
     sample = np.linspace(-0.01, 1.01, 3 * 4_000_000, dtype=np.float32)
     sample = sample.reshape(-1, 1000, 1000, 3)
     expected = UPSTREAM(sample)
@@ -46,7 +47,7 @@ def test_every_value_in_range_rounds_as_upstream():
     ],
     ids=["tensor", "uint8", "float64", "channels-first", "one-frame"],
 )
-def test_any_other_sample_is_upstreams(sample):
+def test_other_sample_types_and_layouts_go_to_upstream(sample):
     def upstream(value):
         assert value is sample
         return "upstream"

@@ -37,7 +37,7 @@ def test_entry_points_are_registered():
 
 class TestActivate:
     @pytest.fixture(autouse=True)
-    def no_forced_name(self, monkeypatch):
+    def without_forced_npu_name(self, monkeypatch):
         monkeypatch.delenv("RBLN_FORCE_NPU_NAME", raising=False)
 
     def test_returns_none_without_device_nodes(self, monkeypatch):
@@ -88,7 +88,7 @@ def test_upstream_sees_the_host():
 
 
 class TestSglangResolvesThePlugin:
-    def test_override_selects_rbln(self, fresh_platform, rbln_override):
+    def test_override_selects_rbln(self, fresh_platform, rbln_platform_env):
         assert (
             platforms.resolve_current_platform_cls_qualname()
             == sglang_rbln.PLATFORM_CLASS_PATH
@@ -128,7 +128,7 @@ class TestCustomOpDispatch:
 
 
 class TestDeviceQueries:
-    def test_attention_backend_is_upstreams(self):
+    def test_attention_backend_is_upstreams_sdpa(self):
         """The plugin uses upstream's SDPA backend. `Platform`'s method is a stub
         returning "", so the override stays and defers to upstream.
         """
@@ -176,14 +176,14 @@ class TestServerArgDefaults:
             disable_autocast=False,
         )
 
-    def test_compiles_through_the_platform(self, server_args):
+    def test_turns_torch_compile_on_and_compiles_the_dit_whole(self, server_args):
         """The LTX DiT compiles whole, as upstream's default does; an explicit
         `--regional-compile` makes it block regions instead."""
         RBLNPlatform().apply_server_args_defaults(server_args)
         assert server_args.enable_torch_compile is True
         assert server_args.regional_compile is False
 
-    def test_keeps_an_explicit_choice(self, server_args):
+    def test_keeps_an_explicit_torch_compile_choice(self, server_args):
         server_args.explicit_args = {"enable_torch_compile"}
         RBLNPlatform().apply_server_args_defaults(server_args)
         assert server_args.enable_torch_compile is False
@@ -199,8 +199,11 @@ class TestServerArgDefaults:
             ("dit_layerwise_offload", True),
             ("layerwise_offload_components", ["transformer"]),
         ],
+        ids=["offload-during-compile", "dit-layerwise", "layerwise-components"],
     )
-    def test_rejects_layerwise_offload(self, server_args, flag, value):
+    def test_rejects_flags_that_offload_resident_weights(
+        self, server_args, flag, value
+    ):
         # it would move the resident weights to the host, and nothing moves them back
         setattr(server_args, flag, value)
         server_args.explicit_args = {flag}
@@ -210,7 +213,7 @@ class TestServerArgDefaults:
     @pytest.mark.parametrize(
         "flag", ["offload_during_compile", "dit_layerwise_offload"]
     )
-    def test_accepts_layerwise_offload_turned_off(self, server_args, flag):
+    def test_accepts_offload_flags_turned_off(self, server_args, flag):
         setattr(server_args, flag, False)
         server_args.explicit_args = {flag}
         RBLNPlatform().apply_server_args_defaults(server_args)
@@ -231,7 +234,7 @@ class TestServerArgDefaults:
 
 
 @pytest.fixture
-def device_groups(monkeypatch) -> list[None]:
+def configured_device_groups(monkeypatch) -> list[None]:
     from sglang_rbln.compilation import residency
 
     configured = []
@@ -241,9 +244,9 @@ def device_groups(monkeypatch) -> list[None]:
     return configured
 
 
-def test_init_backend_lays_out_the_npu_sets(device_groups):
+def test_init_backend_lays_out_the_npu_sets(configured_device_groups):
     RBLNPlatform().init_backend()
-    assert device_groups == [None]
+    assert configured_device_groups == [None]
 
 
 @pytest.mark.parametrize(
@@ -251,7 +254,9 @@ def test_init_backend_lays_out_the_npu_sets(device_groups):
     [(None, platform_module.TORCH_RBLN_DISABLE_FALLBACK_DEFAULT), ("all", "all")],
     ids=["default", "explicit"],
 )
-def test_forbids_silent_compile_fallback(monkeypatch, device_groups, preset, expected):
+def test_forbids_silent_compile_fallback(
+    monkeypatch, configured_device_groups, preset, expected
+):
     monkeypatch.delenv(platform_module.TORCH_RBLN_DISABLE_FALLBACK_ENV, raising=False)
     if preset is not None:
         monkeypatch.setenv(platform_module.TORCH_RBLN_DISABLE_FALLBACK_ENV, preset)
@@ -265,7 +270,7 @@ def test_forbids_silent_compile_fallback(monkeypatch, device_groups, preset, exp
     ids=["compile-only", "run", "explicit"],
 )
 def test_a_compile_only_run_takes_the_dummy_device(
-    monkeypatch, device_groups, compile_only, preset, expected
+    monkeypatch, configured_device_groups, compile_only, preset, expected
 ):
     """It compiles on device tensors as a device run does, with no NPU to open."""
     monkeypatch.setenv("SGLANG_RBLN_COMPILE_ONLY", compile_only)
