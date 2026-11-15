@@ -248,15 +248,15 @@ def test_init_backend_lays_out_the_npu_sets(device_groups):
 
 @pytest.mark.parametrize(
     ("preset", "expected"),
-    [(None, platform_module.TORCH_RBLN_FALLBACK_DEFAULT), ("all", "all")],
+    [(None, platform_module.TORCH_RBLN_DISABLE_FALLBACK_DEFAULT), ("all", "all")],
     ids=["default", "explicit"],
 )
 def test_forbids_silent_compile_fallback(monkeypatch, device_groups, preset, expected):
-    monkeypatch.delenv(platform_module.TORCH_RBLN_FALLBACK_ENV, raising=False)
+    monkeypatch.delenv(platform_module.TORCH_RBLN_DISABLE_FALLBACK_ENV, raising=False)
     if preset is not None:
-        monkeypatch.setenv(platform_module.TORCH_RBLN_FALLBACK_ENV, preset)
+        monkeypatch.setenv(platform_module.TORCH_RBLN_DISABLE_FALLBACK_ENV, preset)
     RBLNPlatform().init_backend()
-    assert os.environ[platform_module.TORCH_RBLN_FALLBACK_ENV] == expected
+    assert os.environ[platform_module.TORCH_RBLN_DISABLE_FALLBACK_ENV] == expected
 
 
 @pytest.mark.parametrize(
@@ -311,7 +311,7 @@ class TestTensorParallelDegree:
         for flag, value in explicit.items():
             setattr(server_args, flag, value)
         server_args.explicit_args = set(explicit)
-        platform_module.take_tensor_parallel_degree(server_args)
+        platform_module.set_num_devices_from_tensor_parallel_degree(server_args)
         assert (os.environ[platform_module.NUM_DEVICES_ENV] or None) == expected
         if expected is not None:
             assert (server_args.tp_size, server_args.num_gpus) == (1, 1)
@@ -319,14 +319,14 @@ class TestTensorParallelDegree:
     def test_an_agreeing_environment_is_kept(self, monkeypatch, server_args):
         monkeypatch.setenv(platform_module.NUM_DEVICES_ENV, "4")
         server_args.tp_size, server_args.explicit_args = 4, {"tp_size"}
-        platform_module.take_tensor_parallel_degree(server_args)
+        platform_module.set_num_devices_from_tensor_parallel_degree(server_args)
         assert os.environ[platform_module.NUM_DEVICES_ENV] == "4"
 
     def test_a_contradicting_environment_fails(self, monkeypatch, server_args):
         monkeypatch.setenv(platform_module.NUM_DEVICES_ENV, "2")
         server_args.tp_size, server_args.explicit_args = 4, {"tp_size"}
         with pytest.raises(ValueError, match="contradicts"):
-            platform_module.take_tensor_parallel_degree(server_args)
+            platform_module.set_num_devices_from_tensor_parallel_degree(server_args)
 
 
 CPU_REFERENCE_PROBE = """

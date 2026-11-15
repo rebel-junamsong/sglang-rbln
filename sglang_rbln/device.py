@@ -30,6 +30,9 @@ def _module_available(module_name: str) -> bool:
 
 
 def rbln_available() -> bool:
+    """Whether to select the platform: a forced NPU name, or rebel-compiler and an
+    NPU device node. Imports nothing, since SGLang asks in every process it spawns
+    and importing rebel is slow."""
     if envs.RBLN_FORCE_NPU_NAME:
         return True
     return _module_available("rebel") and bool(device_nodes())
@@ -47,7 +50,7 @@ def npu_name(device_id: int = 0) -> str:
     return str(name)
 
 
-def npu_memory_info(device_id: int = 0) -> MemoryInfo:
+def npu_memory_info(device_id: int) -> MemoryInfo:
     import rebel
 
     info = rebel.get_device_memory_info(device_id)

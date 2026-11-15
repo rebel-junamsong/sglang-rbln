@@ -9,19 +9,19 @@ from sglang.multimodal_gen.runtime.platforms import PlatformEnum
 from sglang.multimodal_gen.runtime.platforms.cpu import CpuPlatform
 
 from sglang_rbln import device, envs
-from sglang_rbln.compilation import backend as compilation
-from sglang_rbln.compilation import residency
+from sglang_rbln.compilation import backend, residency
 
 NUM_DEVICES_ENV = "SGLANG_RBLN_NUM_DEVICES"
-TORCH_RBLN_FALLBACK_ENV = "TORCH_RBLN_DISABLE_FALLBACK"
-TORCH_RBLN_FALLBACK_DEFAULT = "compile_error"
+# An op that fails to compile raises instead of silently falling back.
+TORCH_RBLN_DISABLE_FALLBACK_ENV = "TORCH_RBLN_DISABLE_FALLBACK"
+TORCH_RBLN_DISABLE_FALLBACK_DEFAULT = "compile_error"
 # A compile-only run builds the artifacts a device run loads, without an NPU.
 DUMMY_DEVICE_ENV = "RBLN_DUMMY_DEVICE"
 
-compilation.ensure_compile_backend()
+backend.ensure_compile_backend()
 
 
-def take_tensor_parallel_degree(server_args) -> None:
+def set_num_devices_from_tensor_parallel_degree(server_args) -> None:
     """Split each model over the NPUs `--tp-size` (else `--num-gpus`) asks for.
 
     One worker process drives all of a model's NPUs: the degree becomes
@@ -42,7 +42,7 @@ def take_tensor_parallel_degree(server_args) -> None:
     declared = envs.SGLANG_RBLN_NUM_DEVICES
     if declared not in (None, degree):
         raise ValueError(
-            f"SGLANG_RBLN_NUM_DEVICES={declared} contradicts the requested "
+            f"{NUM_DEVICES_ENV}={declared} contradicts the requested "
             f"tensor-parallel degree {degree}"
         )
     os.environ[NUM_DEVICES_ENV] = str(degree)
@@ -81,22 +81,24 @@ def reject_layerwise_offload(server_args) -> None:
 class RBLNPlatform(CpuPlatform):
     """Upstream sees the host: its tensors are cpu ones, and the plugin's compiled
     regions take them onto their NPU sets, where their outputs and the eager ops
-    between the regions stay (`compilation.residency`). So every answer is the CPU
-    platform's but the platform's identity, the compile backend and the device
-    names."""
+    between the regions stay (`compilation.residency`). So the platform answers
+    as `CpuPlatform` except for its identity (out-of-tree, `rbln` device name and
+    `CustomOp` dispatch key), its compile backend and options, and its NPU names."""
 
     _enum = PlatformEnum.OOT
     device_name = "rbln"
-    simple_compile_backend = compilation.COMPILE_BACKEND_NAME
+    simple_compile_backend = backend.COMPILE_BACKEND_NAME
 
     def init_backend(self) -> None:
-        os.environ.setdefault(TORCH_RBLN_FALLBACK_ENV, TORCH_RBLN_FALLBACK_DEFAULT)
+        os.environ.setdefault(
+            TORCH_RBLN_DISABLE_FALLBACK_ENV, TORCH_RBLN_DISABLE_FALLBACK_DEFAULT
+        )
         if envs.SGLANG_RBLN_COMPILE_ONLY:
             os.environ.setdefault(DUMMY_DEVICE_ENV, "1")
         residency.configure_device_group()
 
     def apply_server_args_defaults(self, server_args) -> None:
-        take_tensor_parallel_degree(server_args)
+        set_num_devices_from_tensor_parallel_degree(server_args)
         if not server_args.is_arg_explicitly_set("enable_torch_compile"):
             server_args.enable_torch_compile = True
         # The server warmup would layerwise-offload the DiT for its compile.
@@ -108,8 +110,10 @@ class RBLNPlatform(CpuPlatform):
         server_args.component_precisions.setdefault("vocoder", "fp32")
 
     def get_compile_options(self, module: torch.nn.Module) -> dict[str, object]:
-        return compilation.compile_options(module)
+        return backend.compile_options(module)
 
+    # `Platform.is_cpu` checks for the CPU enum, which an out-of-tree platform
+    # does not carry.
     def is_cpu(self) -> bool:
         return True
 
@@ -118,10 +122,6 @@ class RBLNPlatform(CpuPlatform):
 
     def get_device(self, local_rank: int) -> torch.device:
         return torch.device("cpu")
-
-    @classmethod
-    def set_device(cls, torch_device: torch.device) -> None:
-        pass
 
     @classmethod
     def get_device_name(cls, device_id: int = 0) -> str:
@@ -134,6 +134,8 @@ class RBLNPlatform(CpuPlatform):
     def tensor_on_device(self, tensor: torch.Tensor) -> bool:
         return tensor.device.type == self.device_type
 
+    # `Platform`'s answers are `lru_cache`d, which dynamo breaks the graph on when
+    # a compiled forward asks; these plain ones trace.
     @classmethod
     def is_amp_supported(cls) -> bool:
         return True
@@ -142,6 +144,8 @@ class RBLNPlatform(CpuPlatform):
     def is_float64_supported(cls) -> bool:
         return True
 
+    # Not `torch.inference_mode`: an inference tensor has no version counter, so
+    # `residency` could not reuse a host tensor's NPU copy across graph calls.
     @classmethod
     def inference_mode(cls):
         return torch.no_grad()

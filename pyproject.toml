@@ -40,8 +40,8 @@ rbln = "sglang_rbln:activate"
 [project.entry-points."sglang.multimodal_gen.plugins"]
 rbln_patches = "sglang_rbln.patches:register"
 
-# The committed uv.lock is the environment every functionality and perf result in
-# the PR was measured on. Bump these pins together with the result they produced.
+# These pins resolve the committed uv.lock, the environment every functionality and
+# performance result is measured on: change one only with results remeasured on it.
 [tool.uv]
 constraint-dependencies = [
     "rebel-compiler==0.12.1.dev1111+gaa4af7d2",
