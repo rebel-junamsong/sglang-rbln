@@ -59,11 +59,14 @@ The upstream command; `--tp-size` is how many NPUs each model is split across.
 sglang serve --model-path Lightricks/LTX-2.5-Diffusers --tp-size 4
 ```
 
-The DiT and the video decoder run tensor-parallel on NPUs 0–3. The Gemma text
-encoder does not fit next to the DiT, so it runs tensor-parallel on the next
-four NPUs, 4–7. With fewer than eight NPUs, pass `--text-encoder-cpu-offload`
-to keep it on the CPU. To pick the NPUs, set `RBLN_VISIBLE_DEVICES`
-(for example `0,1,2,3,4,5,6,7`); by default every NPU on the host is used.
+On eight NPUs, the DiT and the video decoder run tensor-parallel on NPUs 0–3.
+The Gemma text encoder does not fit next to them, so it runs on NPUs 4–7, with
+the modules that read its output: the text connector, the audio decoder and
+vocoder, the latent upsampler and the duration head. Each set is one device to
+`torch-rbln`, and tensors cross between the two sets on the NPUs. With fewer
+than eight NPUs, pass `--text-encoder-cpu-offload` to keep the text encoder on
+the CPU. To pick the NPUs, set `RBLN_VISIBLE_DEVICES` (for example
+`0,1,2,3,4,5,6,7`); by default every NPU on the host is used.
 
 ```python
 from openai import OpenAI
