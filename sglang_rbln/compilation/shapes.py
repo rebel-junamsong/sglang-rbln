@@ -32,7 +32,11 @@ def shape_key(pipeline: Any, request: Any) -> ShapeKey:
     return ShapeKey(type(pipeline).__name__, dims)
 
 
-def _region(graph: torch.fx.GraphModule, example_inputs) -> tuple[int, ...] | str:
+def _graph_identity(
+    graph: torch.fx.GraphModule, example_inputs
+) -> tuple[int, ...] | str:
+    """What tells one compiled module from another: its weights, or without any, its
+    code."""
     lifted = (
         value for value in example_inputs if isinstance(value, torch.nn.Parameter)
     )
@@ -52,16 +56,18 @@ def _input_signature(example_inputs) -> tuple:
     )
 
 
-_compiled: set[tuple] = set()
+# (shape key, graph identity, input signature) of every graph compiled so far
+_seen_compiles: set[tuple] = set()
 
 
 def repeats_compile(graph: torch.fx.GraphModule, example_inputs) -> bool:
+    """Whether this graph was compiled before for the same request shape and inputs."""
     entry = (
         current_shape_key.get(),
-        _region(graph, example_inputs),
+        _graph_identity(graph, example_inputs),
         _input_signature(example_inputs),
     )
-    if entry in _compiled:
+    if entry in _seen_compiles:
         return True
-    _compiled.add(entry)
+    _seen_compiles.add(entry)
     return False

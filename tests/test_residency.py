@@ -38,16 +38,16 @@ def _compiled_block() -> nn.Module:
 
 def test_install_wraps_a_compiled_call_once():
     block = _compiled_block()
-    residency.install(block)
+    residency.install_resident_call(block)
     wrapped = block._compiled_call_impl
-    residency.install(block)
+    residency.install_resident_call(block)
     assert block._compiled_call_impl is wrapped
     assert wrapped._rbln_resident
 
 
 def test_install_skips_an_uncompiled_module():
     block = nn.Linear(4, 4)
-    residency.install(block)
+    residency.install_resident_call(block)
     assert block._compiled_call_impl is None
 
 

@@ -19,7 +19,9 @@ from sglang_rbln.compilation.backend import COMPILE_BACKEND_NAME, static_compile
 
 NPUS_PER_DEVICE_ENV = "RBLN_NPUS_PER_DEVICE"
 DEVICE_MAP_ENV = "RBLN_DEVICE_MAP"
-_TENSOR_QUERIES = frozenset(
+# Ops DeviceBoundary passes through unmoved: they read only metadata, or move the
+# tensor to the device they name.
+_PASSED_THROUGH = frozenset(
     {
         torch.Tensor.size,
         torch.Tensor.dim,
@@ -36,7 +38,7 @@ _TENSOR_QUERIES = frozenset(
 )
 
 
-# Matched by name, as dynamo traces this check: Module._apply asks the type check of
+# Passed through by name, as dynamo traces the type check: Module._apply runs it on
 # every parameter it casts or moves, and it compares the two tensors' types without
 # reading any data.
 _PASSED_BY_NAME = frozenset({"__get__", "__set__", "_has_compatible_shallow_copy_type"})
@@ -122,7 +124,7 @@ def layout_to_keep(tensor: torch.Tensor, device: torch.device, read_as: str | No
 
 
 def copy_across_devices(
-    tensor: torch.Tensor, device: torch.device, config=None
+    tensor: torch.Tensor, device: torch.device, config
 ) -> torch.Tensor:
     """`tensor` on `device`, copied device to device: with `config` when given, else
     dense."""
@@ -168,13 +170,16 @@ def resident_module(
 
 
 class _Transfers:
+    """Copies tensors onto a device, reusing a tensor's copy until it is updated."""
+
     def __init__(self) -> None:
-        self.moved: dict[torch.device, WeakIdKeyDictionary] = {}
+        # device -> tensor -> (its version when copied, the copy)
+        self.copies: dict[torch.device, WeakIdKeyDictionary] = {}
 
     def to(self, value: Any, device: torch.device, read_as: str | None = None) -> Any:
         if not isinstance(value, torch.Tensor) or value.device == device:
             return value
-        if value.device.type not in ("cpu", "rbln"):
+        if value.device.type not in ("cpu", "rbln"):  # meta placeholders
             return value
         if value.device.type == "rbln":
             config = layout_to_keep(value, device, read_as)
@@ -184,12 +189,12 @@ class _Transfers:
         # An inference tensor has no version counter to tell an in-place update by.
         if value.is_inference():
             return move()
-        moved = self.moved.setdefault(device, WeakIdKeyDictionary())
-        cached = moved.get(value)
+        copies = self.copies.setdefault(device, WeakIdKeyDictionary())
+        cached = copies.get(value)
         if cached is not None and cached[0] == value._version:
             return cached[1]
         resident = move()
-        moved[value] = (value._version, resident)
+        copies[value] = (value._version, resident)
         return resident
 
 
@@ -215,7 +220,7 @@ def _target_device(func, args, kwargs) -> torch.device | None:
     return next((leaf.device for leaf in leaves if _is_resident(leaf)), None)
 
 
-def _faking() -> bool:
+def _under_fake_mode() -> bool:
     return torch._C._get_dispatch_mode(torch._C._TorchDispatchModeKey.FAKE) is not None
 
 
@@ -233,7 +238,7 @@ class DeviceBoundary(TorchFunctionMode):
         kwargs = kwargs or {}
         if (
             torch.compiler.is_compiling()  # a graph's inputs are placed for it
-            or func in _TENSOR_QUERIES
+            or func in _PASSED_THROUGH
             or getattr(func, "__name__", None) in _PASSED_BY_NAME
         ):
             return func(*args, **kwargs)
@@ -253,7 +258,7 @@ class DeviceBoundary(TorchFunctionMode):
                 return value
             if device.type == "cpu":
                 return value.cpu()
-            if _faking():  # a shape-only probe: caching would keep a fake for a real
+            if _under_fake_mode():  # a shape-only probe: never cache its fake copy
                 return value.contiguous().to(device)
             return _transfers.to(value, device)
 
@@ -293,7 +298,8 @@ def resident_call(module: torch.nn.Module, compiled: Callable) -> Callable:
     return run
 
 
-def install(module: torch.nn.Module) -> None:
+def install_resident_call(module: torch.nn.Module) -> None:
+    """Wrap `module`'s compiled call in resident_call, once."""
     compiled = module._compiled_call_impl
     if compiled is not None and not getattr(compiled, "_rbln_resident", False):
         module._compiled_call_impl = resident_call(module, compiled)
@@ -308,7 +314,7 @@ MOVE_TARGET = f"{STRATEGIES}._module_to_local_device"
 READY_TARGET = f"{STRATEGIES}._module_ready_on_local_device"
 
 
-def _on_device(module: torch.nn.Module) -> bool:
+def _has_resident_weights(module: torch.nn.Module) -> bool:
     return any(map(_is_resident, (*module.parameters(), *module.buffers())))
 
 
@@ -319,12 +325,12 @@ def keep_resident_placement(move, module: torch.nn.Module, *args, **kwargs) -> N
     a use, and that device is the host here: it would take the weights off the NPUs
     every request, and the next call would run against host weights.
     """
-    if not _on_device(module):
+    if not _has_resident_weights(module):
         move(module, *args, **kwargs)
 
 
 def resident_is_ready(ready, module: torch.nn.Module, *args, **kwargs) -> bool:
-    return _on_device(module) or ready(module, *args, **kwargs)
+    return _has_resident_weights(module) or ready(module, *args, **kwargs)
 
 
 COMPILE_TARGET = "torch.nn.modules.module.Module.compile"
@@ -335,7 +341,7 @@ STAGE_TARGET = (
 
 def install_after_compile(result, module: torch.nn.Module, *args, **kwargs):
     if kwargs.get("backend") == COMPILE_BACKEND_NAME:
-        install(module)
+        install_resident_call(module)
     return result
 
 

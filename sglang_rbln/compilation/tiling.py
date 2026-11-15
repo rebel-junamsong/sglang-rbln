@@ -23,6 +23,9 @@ TILE_ATTRIBUTES = (
 # Below this the tiles stop paying for themselves: the seams cost more than the
 # graph saves, and upstream's own minimum is 256.
 MIN_TILE = 128
+# The coders halve the spatial axes per down/up block, so tiles stay on a multiple of
+# this; a ragged tile adds a partial one and another graph.
+TILE_MULTIPLE = 32
 # The temporal windows a video decoder falls back to, in sample frames, largest
 # first. Each blends into the next over OVERLAP frames. Every blended frame is an
 # average of two decodes and loses detail, so a decode starts untiled and takes the
@@ -33,7 +36,7 @@ OVERLAP = 8
 
 
 def _shortfall(error: BaseException) -> float | None:
-    """How many times the room the graph needed, on its tightest node; None when
+    """How many times the room the graph needed, on its tightest NPU; None when
     the error carries no sizes."""
     if not isinstance(error, RegionDoesNotFit):
         return None
@@ -51,10 +54,8 @@ def _shrink_factor(error: BaseException) -> float:
     return math.sqrt(_shortfall(error) or 2.0)
 
 
-def _rounded(value: float) -> int:
-    # The coders halve the spatial axes per down/up block, so keep tiles on a
-    # multiple of 32; a ragged tile adds a partial one and another graph.
-    return max(MIN_TILE, int(value) // 32 * 32)
+def _tile_size(value: float) -> int:
+    return max(MIN_TILE, int(value) // TILE_MULTIPLE * TILE_MULTIPLE)
 
 
 def shrink_tiles(module: Any, error: BaseException) -> bool:
@@ -63,7 +64,7 @@ def shrink_tiles(module: Any, error: BaseException) -> bool:
     if any(size is None for size in sizes.values()):
         return False
     factor = _shrink_factor(error)
-    shrunk = {name: _rounded(size / factor) for name, size in sizes.items()}
+    shrunk = {name: _tile_size(size / factor) for name, size in sizes.items()}
     if all(
         new >= old for new, old in zip(shrunk.values(), sizes.values(), strict=True)
     ):

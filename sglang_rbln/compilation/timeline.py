@@ -26,13 +26,15 @@ logger = logging.getLogger(__name__)
 STAGE_TARGET = (
     "sglang.multimodal_gen.runtime.pipelines_core.stages.base.PipelineStage.__call__"
 )
-SHOWN = 5
+# How many of the largest host stretches a stage's report names.
+STRETCHES_SHOWN = 5
 
 
 @dataclasses.dataclass
 class StageTimeline:
     started: float
-    last: float
+    # when the current host stretch began: the stage start, or the last graph's end
+    host_since: float
     runs: int = 0
     in_graphs: float = 0.0
     # host seconds and count, by the graph that ran after them
@@ -41,17 +43,17 @@ class StageTimeline:
     )
     counts: collections.Counter = dataclasses.field(default_factory=collections.Counter)
 
-    def host(self, label: str, now: float) -> None:
-        self.stretches[label] += now - self.last
+    def end_host_stretch(self, label: str, now: float) -> None:
+        self.stretches[label] += now - self.host_since
         self.counts[label] += 1
 
     def report(self, name: str, ended: float) -> str:
-        self.host("stage end", ended)
+        self.end_host_stretch("stage end", ended)
         wall = ended - self.started
         host = wall - self.in_graphs
         top = ", ".join(
             f"before {label} {seconds:.3f} s x{self.counts[label]}"
-            for label, seconds in self.stretches.most_common(SHOWN)
+            for label, seconds in self.stretches.most_common(STRETCHES_SHOWN)
         )
         return (
             f"rbln timeline in {name}: wall {wall:.3f} s, {self.runs} graph runs "
@@ -83,13 +85,13 @@ def timed_callable(compiled: Callable, label: str) -> Callable:
         if stage is None:
             return compiled(*args, **kwargs)
         started = time.perf_counter()
-        stage.host(label, started)
+        stage.end_host_stretch(label, started)
         try:
             return compiled(*args, **kwargs)
         finally:
-            stage.last = time.perf_counter()
+            stage.host_since = time.perf_counter()
             stage.runs += 1
-            stage.in_graphs += stage.last - started
+            stage.in_graphs += stage.host_since - started
 
     return run
 

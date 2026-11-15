@@ -87,7 +87,7 @@ class _Block(nn.Module):
 
 @pytest.fixture
 def recording(monkeypatch) -> Iterator[SimpleNamespace]:
-    monkeypatch.setattr(shapes, "_compiled", set())
+    monkeypatch.setattr(shapes, "_seen_compiles", set())
     torch._dynamo.reset()
     repeats: list[bool] = []
 
@@ -137,7 +137,7 @@ def test_a_stride_recompile_at_the_same_key_is_a_repeat(recording):
 
 
 def test_backend_warns_on_a_repeat_with_the_key(monkeypatch, caplog):
-    monkeypatch.setattr(shapes, "_compiled", set())
+    monkeypatch.setattr(shapes, "_seen_compiles", set())
     instrumented = backend._instrumented_backend(lambda graph, inputs: graph.forward)
     graph = torch.fx.symbolic_trace(_Block())
     inputs = [torch.randn(1, 8, 16)]

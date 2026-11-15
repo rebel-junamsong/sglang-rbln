@@ -167,14 +167,14 @@ def rebase_strided_views(
             base_shapes[index] = tuple(base.shape)
     # Every other input on a rebased storage is rebased onto the same base, so one
     # storage reaches the graph in one shape.
-    storages = {
+    base_shape_of_storage = {
         example_inputs[i].untyped_storage().data_ptr(): shape
         for i, shape in base_shapes.items()
     }
     for index, value in enumerate(example_inputs):
         if index in plan or not isinstance(value, torch.Tensor) or not is_device(value):
             continue
-        shape = storages.get(value.untyped_storage().data_ptr())
+        shape = base_shape_of_storage.get(value.untyped_storage().data_ptr())
         if shape is None or tuple(value.shape) == shape:
             continue
         base = _base_of_shape(value, shape)
@@ -199,6 +199,7 @@ def rebase_strided_views(
         node.replace_all_uses_with(
             current, delete_user_cb=lambda user, first=first: user is not first
         )
+        # The placeholder now takes the base, so the view's traced metadata is stale.
         node.meta.pop("example_value", None)
         node.meta.pop("val", None)
     graph.lint()

@@ -17,7 +17,9 @@ HOOK_TARGET = (
     "PipelineComponentLoader.load_component"
 )
 
+# module -> the NPUs it runs on
 _placements: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+# component name -> the NPUs it was placed on at load, None for the DiT's
 _components: dict[str, tuple[int, ...] | None] = {}
 
 # A text encoder and the connectors that take its output run once per request, before
@@ -25,6 +27,8 @@ _components: dict[str, tuple[int, ...] | None] = {}
 # next visible NPUs, if they hold it: the text features stay on those NPUs, and the
 # audio graph is not compiled beside both DiT shapes and the VAE.
 SPARE_NPU_COMPONENTS = ("text_encoder", "connectors", "vocoder")
+# Room each spare NPU keeps beyond its share of a component's weights, for the
+# component's runtime: 1.5 GiB.
 RUNTIME_RESERVE = 1536 << 20
 
 
@@ -61,7 +65,7 @@ def spare_set() -> tuple[int, ...] | None:
     return tuple(range(width, 2 * width))
 
 
-def spare_devices(module: nn.Module) -> tuple[int, ...] | None:
+def spare_set_for(module: nn.Module) -> tuple[int, ...] | None:
     """As many NPUs after the DiT's as it has, if they can hold `module` together."""
     spare = spare_set()
     if spare is None:
@@ -95,7 +99,7 @@ def place_component(load_component, component_name: str, *args, **kwargs):
         return module, memory_usage
     devices = envs.SGLANG_RBLN_COMPONENT_DEVICES.get(component_name)
     if devices is None and component_name in SPARE_NPU_COMPONENTS:
-        devices = spare_devices(module)
+        devices = spare_set_for(module)
         if devices:
             logger.info("%s runs on the spare NPUs %s", component_name, devices)
     if devices:

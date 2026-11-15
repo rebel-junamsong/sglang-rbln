@@ -21,19 +21,17 @@ logger = logging.getLogger(__name__)
 
 COMPILE_BACKEND_NAME = "rbln"
 
+# One compile context per NPU set (or NPU count), shared by every graph compiled for it.
 _device_set_contexts: dict[tuple[int, ...] | int | None, Any] = {}
-
-
-def _new_context():
-    from rebel import CompileContext
-
-    return CompileContext(use_weight_sharing=True)
 
 
 def device_set_context(device_set: tuple[int, ...] | int | None):
     context = _device_set_contexts.get(device_set)
     if context is None:
-        context = _device_set_contexts[device_set] = _new_context()
+        from rebel import CompileContext
+
+        context = CompileContext(use_weight_sharing=True)
+        _device_set_contexts[device_set] = context
     return context
 
 
@@ -67,6 +65,7 @@ def static_compile_kwargs(module: torch.nn.Module) -> dict[str, Any]:
     return compile_kwargs
 
 
+# Set on a module by compile_once, so a stage compiles it on its first call only.
 COMPILED = "_rbln_compiled"
 
 
@@ -101,8 +100,8 @@ def _release_code(code: types.CodeType, scope: dict, released: set) -> None:
 
     Dynamo keeps each compiled graph, and the resume function a graph break leaves the
     rest of the forward to, in the module's globals under a name only the cached code
-    refers to. Resetting the forward's cache alone kept them, and their runtimes held
-    their device buffers for good.
+    refers to. Resetting only the forward's cache would leave them there, and their
+    runtimes would hold their device buffers until the process exits.
     """
     if code in released:
         return
@@ -142,6 +141,10 @@ def describe_graph(graph: torch.fx.GraphModule, example_inputs) -> str:
     return f"{node_count} ops, inputs [{', '.join(inputs)}]"
 
 
+def on_device(value: torch.Tensor) -> bool:
+    return value.device.type == "rbln"
+
+
 def contiguous_device_inputs(args):
     # A compile-only run reads only the shape, so an empty tensor of it stands in for
     # the eager copy behind contiguous().
@@ -151,18 +154,16 @@ def contiguous_device_inputs(args):
     return [
         contiguous(value, memory_format=torch.contiguous_format)
         if isinstance(value, torch.Tensor)
-        and value.device.type == "rbln"
+        and on_device(value)
         and not value.is_contiguous()
         else value
         for value in args
     ]
 
 
-def on_device(value: torch.Tensor) -> bool:
-    return value.device.type == "rbln"
+def _contiguous_callable(compiled, rebased: device_views.RebasedViews | None):
+    """`compiled`, fed each rebased view's base and contiguous device inputs."""
 
-
-def _contiguous_callable(compiled, rebased: device_views.RebasedViews | None = None):
     @functools.wraps(compiled)
     def run(*args, **kwargs):
         if rebased is not None:
