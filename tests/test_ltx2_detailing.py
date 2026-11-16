@@ -84,7 +84,9 @@ def test_registers_around_the_two_stage_path():
 @pytest.mark.parametrize(("phase", "strength"), [("stage1", 0.0), ("stage2", 0.5)])
 def test_keeps_the_lora_dynamic_in_both_stages(detailing_lora, phase, strength):
     switched, calls = [], []
-    pipeline = SimpleNamespace(set_lora=lambda *a, **k: calls.append((a, k)))
+    pipeline = SimpleNamespace(
+        set_lora=lambda *a, **k: calls.append((a, k)), lora_adapters={}, lora_layers={}
+    )
     detailing.switch_lora_phase(
         lambda p, ph, **k: switched.append(ph), pipeline, phase, batch=None
     )
@@ -309,3 +311,85 @@ def test_stage2_reuses_the_base_weights_stage1_loaded(
     stage1, stage2 = _kernel_bytes_per_artifact(tmp_path)
     assert stage1 > 0
     assert (stage2 == 0) is reuses_base_weights
+
+
+def test_stage2_shares_stage1_weights_once_resident(
+    monkeypatch, tmp_path, npu_name, detailing_lora
+):
+    """The transformer's weights, the LoRA's included, move to new (NPU) storages on
+    its first call, before stage 1 compiles; stage 2 still compiles against the same
+    weights, so it joins stage 1's weight pool instead of laying out a second one."""
+    import rebel
+    import rebel.core.torch_compile  # noqa: F401
+    from sglang.multimodal_gen.runtime.distributed.parallel_state import (
+        maybe_init_distributed_environment_and_model_parallel,
+        model_parallel_is_initialized,
+    )
+    from sglang.multimodal_gen.runtime.layers.lora.linear import (
+        replace_submodule,
+        wrap_with_lora_layer,
+    )
+    from sglang.srt.utils.network import get_open_port
+
+    if not model_parallel_is_initialized():
+        for key, value in dict(
+            MASTER_ADDR="127.0.0.1",
+            MASTER_PORT=str(get_open_port()),
+            RANK="0",
+            LOCAL_RANK="0",
+            WORLD_SIZE="1",
+        ).items():
+            monkeypatch.setenv(key, value)
+        maybe_init_distributed_environment_and_model_parallel(tp_size=1, sp_size=1)
+    monkeypatch.setenv("RBLN_FORCE_NPU_NAME", npu_name)
+    width, rank = 256, 8
+    torch.manual_seed(0)
+    model = _TwoProjections(width).eval()
+    layers, adapter = {}, {}
+    for index in range(2):
+        name = f"projections.{index}"
+        layers[name] = wrap_with_lora_layer(model.get_submodule(name), rank, rank)
+        replace_submodule(model, name, layers[name])
+        adapter[f"{name}.lora_A"] = torch.randn(rank, width, dtype=torch.bfloat16)
+        adapter[f"{name}.lora_B"] = torch.randn(width, rank, dtype=torch.bfloat16)
+
+    def set_lora(nickname, path, *, target, strength, merge_weights):
+        # what sglang's dynamic set_lora does to each layer: wrap the adapter's tensors
+        for name, layer in layers.items():
+            layer.set_lora_weights(
+                adapter[f"{name}.lora_A"],
+                adapter[f"{name}.lora_B"],
+                strength=strength,
+                merge_weights=merge_weights,
+                clear_existing=True,
+            )
+
+    pipeline = SimpleNamespace(
+        set_lora=set_lora,
+        lora_adapters={detailing.ADAPTER_NAME: adapter},
+        lora_layers=layers,
+    )
+    context = rebel.CompileContext(use_weight_sharing=True)
+    compiled = torch.compile(
+        model,
+        backend="rbln",
+        dynamic=False,
+        options={
+            "compile_context": context,
+            "mode": ["compile_only"],
+            "cache_dir": str(tmp_path),
+            "num_devices": 4,
+        },
+    )
+    with torch.no_grad():
+        for stage in (1, 2):
+            detailing.switch_lora_phase(lambda *a, **k: None, pipeline, f"stage{stage}")
+            if stage == 1:
+                # resident placement: every weight moves to new storage on first call
+                for parameter in model.parameters():
+                    parameter.data = parameter.data.clone()
+            compiled(torch.randn(1, 64 * stage, width, dtype=torch.bfloat16))
+    stage1, stage2 = _kernel_bytes_per_artifact(tmp_path)
+    assert stage1 > 0
+    assert stage2 == 0
+    assert len(set(context.state.weight_group_ids)) == 1

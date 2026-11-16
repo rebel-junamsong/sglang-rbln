@@ -49,9 +49,30 @@ def reference_downscale_factor(path: str) -> int:
         return int((file.metadata() or {}).get("reference_downscale_factor", 1))
 
 
+def adopt_placed_lora_weights(pipeline) -> None:
+    """Point the adapter's A/B at the tensors the transformer's layers hold.
+
+    A resident transformer moves its weights, these included, onto its NPUs on its
+    first call, after stage 1 set them. ``set_lora`` wraps the adapter's tensors again
+    on every switch, so stage 2 would compile against host copies: a weight set that
+    is no longer stage 1's, which gets a second DiT weight pool instead of stage 1's.
+    """
+    adapter = pipeline.lora_adapters.get(ADAPTER_NAME, {})
+    for name, layer in pipeline.lora_layers.items():
+        for part in ("lora_A", "lora_B"):
+            held, source = getattr(layer, part), adapter.get(f"{name}.{part}")
+            if held is not None and source is not None and not _shares(held, source):
+                adapter[f"{name}.{part}"] = held.detach()
+
+
+def _shares(a: torch.Tensor, b: torch.Tensor) -> bool:
+    return a.untyped_storage().data_ptr() == b.untyped_storage().data_ptr()
+
+
 def switch_lora_phase(switch, pipeline, phase, *args, **kwargs):
     switch(pipeline, phase, *args, **kwargs)
     if (path := envs.SGLANG_RBLN_LTX2_DETAILING_LORA) and phase in STAGE_STRENGTHS:
+        adopt_placed_lora_weights(pipeline)
         pipeline.set_lora(
             ADAPTER_NAME,
             str(path),
