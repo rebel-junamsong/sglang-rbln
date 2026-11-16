@@ -112,20 +112,14 @@ def layer_runs(module: nn.Module) -> list[list[nn.Module]]:
     return regions.consecutive_runs(named)
 
 
-def compile_regions(module: nn.Module, projections: Iterable[str] = ()) -> int:
-    """Compile `module`'s layer runs as regions and its named `projections` whole,
-    once per module; returns how many graphs that makes."""
+def compile_regions(module: nn.Module) -> int:
+    """Compile `module`'s layer runs as regions, once per module; returns how many
+    graphs that makes."""
     if getattr(module, COMPILED, False):
         return 0
     install_capture_hooks(module)
-    runs = layer_runs(module)
-    linears = [
-        traceable(linear)
-        for name in projections
-        if (linear := getattr(module, name, None)) is not None
-    ]
     graphs = 0
-    if runs or linears:
+    if runs := layer_runs(module):
         compile_kwargs = static_compile_kwargs(module)
         blocks_per_region = envs.SGLANG_RBLN_BLOCKS_PER_REGION
         for layers in runs:
@@ -135,18 +129,33 @@ def compile_regions(module: nn.Module, projections: Iterable[str] = ()) -> int:
                 layers, blocks_per_region, compile_kwargs, keep_outputs
             )
             graphs += regions.graph_count(layers, blocks_per_region)
-        for linear in linears:
-            linear.compile(**compile_kwargs)
-        graphs += len(linears)
         logger.info(
-            "Compiling %d layers and %d projections of %s as %d regions",
+            "Compiling %d layers of %s as %d regions",
             sum(map(len, runs)),
-            len(linears),
             type(module).__name__,
             graphs,
         )
     setattr(module, COMPILED, True)
     return graphs
+
+
+def compile_projections(module: nn.Module, names: Iterable[str]) -> int:
+    """Compile `module`'s named projections whole, once per module; returns how many
+    graphs that makes. Its transformers compile as one graph each when they run
+    (`ltx_2_text_features`)."""
+    if getattr(module, COMPILED, False):
+        return 0
+    linears = [
+        traceable(linear)
+        for name in names
+        if (linear := getattr(module, name, None)) is not None
+    ]
+    if linears:
+        compile_kwargs = static_compile_kwargs(module)
+        for linear in linears:
+            linear.compile(**compile_kwargs)
+    setattr(module, COMPILED, True)
+    return len(linears)
 
 
 def compile_text_encoders(forward, stage, batch, server_args):
@@ -159,7 +168,7 @@ def compile_text_encoders(forward, stage, batch, server_args):
 
 def compile_connectors(forward, stage, batch, server_args):
     if server_args.enable_torch_compile:
-        compile_regions(stage.connectors, CONNECTOR_PROJECTIONS)
+        compile_projections(stage.connectors, CONNECTOR_PROJECTIONS)
     return forward(stage, batch, server_args)
 
 

@@ -89,24 +89,34 @@ def test_compiles_each_declared_layer_list_once_as_one_region(
 
 
 def test_layers_of_one_module_share_its_compile_context(compiled_modules):
-    stage = SimpleNamespace(connectors=_text_encoder("language_model.layers", "blocks"))
+    stage = SimpleNamespace(
+        text_encoders=[_text_encoder("language_model.layers", "blocks")]
+    )
     server_args = SimpleNamespace(
         enable_torch_compile=True, text_encoder_cpu_offload=False
     )
-    text_encoding.compile_connectors(upstream_forward, stage, None, server_args)
+    text_encoding.compile_text_encoders(upstream_forward, stage, None, server_args)
     contexts = {
         id(kwargs["options"]["compile_context"]) for _, kwargs in compiled_modules
     }
     (group, _), *rest = compiled_modules
-    layers = stage.connectors.language_model.layers
+    encoder = stage.text_encoders[0]
     assert [block.weight for block in group.blocks] == [
-        layer.weight for layer in layers
+        layer.weight for layer in encoder.language_model.layers
     ]
-    assert [module for module, _ in rest] == [
-        *stage.connectors.blocks,
-        stage.connectors.video_aggregate_embed,
-    ]
+    assert [module for module, _ in rest] == [*encoder.blocks]
     assert len(contexts) == 1
+
+
+def test_the_connectors_compile_only_their_projections(compiled_modules):
+    # their transformers compile whole when they run (ltx_2_text_features)
+    stage = SimpleNamespace(connectors=_text_encoder("language_model.layers", "blocks"))
+    server_args = SimpleNamespace(enable_torch_compile=True)
+    for _ in range(2):
+        text_encoding.compile_connectors(upstream_forward, stage, None, server_args)
+    assert [module for module, _ in compiled_modules] == [
+        stage.connectors.video_aggregate_embed
+    ]
 
 
 def test_nothing_compiles_without_torch_compile(compiled_modules):
@@ -133,8 +143,7 @@ def test_text_encoder_offloaded_to_cpu_stays_eager(compiled_modules):
     text_encoding.compile_text_encoders(upstream_forward, stage, None, server_args)
     text_encoding.compile_connectors(upstream_forward, stage, None, server_args)
     assert [module for module, _ in compiled_modules] == [
-        *stage.connectors.blocks,
-        stage.connectors.video_aggregate_embed,
+        stage.connectors.video_aggregate_embed
     ]
 
 
@@ -155,7 +164,7 @@ def test_projections_trace_into_a_graph_that_owns_their_weights(monkeypatch):
     projection = connectors.video_aggregate_embed
     hidden_states = torch.randn(2, 8)
     expected = projection(hidden_states)
-    assert text_encoding.compile_regions(connectors, ["video_aggregate_embed"]) == 1
+    assert text_encoding.compile_projections(connectors, ["video_aggregate_embed"]) == 1
     torch.testing.assert_close(projection(hidden_states), expected)
     assert isinstance(projection, nn.Linear)
     assert graph_inputs == [(2, 8)]

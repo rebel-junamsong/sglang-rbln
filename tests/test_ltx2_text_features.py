@@ -219,3 +219,185 @@ def test_hidden_states_on_the_encoders_npus_never_cross_to_another_set(
     (line,) = [line for line in completed.stdout.splitlines() if line.startswith("{")]
     result = json.loads(line)
     assert result == {"device": "rbln:1", "crossings": []}
+
+
+LENGTH = 16
+MASKS = {
+    "none": [0] * LENGTH,
+    "left-padded": [0] * 5 + [1] * (LENGTH - 5),
+    "scattered": [1, 0, 1, 1, 0, 0, 1, 0] * 2,
+    "all": [1] * LENGTH,
+}
+
+
+def _connector_forward():
+    from sglang.multimodal_gen.runtime.models.adapter.ltx_2_connector import (
+        LTX2ConnectorTransformer1d,
+    )
+
+    forward = LTX2ConnectorTransformer1d.forward
+    return LTX2ConnectorTransformer1d, getattr(forward, "__wrapped__", forward)
+
+
+@pytest.fixture
+def on_the_npus(monkeypatch):
+    """Take the device path on the host: every tensor counts as resident, and the
+    connector transformer runs eagerly instead of compiling."""
+    monkeypatch.setattr(residency, "_is_resident", lambda value: True)
+    monkeypatch.setattr(
+        residency,
+        "resident_module",
+        lambda cache, key, build, tensors, devices=None: build(),
+    )
+
+
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
+@pytest.mark.parametrize("mask", sorted(MASKS))
+@pytest.mark.parametrize("rope_type", ["split", "interleaved"])
+def test_the_connector_graph_matches_upstream_bit_for_bit(
+    on_the_npus, dtype, mask, rope_type
+):
+    transformer, forward = _connector_forward()
+    torch.manual_seed(0)
+    connector = transformer(
+        num_attention_heads=2,
+        attention_head_dim=16,
+        num_layers=2,
+        num_learnable_registers=8,
+        rope_type=rope_type,
+        apply_gated_attention=True,
+    ).to(dtype)
+    hidden = torch.randn(1, LENGTH, 32).to(dtype)
+    additive = (torch.tensor([MASKS[mask]]) - 1).to(dtype) * torch.finfo(dtype).max
+    with torch.no_grad():
+        expected = forward(connector, hidden.clone(), additive.clone())
+        actual = features.connector_transformer_forward(
+            forward, connector, hidden.clone(), additive.clone()
+        )
+    for got, want in zip(actual, expected, strict=True):
+        assert got.dtype == want.dtype and torch.equal(got, want)
+
+
+def test_host_hidden_states_run_upstreams_connector_as_is(monkeypatch):
+    transformer, forward = _connector_forward()
+    connector = transformer(
+        num_attention_heads=2,
+        attention_head_dim=16,
+        num_layers=1,
+        num_learnable_registers=8,
+    )
+    monkeypatch.setattr(
+        residency, "resident_module", lambda *args, **kwargs: pytest.fail("compiled")
+    )
+    hidden, additive = torch.randn(1, LENGTH, 32), torch.zeros(1, LENGTH)
+    with torch.no_grad():
+        actual = features.connector_transformer_forward(
+            forward, connector, hidden, additive
+        )
+        expected = forward(connector, hidden, additive)
+    assert all(map(torch.equal, actual, expected))
+
+
+def test_the_connector_stage_compiles_one_graph_per_connector_and_projection(
+    rbln_platform, dummy_device, monkeypatch, tmp_path
+):
+    """Eager on the NPUs, the register replacement, the output norm and block 0's
+    learning pass ran op by op, each a graph on one NPU: 40 graphs at the yak shape
+    where the projections and connectors are 4."""
+    from sglang.multimodal_gen.configs.models.adapter.ltx_2_connector import (
+        LTX2ConnectorArchConfig,
+        LTX2ConnectorConfig,
+    )
+    from sglang.multimodal_gen.runtime import server_args as server_args_module
+    from sglang.multimodal_gen.runtime.models.adapter.ltx_2_connector import (
+        LTX2TextConnectors,
+        LTX2TransformerBlock1d,
+    )
+    from sglang.multimodal_gen.runtime.pipelines_core.stages.model_specific_stages.ltx_2.text_connector import (  # noqa: E501
+        LTX2TextConnectorStage,
+    )
+
+    from sglang_rbln.patches.stages import text_encoding
+
+    monkeypatch.setattr(
+        server_args_module,
+        "_global_server_args",
+        SimpleNamespace(
+            attention_backend="torch_sdpa",
+            attention_backend_config=None,
+            comfyui_mode=False,
+            enable_torch_compile=True,
+        ),
+        raising=False,
+    )
+    monkeypatch.setenv("SGLANG_RBLN_CACHE_DIR", str(tmp_path))
+    compile_module = torch.nn.Module.compile
+
+    def compile_resident(module, *args, **kwargs):
+        # as the server's residency hook does: the call takes its inputs to the NPUs
+        compile_module(module, *args, **kwargs)
+        residency.install_resident_call(module)
+
+    monkeypatch.setattr(torch.nn.Module, "compile", compile_resident)
+    transformer, forward = _connector_forward()
+    monkeypatch.setattr(
+        transformer,
+        "forward",
+        lambda self, *args, **kwargs: features.connector_transformer_forward(
+            forward, self, *args, **kwargs
+        ),
+    )
+    arch = LTX2ConnectorArchConfig(
+        caption_channels=16,
+        text_proj_in_factor=4,
+        per_modality_projections=True,
+        video_hidden_dim=64,
+        audio_hidden_dim=32,
+        video_connector_num_attention_heads=2,
+        video_connector_attention_head_dim=32,
+        audio_connector_num_attention_heads=2,
+        audio_connector_attention_head_dim=16,
+        video_connector_num_learnable_registers=64,
+        audio_connector_num_learnable_registers=64,
+        video_gated_attn=True,
+        audio_gated_attn=True,
+    )
+    torch.manual_seed(0)
+    connectors = LTX2TextConnectors(LTX2ConnectorConfig(arch_config=arch))
+    connectors = connectors.to(torch.bfloat16).eval()
+    stage = SimpleNamespace(connectors=connectors)
+    mask = torch.tensor([[0] * 40 + [1] * 88]).to("rbln:0")
+    server_args = SimpleNamespace(enable_torch_compile=True)
+
+    eager_blocks = []
+    block_forward = LTX2TransformerBlock1d.forward
+
+    def recording_block_forward(self, *args, **kwargs):
+        if not torch.compiler.is_compiling():
+            eager_blocks.append(self)
+        return block_forward(self, *args, **kwargs)
+
+    monkeypatch.setattr(LTX2TransformerBlock1d, "forward", recording_block_forward)
+
+    def encode():
+        batch = SimpleNamespace(
+            prompt_embeds=[torch.randn(1, 128, 64, dtype=torch.bfloat16).to("rbln:0")],
+            prompt_attention_mask=[mask],
+            negative_prompt_embeds=None,
+            negative_attention_mask=None,
+            do_classifier_free_guidance=False,
+        )
+        with torch.no_grad(), residency.DeviceBoundary():
+            text_encoding.compile_connectors(
+                LTX2TextConnectorStage.forward, stage, batch, server_args
+            )
+        return batch
+
+    batch = encode()
+    (video,), (audio,) = batch.prompt_embeds, batch.audio_prompt_embeds
+    assert (video.device.type, tuple(video.shape)) == ("rbln", (1, 128, 64))
+    assert (audio.device.type, tuple(audio.shape)) == ("rbln", (1, 128, 32))
+    assert len(list(tmp_path.rglob("*.rbln"))) == 4
+    encode()
+    assert len(list(tmp_path.rglob("*.rbln"))) == 4
+    assert eager_blocks == []

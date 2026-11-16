@@ -34,6 +34,21 @@ TORCH_DTYPES = {
 
 LISTED_CASTS = {
     (
+        "patches/models/ltx_2_text_features.py",
+        "connector_transformer_forward",
+        "torch.argsort(1 - binary_attn_mask, dim=1, stable=True).to(torch.int32)",
+    ): "a gather index, not a value: the valid tokens' positions",
+    (
+        "patches/models/ltx_2_text_features.py",
+        "connector_transformer_forward",
+        "(flipped * valid.unsqueeze(-1)).to(hidden_states.dtype)",
+    ): "upstream's int flipped mask times the hidden states, which promotes to theirs",
+    (
+        "patches/models/ltx_2_text_features.py",
+        "connector_transformer_forward",
+        "flipped.to(hidden_states.dtype)",
+    ): "upstream's int (1 - flipped mask) times the registers promotes to theirs",
+    (
         "compilation/residency.py",
         "keep_resident_placement",
         "module.to(dtype=dtype)",
