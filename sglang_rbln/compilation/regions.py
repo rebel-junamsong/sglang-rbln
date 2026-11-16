@@ -102,6 +102,27 @@ def call_sandboxed(function: Callable, args: tuple, kwargs: dict) -> Any:
     return contextvars.copy_context().run(run)
 
 
+def _as_placeholder(leaf: Any) -> Any:
+    if isinstance(leaf, torch.Tensor):
+        return torch.empty(leaf.shape, dtype=leaf.dtype, device="meta")
+    return leaf
+
+
+def run_shape_only(function: Callable, args: tuple, kwargs: dict) -> Any:
+    """`function`'s output, as meta tensors, from a sandboxed run on fake tensors:
+    no op runs on the host or the NPUs. A function that reads its data, which fake
+    tensors cannot, runs sandboxed on copies instead."""
+    from torch._subclasses.fake_tensor import FakeTensorMode
+
+    try:
+        with FakeTensorMode(allow_non_fake_inputs=True):
+            output = call_sandboxed(function, args, kwargs)
+    except Exception:  # noqa: BLE001 - any op a fake tensor cannot run
+        logger.debug("block 0 reads its data; learning its slots eagerly")
+        output = call_sandboxed(function, args, kwargs)
+    return tree_map(_as_placeholder, output)
+
+
 class BlockGroup(nn.Module):
     """A region's blocks as one module: each block takes the previous one's outputs in
     `slots`, and with `keep_outputs` the group returns every block's outputs."""
@@ -384,13 +405,14 @@ class DeferredBlock:
         self.state = state
 
     def _learn(self, args: tuple, kwargs: dict) -> Any:
-        """Find the slots on the first pass: block 0 runs eagerly in a sandbox, and
-        block 1's call shows where its outputs went."""
+        """Find the slots on the first pass: block 0 runs on fake tensors for its
+        output's shapes, which the caller holds as placeholders until the region
+        runs, and block 1's call shows where that output went."""
         state = self.state
         if self.index == 0:
             state["first"] = (args, kwargs)
             state["calls"].append(None)
-            output = call_sandboxed(state["eager"][0], args, kwargs)
+            output = run_shape_only(state["eager"][0], args, kwargs)
             state["returned"] = _as_tuple(output)
             return output
         slots = _find_slots(state["returned"], args, kwargs)
@@ -461,18 +483,14 @@ class DeferredBlock:
 
 
 def _become(placeholder: torch.Tensor, value: torch.Tensor) -> None:
-    """Make the tensor the caller holds for a kept output hold the region's output.
+    """Make the meta placeholder the caller holds for a kept output hold the region's
+    output.
 
-    `swap_tensors` refuses a tensor anything references weakly, and either side can
-    be: the region's first call hands the caller block 0's eager output, which a
-    runtime that read it references; a split region's output is the next region's
-    input, which dynamo's guards reference. So a real tensor takes the output by an
-    in-place copy, and a meta placeholder takes the output itself, through a fresh
-    alias of its storage that nothing references yet.
+    `swap_tensors` refuses a tensor anything references weakly, and the output can
+    be: a split region's output is the next region's input, which dynamo's guards
+    reference. So the placeholder takes a fresh alias of the output's storage, which
+    nothing references yet.
     """
-    if placeholder.device.type != "meta":
-        placeholder.copy_(value)
-        return
     alias = value.detach()
     alias.__dict__.update(value.__dict__)
     torch.utils.swap_tensors(placeholder, alias)

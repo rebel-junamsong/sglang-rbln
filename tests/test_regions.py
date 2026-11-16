@@ -689,7 +689,7 @@ def test_kept_outputs_stay_on_the_region_npus(monkeypatch, dummy_device):
         list(model.blocks), None, {"backend": backend, "dynamic": False}, True
     )
     with torch.no_grad():
-        model(torch.randn(2, 8))  # block 0 runs eagerly on the host while learning
+        model(torch.randn(2, 8))  # block 0 runs on fake tensors while learning
         with residency.DeviceBoundary():
             seen = model(torch.randn(2, 8))
     assert [out.device.type for out in seen] == ["rbln"] * 4
@@ -816,37 +816,105 @@ def test_a_watched_output_still_reaches_its_placeholder():
     assert placeholder._rbln_producer_view == "view"
 
 
-@pytest.mark.parametrize("watched", ["held", "output", "both"])
-def test_a_watched_eager_output_takes_the_region_output(watched):
-    # The region's first call hands the caller block 0's eager output, which a
-    # runtime that read it watches weakly; the region's own output may be watched too.
-    held = torch.zeros(2, 3)
-    value = torch.arange(6.0).reshape(2, 3)
-    watchers = [
-        weakref.ref(tensor)
-        for name, tensor in (("held", held), ("output", value))
-        if watched in (name, "both")
-    ]
-    regions._become(held, value)
-    assert torch.equal(held, value)
-    assert held.data_ptr() != value.data_ptr()
-    assert all(watcher() is not None for watcher in watchers)
+class RecordingBlock(Block):
+    """A block that records the tensor types it runs on."""
+
+    seen: list[type] = []
+
+    def forward(self, x, y, scale, *, shift):
+        RecordingBlock.seen.append(type(x))
+        return super().forward(x, y, scale, shift=shift)
 
 
-def test_a_device_tensor_a_graph_read_takes_the_region_output(
+class DataReadingBlock(Block):
+    def forward(self, x, y, scale, *, shift):
+        scale = scale * float(x.abs().max().item() > 0)
+        return super().forward(x, y, scale, shift=shift)
+
+
+def _first_call(block_type, monkeypatch, capturing_backend):
+    """The eager output of a 4-block model, then its output on the region's first
+    call."""
+    monkeypatch.setenv("SGLANG_RBLN_BLOCKS_PER_REGION", "4")
+    _, compile_kwargs = capturing_backend
+    torch.manual_seed(0)
+    model = Model(depth=4).eval()
+    for index, block in enumerate(model.blocks):
+        model.blocks[index] = block_type(8)
+        model.blocks[index].load_state_dict(block.state_dict())
+    x = torch.randn(2, 8)
+    with torch.no_grad():
+        expected = model(x)
+        RecordingBlock.seen = []
+        regions.compile_block_groups(
+            _upstream_compile, model, compile_kwargs=compile_kwargs
+        )
+        return expected, model(x)
+
+
+def test_block_zero_learns_its_slots_on_fake_tensors(monkeypatch, capturing_backend):
+    from torch._subclasses.fake_tensor import FakeTensor
+
+    expected, actual = _first_call(RecordingBlock, monkeypatch, capturing_backend)
+    assert torch.equal(actual, expected)
+    # the learning pass; the region's trace records after it
+    assert RecordingBlock.seen[0] is FakeTensor
+
+
+def test_a_block_that_reads_its_data_learns_its_slots_eagerly(
+    monkeypatch, capturing_backend
+):
+    expected, actual = _first_call(DataReadingBlock, monkeypatch, capturing_backend)
+    assert torch.equal(actual, expected)
+
+
+class EagerDeviceOps(torch.overrides.TorchFunctionMode):
+    """The torch calls run eagerly on rbln tensors, by name."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.names: list[str] = []
+
+    def __torch_function__(self, func, types, args=(), kwargs=None):
+        kwargs = kwargs or {}
+        # traced or under fake dispatch, an op runs nothing
+        if torch.compiler.is_compiling() or residency._under_fake_mode():
+            return func(*args, **kwargs)
+        if any(
+            isinstance(leaf, torch.Tensor) and leaf.device.type == "rbln"
+            for leaf in [*args, *kwargs.values()]
+        ):
+            self.names.append(getattr(func, "__name__", str(func)))
+        return func(*args, **kwargs)
+
+
+class TanhBlock(nn.Module):
+    def __init__(self, width: int) -> None:
+        super().__init__()
+        self.linear = nn.Linear(width, width)
+
+    def forward(self, x, *, shift):
+        return torch.tanh(self.linear(x) + shift)
+
+
+def test_a_region_first_call_runs_no_block_op_on_the_npus(
     dummy_device, monkeypatch, tmp_path
 ):
-    """Block 0's eager output on the NPUs, read by a compiled graph since, and the
-    region's output, read by the next region's graph: the runtimes watch both."""
+    """Eager on the NPUs, block 0's learning pass compiled each of its ops as a
+    single-op graph on one NPU: 29 graphs for the two LTX-2 connectors."""
     monkeypatch.setenv("SGLANG_RBLN_CACHE_DIR", str(tmp_path))
     compilation.ensure_compile_backend()
-    reader = nn.Linear(64, 64).to(torch.bfloat16)
-    reader.compile(**compilation.static_compile_kwargs(reader))
-    held = torch.zeros(1, 16, 64, dtype=torch.bfloat16).to("rbln:0")
-    value = torch.zeros(1, 16, 64, dtype=torch.bfloat16).to("rbln:0")
-    with torch.no_grad():
-        reader(held)
-        reader(value)
-    assert weakref.getweakrefcount(held) and weakref.getweakrefcount(value)
-    regions._become(held, value)
-    assert (held.device.type, tuple(held.shape)) == ("rbln", (1, 16, 64))
+    torch.manual_seed(0)
+    blocks = [TanhBlock(64).to(torch.bfloat16).to("rbln:0") for _ in range(4)]
+    regions.group_blocks(blocks, None, compilation.static_compile_kwargs(blocks[0]))
+    eager = EagerDeviceOps()
+    h = torch.randn(2, 64, dtype=torch.bfloat16).to("rbln:0")
+    with torch.no_grad(), residency.DeviceBoundary():
+        # block 0 learns; a mode traced into the last block's compile would split it
+        with eager:
+            for index, block in enumerate(blocks[:-1]):
+                h = block(h, shift=index * 0.1)
+        h = blocks[-1](h, shift=0.3)
+    assert (h.device.type, tuple(h.shape)) == ("rbln", (2, 64))
+    assert len(list(tmp_path.rglob("*.rbln"))) == 1
+    assert not {"clone", "linear", "tanh", "add"} & set(eager.names)
