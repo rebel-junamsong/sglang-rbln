@@ -58,7 +58,9 @@ def compile_audio(forward, stage, batch, server_args):
         if devices := audio_devices(vocoder):
             placement.place(chain, devices)
         compile_whole(chain, "audio VAE decoder + vocoder")
-        audio_vae.decode = lambda latents, return_dict=True: (latents,)
+        # The chain compiles layout-static: latents that arrive as a view would be
+        # traced again beside the contiguous ones (11 s at the second request).
+        audio_vae.decode = lambda latents, return_dict=True: (latents.contiguous(),)
         stage.vocoder = chain
         setattr(chain, COMPILED, True)
     return forward(stage, batch, server_args)

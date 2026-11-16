@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+import functools
 import logging
 from types import SimpleNamespace
 
@@ -202,3 +203,38 @@ def test_the_audio_chain_compiles_for_the_text_encoder_npus(
     vocoder.compile_audio(audio_forward, audio_stage, None, compile_on)
     options = compiled_modules[0][1]["options"]
     assert (options["num_devices"], options["device"]) == (4, [4, 5, 6, 7])
+
+
+def test_latents_in_another_layout_reuse_the_compiled_chain(audio_stage, monkeypatch):
+    """The stage's latents come contiguous on the first request and as a transposed
+    view from the second on; the layout-static chain traced them again."""
+    monkeypatch.setattr(placement, "text_encoder_devices", lambda: None)
+    compiles = []
+
+    def counting(graph, example_inputs):
+        compiles.append(graph)
+        return graph.forward
+
+    monkeypatch.setattr(
+        vocoder,
+        "compile_whole",
+        lambda module, what: module.compile(backend=counting, dynamic=False),
+    )
+    torch._dynamo.reset()
+    server_args = SimpleNamespace(enable_torch_compile=True)
+    contiguous = torch.randn(1, 2, 3, 4, dtype=torch.bfloat16)
+    transposed = torch.randn(1, 3, 2, 4, dtype=torch.bfloat16).transpose(1, 2)
+
+    def stage_audio(stage, batch, server_args, latents):
+        spectrogram = stage.audio_vae.decode(latents, return_dict=False)[0]
+        return stage.vocoder(spectrogram)
+
+    for latents in (contiguous, transposed):
+        waveform = vocoder.compile_audio(
+            functools.partial(stage_audio, latents=latents),
+            audio_stage,
+            None,
+            server_args,
+        )
+        assert torch.equal(waveform, latents.float() * 2 + 1)
+    assert len(compiles) == 1
