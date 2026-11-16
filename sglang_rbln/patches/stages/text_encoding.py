@@ -21,6 +21,12 @@ STAGES = "sglang.multimodal_gen.runtime.pipelines_core.stages"
 LTX2_STAGES = f"{STAGES}.model_specific_stages.ltx_2"
 HOOK_TARGET = f"{STAGES}.text_encoding.TextEncodingStage.forward"
 CONNECTOR_HOOK_TARGET = f"{LTX2_STAGES}.text_connector.LTX2TextConnectorStage.forward"
+FORWARD_ENCODER_TARGET = (
+    f"{STAGES}.text_encoding.TextEncodingStage._forward_text_encoder"
+)
+# The encoder inputs that feed only its eager prelude: the token embedding lookup,
+# the attention masks and the positions.
+HOST_INPUTS = ("input_ids", "attention_mask")
 COMPILED = "_rbln_regions_compiled"
 # transformers' qualname, its typo included.
 CAPTURE_HOOK = "install_output_capuring_hook.<locals>.output_capturing_hook"
@@ -157,7 +163,26 @@ def compile_connectors(forward, stage, batch, server_args):
     return forward(stage, batch, server_args)
 
 
-def register() -> tuple[str, str]:
+def encode_from_host_inputs(forward_encoder, stage, text_encoder, forward_kwargs):
+    """Give the encoder its token ids and mask on the host, as on a CPU platform.
+
+    Upstream takes them to the device the stage returns its features on, the
+    connectors' NPUs here. On the device the encoder's eager prelude (the embedding
+    lookup in the host table, the mask and position construction) would run there
+    op by op; on the host it runs as upstream's CPU path does, and its regions still
+    take their inputs to the NPUs.
+    """
+    forward_kwargs = {
+        name: value.cpu() if name in HOST_INPUTS and value is not None else value
+        for name, value in forward_kwargs.items()
+    }
+    return forward_encoder(stage, text_encoder, forward_kwargs)
+
+
+def register() -> tuple[str, str, str]:
     HookRegistry.register(HOOK_TARGET, compile_text_encoders, HookType.AROUND)
     HookRegistry.register(CONNECTOR_HOOK_TARGET, compile_connectors, HookType.AROUND)
-    return HOOK_TARGET, CONNECTOR_HOOK_TARGET
+    HookRegistry.register(
+        FORWARD_ENCODER_TARGET, encode_from_host_inputs, HookType.AROUND
+    )
+    return HOOK_TARGET, CONNECTOR_HOOK_TARGET, FORWARD_ENCODER_TARGET

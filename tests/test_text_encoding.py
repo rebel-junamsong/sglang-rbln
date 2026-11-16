@@ -42,12 +42,20 @@ def upstream_forward(stage, batch, server_args):
     return "encoded"
 
 
-def test_registers_both_text_stages():
+def test_registers_both_text_stages_and_the_encoder_call():
     targets = text_encoding.register()
-    assert targets == (text_encoding.HOOK_TARGET, text_encoding.CONNECTOR_HOOK_TARGET)
+    assert targets == (
+        text_encoding.HOOK_TARGET,
+        text_encoding.CONNECTOR_HOOK_TARGET,
+        text_encoding.FORWARD_ENCODER_TARGET,
+    )
     assert [
         hook for target in targets for _, hook, _ in HookRegistry._hooks[target]
-    ] == [text_encoding.compile_text_encoders, text_encoding.compile_connectors]
+    ] == [
+        text_encoding.compile_text_encoders,
+        text_encoding.compile_connectors,
+        text_encoding.encode_from_host_inputs,
+    ]
 
 
 @pytest.mark.parametrize(
@@ -292,3 +300,61 @@ def test_encoder_regions_match_eager_at_one_shape_for_any_prompt_length(
         assert torch.equal(output, reference)
     assert len(graphs) == 3
     assert {shape for graph in graphs for shape in graph} >= {(1, 32, 64), (1, 48, 64)}
+
+
+class EagerDeviceOps(torch.overrides.TorchFunctionMode):
+    """The torch calls made eagerly on rbln tensors, by name."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.names: list[str] = []
+
+    def __torch_function__(self, func, types, args=(), kwargs=None):
+        kwargs = kwargs or {}
+        if any(
+            isinstance(leaf, torch.Tensor) and leaf.device.type == "rbln"
+            for leaf in (*args, *kwargs.values())
+        ):
+            self.names.append(getattr(func, "__name__", str(func)))
+        return func(*args, **kwargs)
+
+
+class _PreludeEncoder(nn.Module):
+    """An encoder's eager prelude: the token embedding lookup in a host table and
+    the attention-mask arithmetic, before any region."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.embed_tokens = nn.Embedding(1024, 64)
+        self.seen: list[tuple[str, str]] = []
+
+    def forward(self, input_ids, attention_mask, output_hidden_states=True):
+        self.seen.append((input_ids.device.type, attention_mask.device.type))
+        embeds = self.embed_tokens(input_ids)
+        additive = (1 - attention_mask[:, None, None, :].to(embeds.dtype)) * -1e4
+        return embeds, additive
+
+
+def test_the_encoder_prelude_runs_on_host_inputs(dummy_device):
+    """Upstream moves the token ids and mask to the stage's output device, the
+    connectors' NPUs; the encoder still gets them on the host, so its eager prelude
+    runs there instead of op by op on the device."""
+    from sglang_rbln.compilation import residency
+
+    def forward_encoder(stage, text_encoder, forward_kwargs):
+        return text_encoder(**forward_kwargs)
+
+    encoder = _PreludeEncoder()
+    forward_kwargs = {
+        "input_ids": torch.randint(0, 1024, (1, 128)).to("rbln:0"),
+        "attention_mask": torch.ones(1, 128, dtype=torch.long).to("rbln:0"),
+        "output_hidden_states": True,
+    }
+    eager = EagerDeviceOps()
+    with residency.DeviceBoundary(), eager:
+        embeds, additive = text_encoding.encode_from_host_inputs(
+            forward_encoder, None, encoder, forward_kwargs
+        )
+    assert encoder.seen == [("cpu", "cpu")]
+    assert (embeds.device.type, additive.device.type) == ("cpu", "cpu")
+    assert eager.names == ["cpu", "cpu"]  # only taking the two inputs down
