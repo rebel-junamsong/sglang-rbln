@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
+import weakref
 from types import MethodType, SimpleNamespace
 
 import numpy as np
@@ -236,6 +237,72 @@ def test_device_tiles_are_joined_in_one_graph(dummy_device, monkeypatch, tmp_pat
     eager = EagerDeviceOps()
     with residency.DeviceBoundary(), eager:
         joined = vae.tiled_decode(latent(torch.bfloat16), None).sample
-    assert joined.device.type == "rbln"
+    assert joined.device.type == "cpu"
     assert len(vae.__dict__[assembly.ASSEMBLIES]) == 1
-    assert not {"cat", "cpu", "mul", "add", "__getitem__"} & set(eager.names)
+    assert not {"cat", "mul", "add", "__getitem__"} & set(eager.names)
+    # the joined video comes down once, not tile by tile
+    assert eager.names.count("cpu") == 1
+
+
+class LiveDeviceTensors(torch.overrides.TorchFunctionMode):
+    """The most tensors of one size alive on rbln at once, over every torch call."""
+
+    def __init__(self, numel: int) -> None:
+        super().__init__()
+        self.numel = numel
+        self.seen: dict[int, weakref.ref] = {}
+        self.peak = 0
+
+    def _note(self, values) -> None:
+        for value in values:
+            if (
+                isinstance(value, torch.Tensor)
+                and value.device.type == "rbln"
+                and value.numel() == self.numel
+            ):
+                self.seen[value.untyped_storage().data_ptr()] = weakref.ref(value)
+        self.seen = {ptr: ref for ptr, ref in self.seen.items() if ref() is not None}
+        self.peak = max(self.peak, len(self.seen))
+
+    def __torch_function__(self, func, types, args=(), kwargs=None):
+        kwargs = kwargs or {}
+        self._note([*args, *kwargs.values()])
+        result = func(*args, **kwargs)
+        self._note(result if isinstance(result, (tuple, list)) else [result])
+        return result
+
+
+def test_a_device_decode_keeps_at_most_one_video_on_the_npu(
+    dummy_device, monkeypatch, tmp_path
+):
+    """Left on the decoder's NPUs, the joined video went through upstream's
+    post-processing there, every op adding a full-size tensor beside it: four at
+    once on the NPU the DiT shares, which evicted the DiT's programs each request."""
+    from sglang_rbln.compilation import residency
+
+    monkeypatch.setenv("SGLANG_RBLN_CACHE_DIR", str(tmp_path))
+    compile_module = torch.nn.Module.compile
+
+    def compile_resident(module, *args, **kwargs):
+        compile_module(module, *args, **kwargs)
+        residency.install_resident_call(module)
+
+    monkeypatch.setattr(torch.nn.Module, "compile", compile_resident)
+    vae = fake_vae(
+        torch.bfloat16, assembly.tiled_decode, assembly.temporal_tiled_decode
+    )
+    decode_on_host = vae.decoder
+    vae.decoder = lambda z, temb, causal=None: decode_on_host(z, temb).to("rbln:0")
+    z = latent(torch.bfloat16)
+    numel = UPSTREAM["tiled_decode"](
+        fake_vae(
+            torch.bfloat16, UPSTREAM["tiled_decode"], UPSTREAM["_temporal_tiled_decode"]
+        ),
+        z,
+        None,
+    ).sample.numel()
+    live = LiveDeviceTensors(numel)
+    with residency.DeviceBoundary(), live:
+        video = vae.tiled_decode(z, None).sample
+        POSTPROCESS(VideoProcessor(vae_scale_factor=32), video, output_type="np")
+    assert live.peak <= 1

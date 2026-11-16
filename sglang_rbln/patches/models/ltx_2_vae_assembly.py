@@ -169,6 +169,20 @@ def _assembly(vae, key: tuple, build, *tensors: torch.Tensor) -> nn.Module:
 
 
 def tiled_decode(self, z, temb, causal=None, return_dict=True):
+    """Upstream's decode loop, then its joining half where the tiles are; the joined
+    video comes down to the host once.
+
+    Left on the decoder's NPUs, the whole video stayed there through upstream's
+    post-processing, every eager op on it adding another full-size tensor: four of
+    them at once on the NPU the DiT shares, which evicted the DiT's programs every
+    request.
+    """
+    dec = _joined_tiles(self, z, temb, causal)
+    dec = dec.cpu() if _resident(dec) else dec
+    return DecoderOutput(sample=dec) if return_dict else (dec,)
+
+
+def _joined_tiles(self, z, temb, causal=None) -> torch.Tensor:
     """Upstream's decode loop, then its joining half where the tiles are."""
     _, _, _, height, width = z.shape
     ratio = self.spatial_compression_ratio
@@ -197,8 +211,7 @@ def tiled_decode(self, z, temb, causal=None, return_dict=True):
     assembly = _assembly(
         self, key, lambda: SpatialAssembly(self, grid, sample_size), *tiles
     )
-    dec = assembly(*tiles)
-    return DecoderOutput(sample=dec) if return_dict else (dec,)
+    return assembly(*tiles)
 
 
 def temporal_tiled_decode(self, z, temb, causal=None, return_dict=True):
@@ -221,9 +234,7 @@ def temporal_tiled_decode(self, z, temb, causal=None, return_dict=True):
         if self.use_tiling and (
             tile.shape[-1] > min_width or tile.shape[-2] > min_height
         ):
-            decoded = self.tiled_decode(
-                tile, temb, causal=causal, return_dict=True
-            ).sample
+            decoded = _joined_tiles(self, tile, temb, causal)
         else:
             decoded = self.decoder(tile, temb, causal=causal)
         if previous is None:
