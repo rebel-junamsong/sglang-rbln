@@ -14,6 +14,7 @@ of video comes down once, into one buffer.
 from __future__ import annotations
 
 import concurrent.futures
+import os
 from typing import Any
 
 import numpy as np
@@ -123,6 +124,12 @@ class FramePostprocess:
     def add(self, frames: torch.Tensor, start: int) -> None:
         self.jobs.append(_postprocess_worker.submit(self._write, frames, start))
 
+    def add_in_chunks(self, video: torch.Tensor) -> None:
+        """All of ``video`` at once, its frames split across the frame threads."""
+        for start in range(0, video.shape[2], FRAME_CHUNK):
+            frames = video[:, :, start : start + FRAME_CHUNK]
+            self.jobs.append(_frame_workers.submit(self._write, frames, start))
+
     def _write(self, frames: torch.Tensor, start: int) -> None:
         for index, video in enumerate(frames):
             images = VaeImageProcessor.denormalize(video.permute(1, 0, 2, 3))
@@ -137,6 +144,12 @@ class FramePostprocess:
 
 # One thread for every decode: the host side of a chunk runs beside the NPUs' next.
 _postprocess_worker = concurrent.futures.ThreadPoolExecutor(1, "rbln-postprocess")
+# A video that comes down whole is post-processed in chunks of frames across
+# threads: 0.87 s on one call, 0.36 s across 16 at 1280x704x121, the same bytes.
+FRAME_CHUNK = 8
+_frame_workers = concurrent.futures.ThreadPoolExecutor(
+    min(16, os.cpu_count() or 1), "rbln-frames"
+)
 
 
 def postprocess_video(postprocess, processor, video, output_type="np", **kwargs):
@@ -177,7 +190,11 @@ def tiled_decode(self, z, temb, causal=None, return_dict=True):
     them at once on the NPU the DiT shares, which slowed the DiT's next request.
     """
     dec = _joined_tiles(self, z, temb, causal)
-    dec = dec.cpu() if _resident(dec) else dec
+    if _resident(dec):
+        dec = dec.cpu()
+        postprocessed = FramePostprocess(dec.shape)
+        postprocessed.add_in_chunks(dec)
+        setattr(dec, POSTPROCESSED, postprocessed)
     return DecoderOutput(sample=dec) if return_dict else (dec,)
 
 

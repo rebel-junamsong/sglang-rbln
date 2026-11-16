@@ -306,3 +306,42 @@ def test_a_device_decode_keeps_at_most_one_video_on_the_npu(
         video = vae.tiled_decode(z, None).sample
         POSTPROCESS(VideoProcessor(vae_scale_factor=32), video, output_type="np")
     assert live.peak <= 1
+
+
+def test_a_device_decode_is_postprocessed_across_frame_threads(
+    dummy_device, monkeypatch, tmp_path
+):
+    """The joined video comes down whole; upstream's post-processing of it in one
+    call held the stage 0.87 s before the audio graph at 1280x704x121, where chunks
+    of frames across threads take 0.36 s and give the same array."""
+    from sglang_rbln.compilation import residency
+
+    monkeypatch.setenv("SGLANG_RBLN_CACHE_DIR", str(tmp_path))
+    compile_module = torch.nn.Module.compile
+
+    def compile_resident(module, *args, **kwargs):
+        compile_module(module, *args, **kwargs)
+        residency.install_resident_call(module)
+
+    monkeypatch.setattr(torch.nn.Module, "compile", compile_resident)
+    vae = fake_vae(
+        torch.bfloat16, assembly.tiled_decode, assembly.temporal_tiled_decode
+    )
+    decode_on_host = vae.decoder
+    vae.decoder = lambda z, temb, causal=None: decode_on_host(z, temb).to("rbln:0")
+    with residency.DeviceBoundary():
+        video = vae.tiled_decode(latent(torch.bfloat16), None).sample
+    assert video.device.type == "cpu"
+    ready = getattr(video, assembly.POSTPROCESSED)
+    assert len(ready.jobs) == -(-video.shape[2] // assembly.FRAME_CHUNK) > 1
+    processor = VideoProcessor(vae_scale_factor=32)
+    called = []
+
+    def upstream(*args, **kwargs):
+        called.append(args)
+        return POSTPROCESS(*args, **kwargs)
+
+    actual = assembly.postprocess_video(upstream, processor, video, output_type="np")
+    expected = POSTPROCESS(processor, video, output_type="np")
+    assert called == []
+    assert actual.dtype == expected.dtype and np.array_equal(actual, expected)
