@@ -359,3 +359,20 @@ def test_casting_a_resident_module_moves_no_parameter(transfers):
     residency.stage_on_device_boundary(lambda stage: module.to(torch.float32), None)
     assert transfers == []
     assert module.weight.device.type == "rbln"
+
+
+@pytest.mark.parametrize("asked", [None, torch.float32])
+def test_a_resident_component_takes_the_dtype_its_use_asks_for(monkeypatch, asked):
+    # the component manager asks for the use's dtype together with the move
+    module = nn.Linear(2, 2).to(torch.bfloat16)
+    monkeypatch.setattr(residency, "_has_resident_weights", lambda module: True)
+    moved = []
+    residency.keep_resident_placement(
+        lambda *args, **kwargs: moved.append(kwargs), module, dtype=asked
+    )
+    assert moved == []
+    assert next(module.parameters()).dtype == (asked or torch.bfloat16)
+    assert residency.resident_is_ready(lambda *a, **k: False, module, dtype=asked)
+    assert not residency.resident_is_ready(
+        lambda *a, **k: True, module, dtype=torch.float16
+    )

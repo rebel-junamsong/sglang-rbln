@@ -318,19 +318,32 @@ def _has_resident_weights(module: torch.nn.Module) -> bool:
     return any(map(_is_resident, (*module.parameters(), *module.buffers())))
 
 
-def keep_resident_placement(move, module: torch.nn.Module, *args, **kwargs) -> None:
-    """Leave a component whose regions hold it on their NPUs where they put it.
+def _weights_dtype(module: torch.nn.Module) -> torch.dtype | None:
+    return next((parameter.dtype for parameter in module.parameters()), None)
+
+
+def keep_resident_placement(
+    move, module: torch.nn.Module, *args, dtype: torch.dtype | None = None, **kwargs
+) -> None:
+    """Leave a component whose regions hold it on their NPUs where they put it, in
+    the dtype the use asks for.
 
     The component manager moves each component to the platform's local device before
     a use, and that device is the host here: it would take the weights off the NPUs
     every request, and the next call would run against host weights.
     """
     if not _has_resident_weights(module):
-        move(module, *args, **kwargs)
+        move(module, *args, dtype=dtype, **kwargs)
+    elif dtype is not None and _weights_dtype(module) != dtype:
+        module.to(dtype=dtype)
 
 
-def resident_is_ready(ready, module: torch.nn.Module, *args, **kwargs) -> bool:
-    return _has_resident_weights(module) or ready(module, *args, **kwargs)
+def resident_is_ready(
+    ready, module: torch.nn.Module, *args, dtype: torch.dtype | None = None, **kwargs
+) -> bool:
+    if _has_resident_weights(module):
+        return dtype is None or _weights_dtype(module) == dtype
+    return ready(module, *args, dtype=dtype, **kwargs)
 
 
 COMPILE_TARGET = "torch.nn.modules.module.Module.compile"

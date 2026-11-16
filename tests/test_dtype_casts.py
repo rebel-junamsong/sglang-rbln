@@ -34,6 +34,11 @@ TORCH_DTYPES = {
 
 LISTED_CASTS = {
     (
+        "compilation/residency.py",
+        "keep_resident_placement",
+        "module.to(dtype=dtype)",
+    ): "the use's dtype, as upstream's _module_to_local_device gives it",
+    (
         "patches/entrypoints/prompt_enhancement.py",
         "greedy_decode",
         "logits.float()",

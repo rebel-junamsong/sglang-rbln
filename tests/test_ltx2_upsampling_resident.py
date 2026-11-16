@@ -44,7 +44,8 @@ def stage():
 
     @contextlib.contextmanager
     def use_declared_component(component_name, module, target_dtype):
-        yield module
+        # as upstream's component manager does: the module takes the use's dtype
+        yield module.to(dtype=target_dtype)
 
     vae = SimpleNamespace(latents_mean=torch.randn(4), latents_std=torch.rand(4) + 0.5)
     return SimpleNamespace(
@@ -94,3 +95,41 @@ def test_host_latents_go_through_upstream_as_is(stage, monkeypatch):
         )
     assert torch.equal(actual, expected)
     assert calls == []
+
+
+def test_fp32_latents_upsample_on_the_device_with_a_bf16_upsampler(
+    dummy_device, monkeypatch, tmp_path
+):
+    """Two-stage LTX: the stage-1 latents come out of the denoise loop in float32
+    while the upsampler loads in bfloat16. As upstream, the upsampler runs in the
+    latents' dtype; the graph compiled with a bfloat16 upsampler failed to trace."""
+    monkeypatch.setenv("SGLANG_RBLN_CACHE_DIR", str(tmp_path))
+    compile_module = torch.nn.Module.compile
+
+    def compile_resident(module, *args, **kwargs):
+        # as the server's residency hook does: the call takes its inputs to the NPUs
+        compile_module(module, *args, **kwargs)
+        residency.install_resident_call(module)
+
+    monkeypatch.setattr(torch.nn.Module, "compile", compile_resident)
+    torch.manual_seed(0)
+
+    @contextlib.contextmanager
+    def use_declared_component(component_name, module, target_dtype):
+        yield module.to(dtype=target_dtype)
+
+    upsampler = nn.Conv3d(128, 128, 3, padding=1).to(torch.bfloat16)
+    stage = SimpleNamespace(
+        vae=SimpleNamespace(
+            latents_mean=torch.randn(128), latents_std=torch.rand(128) + 0.5
+        ),
+        spatial_upsampler=upsampler,
+        use_declared_component=use_declared_component,
+    )
+    latents = torch.randn(1, 128, 3, 8, 16).to("rbln:0")
+    upsampled = upsampling.upsample_video_latents(
+        UPSAMPLE, stage, latents, None, torch.device("cpu")
+    )
+    assert (upsampled.device.type, upsampled.dtype) == ("rbln", torch.float32)
+    assert upsampled.shape == latents.shape
+    assert next(upsampler.parameters()).dtype == torch.float32

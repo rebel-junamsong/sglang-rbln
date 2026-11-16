@@ -48,23 +48,30 @@ def upsample_video_latents(original, self, latents, server_args, local_device):
     if not residency._is_resident(latents):
         return original(self, latents, server_args, local_device)
 
-    def build() -> nn.Module:
-        shape = (1, -1, 1, 1, 1)
-        return UpsampleLatents(
-            self.spatial_upsampler,
-            self.vae.latents_mean.view(shape).to(latents.dtype),
-            self.vae.latents_std.view(shape).to(latents.dtype),
-        )
+    # As upstream: the upsampler runs in the latents' dtype, which the component
+    # manager gives it on entering the use.
+    with self.use_declared_component(
+        component_name="spatial_upsampler",
+        module=self.spatial_upsampler,
+        target_dtype=latents.dtype,
+    ) as spatial_upsampler:
 
-    module = residency.resident_module(
-        self.__dict__.setdefault(GRAPHS, {}),
-        ("upsample", tuple(latents.shape), latents.dtype),
-        build,
-        (latents,),
-        placement.devices_of(self.spatial_upsampler)
-        or placement.text_encoder_devices(),
-    )
-    return module(latents)
+        def build() -> nn.Module:
+            shape = (1, -1, 1, 1, 1)
+            return UpsampleLatents(
+                spatial_upsampler,
+                self.vae.latents_mean.view(shape).to(latents.dtype),
+                self.vae.latents_std.view(shape).to(latents.dtype),
+            )
+
+        module = residency.resident_module(
+            self.__dict__.setdefault(GRAPHS, {}),
+            ("upsample", tuple(latents.shape), latents.dtype),
+            build,
+            (latents,),
+            placement.devices_of(spatial_upsampler) or placement.text_encoder_devices(),
+        )
+        return module(latents)
 
 
 def pack_video_latents(original, batch, latents, server_args):
