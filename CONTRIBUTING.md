@@ -4,7 +4,7 @@
 
 ```bash
 uv sync --frozen --extra test && source .venv/bin/activate
-pre-commit install
+uvx pre-commit install
 ```
 
 The committed `uv.lock` pins the `rebel-compiler` and `torch-rbln` builds the
@@ -13,7 +13,7 @@ results are measured with (see the README's Install section).
 ## Check
 
 ```bash
-ruff check sglang_rbln tests && ruff format --check sglang_rbln tests
+uvx pre-commit run --all-files
 pytest
 pytest -m e2e
 ```
@@ -37,7 +37,7 @@ host has no NPU, and run for real otherwise.
 - A workaround for a compiler gap comes with a test that fails once the
   compiler no longer needs it.
 - Environment variables are read through `sglang_rbln.envs`; every
-  `SGLANG_RBLN_*` one has a row in the README configuration table.
+  `SGLANG_RBLN_*` one a user sets has a row in the README configuration table.
 - `activate()` runs in every spawned process: never import `rebel` or `torch`
   there.
 - Every change ships its test.
