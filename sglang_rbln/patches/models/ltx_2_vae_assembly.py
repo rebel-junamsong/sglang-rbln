@@ -174,8 +174,7 @@ def tiled_decode(self, z, temb, causal=None, return_dict=True):
 
     Left on the decoder's NPUs, the whole video stayed there through upstream's
     post-processing, every eager op on it adding another full-size tensor: four of
-    them at once on the NPU the DiT shares, which evicted the DiT's programs every
-    request.
+    them at once on the NPU the DiT shares, which slowed the DiT's next request.
     """
     dec = _joined_tiles(self, z, temb, causal)
     dec = dec.cpu() if _resident(dec) else dec

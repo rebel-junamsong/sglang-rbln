@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Stage 2 of the LTX-2 two-stage pipeline as the official DFR runs it: the
-detailing IC-LoRA, conditioned in context on the half-resolution stage-1 latent.
+"""Stage 2 of the LTX-2 two-stage pipeline as ltx-core runs it: the detailing
+IC-LoRA, conditioned in context on the half-resolution stage-1 latent.
 
 The reference tokens follow ltx-core's ``VideoConditionByReferenceLatent``: they
 are appended clean (timestep 0) after the noisy tokens, at the stage-1 grid's
@@ -55,7 +55,7 @@ def adopt_placed_lora_weights(pipeline) -> None:
     A resident transformer moves its weights, these included, onto its NPUs on its
     first call, after stage 1 set them. ``set_lora`` wraps the adapter's tensors again
     on every switch, so stage 2 would compile against host copies: a weight set that
-    is no longer stage 1's, which gets a second DiT weight pool instead of stage 1's.
+    is no longer stage 1's, and the NPUs would hold a second copy of the DiT weights.
     """
     adapter = pipeline.lora_adapters.get(ADAPTER_NAME, {})
     for name, layer in pipeline.lora_layers.items():

@@ -277,7 +277,7 @@ def test_a_device_decode_keeps_at_most_one_video_on_the_npu(
 ):
     """Left on the decoder's NPUs, the joined video went through upstream's
     post-processing there, every op adding a full-size tensor beside it: four at
-    once on the NPU the DiT shares, which evicted the DiT's programs each request."""
+    once on the NPU the DiT shares, which slowed the DiT's next request."""
     from sglang_rbln.compilation import residency
 
     monkeypatch.setenv("SGLANG_RBLN_CACHE_DIR", str(tmp_path))

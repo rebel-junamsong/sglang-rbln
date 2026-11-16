@@ -318,7 +318,7 @@ def test_stage2_shares_stage1_weights_once_resident(
 ):
     """The transformer's weights, the LoRA's included, move to new (NPU) storages on
     its first call, before stage 1 compiles; stage 2 still compiles against the same
-    weights, so it joins stage 1's weight pool instead of laying out a second one."""
+    weights, so both stages share one copy of the DiT weights on the NPUs."""
     import rebel
     import rebel.core.torch_compile  # noqa: F401
     from sglang.multimodal_gen.runtime.distributed.parallel_state import (
