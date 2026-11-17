@@ -22,7 +22,7 @@ classifiers = [
 ]
 dependencies = [
     "sglang[diffusion]==0.5.21",
-    "rebel-compiler>=0.12.1.dev1111",
+    "rebel-compiler>=0.12.1.dev1191",
     "torch-rbln",
 ]
 
@@ -44,7 +44,7 @@ rbln_patches = "sglang_rbln.patches:register"
 # performance result is measured on: change one only with results remeasured on it.
 [tool.uv]
 constraint-dependencies = [
-    "rebel-compiler==0.12.1.dev1111+gaa4af7d2",
+    "rebel-compiler==0.12.1.dev1191+g15bae0c2",
     "torch-rbln==0.12.1a1",
     "torch==2.13.0+cpu",
     "torchvision==0.28.0+cpu",

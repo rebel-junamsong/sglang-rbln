@@ -241,12 +241,6 @@ print((weight * torch.tensor(2.0, dtype=torch.bfloat16)).device)
 """
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "the locked rebel-compiler does not run eager ops on a second multi-NPU set yet"
-    ),
-)
 def test_eager_ops_run_on_the_text_encoder_npu_set():
     """With the text encoder on its own NPU set, the eager ops between its graphs run
     on that set."""
