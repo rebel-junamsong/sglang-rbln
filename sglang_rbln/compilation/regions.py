@@ -257,17 +257,35 @@ def install_fit_check() -> bool:
     return True
 
 
+# Runtime failures to place a loaded graph's buffers. No typed error carries them.
 OUT_OF_DEVICE_MEMORY = (
     "Lack of device memory",
     "SYS_ENOMEM",
     "RBLNCachingAllocator::malloc block != nullptr",
 )
+# TODO(relock): drop once the lock has rebel-compiler with RBLNDeviceMemoryError
+# (b8308ee3de). Until then codegen's capacity check raises a plain compile error
+# with this text.
+COMPILE_OUT_OF_DEVICE_MEMORY = "DRAM OOM"
+
+
+def _device_memory_error() -> type[BaseException] | None:
+    """rebel's typed error for a graph that needs more DRAM than a node has."""
+    from rebel.core import exception
+
+    return getattr(exception, "RBLNDeviceMemoryError", None)
 
 
 def _does_not_fit(error: BaseException | None) -> bool:
+    typed = _device_memory_error()
     while error is not None:
-        if isinstance(error, RegionDoesNotFit) or any(
-            message in str(error) for message in OUT_OF_DEVICE_MEMORY
+        if isinstance(error, RegionDoesNotFit) or (
+            typed is not None and isinstance(error, typed)
+        ):
+            return True
+        text = str(error)
+        if COMPILE_OUT_OF_DEVICE_MEMORY in text or any(
+            message in text for message in OUT_OF_DEVICE_MEMORY
         ):
             return True
         error = getattr(error, "inner_exception", None) or error.__cause__
