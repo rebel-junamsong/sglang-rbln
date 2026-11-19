@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 import torch
+from rebel.core.exception import RBLNDeviceMemoryError
 from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry
 from torch import nn
 
@@ -522,24 +523,8 @@ def test_load_time_out_of_memory_halves_the_region(monkeypatch, message):
     assert sizes == [4, 2, 2]
 
 
-class _DeviceMemoryError(RuntimeError):
-    """Stands in for rebel's RBLNDeviceMemoryError, which the locked rebel predates."""
-
-
-@pytest.fixture
-def typed_device_memory_error(monkeypatch):
-    from rebel.core import exception
-
-    monkeypatch.setattr(
-        exception, "RBLNDeviceMemoryError", _DeviceMemoryError, raising=False
-    )
-    return _DeviceMemoryError
-
-
 @pytest.mark.parametrize("wrapped", [False, True], ids=["raised", "wrapped"])
-def test_a_typed_device_memory_error_halves_the_region(
-    monkeypatch, typed_device_memory_error, wrapped
-):
+def test_a_typed_device_memory_error_halves_the_region(monkeypatch, wrapped):
     # Codegen refuses a graph past a node's DRAM with the typed error, whatever
     # its text; dynamo hands it on as the cause of its own error.
     monkeypatch.delenv("SGLANG_RBLN_BLOCKS_PER_REGION", raising=False)
@@ -548,28 +533,10 @@ def test_a_typed_device_memory_error_halves_the_region(
     def backend(graph, example_inputs):
         sizes.append(_blocks_in(graph))
         if sizes[-1] > 2:
-            refusal = typed_device_memory_error("node 0 needs 20310117248 B")
+            refusal = RBLNDeviceMemoryError("node 0 needs 20310117248 B")
             if not wrapped:
                 raise refusal
             raise RuntimeError("backend failed") from refusal
-        return graph
-
-    torch.manual_seed(0)
-    _assert_grouped_run_matches_eager(
-        Model(depth=4).eval(), {"backend": backend, "dynamic": False}
-    )
-    assert sizes == [4, 2, 2]
-
-
-def test_the_locked_rebel_capacity_text_halves_the_region(monkeypatch):
-    # TODO(relock): remove with COMPILE_OUT_OF_DEVICE_MEMORY.
-    monkeypatch.delenv("SGLANG_RBLN_BLOCKS_PER_REGION", raising=False)
-    sizes = []
-
-    def backend(graph, example_inputs):
-        sizes.append(_blocks_in(graph))
-        if sizes[-1] > 2:
-            raise RuntimeError("DRAM OOM: total memory allocation (1 bytes) for node 0")
         return graph
 
     torch.manual_seed(0)
