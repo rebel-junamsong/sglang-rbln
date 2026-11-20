@@ -114,7 +114,7 @@ class TestCompileOptions:
     @staticmethod
     def compile_switches(module=None) -> dict:
         options = compilation.compile_options(module or _TinyMlp())
-        del options["compile_context"]
+        del options["compile_context"], options["declare_held_pv"]
         return options
 
     def test_modules_on_one_device_set_share_a_context(self, monkeypatch, tmp_path):
@@ -127,6 +127,11 @@ class TestCompileOptions:
         assert first["compile_context"] is second["compile_context"]
         assert first["cache_dir"] == str(tmp_path)
         assert first["mode"] == ["strict"]
+
+    def test_graphs_are_compiled_on_the_views_their_inputs_hold(self):
+        # Without it each graph lays its device inputs out its own way and the runtime
+        # relays every handoff between graphs (decoder tiles, DiT to decoder).
+        assert compilation.compile_options(_TinyMlp())["declare_held_pv"] is True
 
     def test_device_sets_keep_their_own_context(self, monkeypatch):
         monkeypatch.setenv("SGLANG_RBLN_NUM_DEVICES", "4")

@@ -39,7 +39,10 @@ def compile_options(module: torch.nn.Module) -> dict[str, Any]:
     devices = placement.devices_of(module)
     num_devices = envs.SGLANG_RBLN_NUM_DEVICES
     options: dict[str, Any] = {
-        "compile_context": device_set_context(devices or num_devices)
+        "compile_context": device_set_context(devices or num_devices),
+        # A graph reading another graph's device output is compiled on the layout that
+        # output was written in, so the buffer is handed over without being laid out again.
+        "declare_held_pv": True,
     }
     # strict: a compile error fails the request instead of falling back to eager
     options["mode"] = (
