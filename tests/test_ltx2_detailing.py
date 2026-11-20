@@ -1,0 +1,395 @@
+# SPDX-License-Identifier: Apache-2.0
+from __future__ import annotations
+
+import glob
+import os
+from types import SimpleNamespace
+
+import pytest
+import torch
+from safetensors.torch import save_file
+from sglang.multimodal_gen.runtime.models.dits.ltx_2 import (
+    LTX2AudioVideoRotaryPosEmbed,
+)
+from sglang.multimodal_gen.runtime.platforms.plugins import HookType
+
+from sglang_rbln.patches.stages.ltx_2 import detailing
+
+FRAMES, HEIGHT, WIDTH, CHANNELS, FPS = 3, 2, 4, 8, 24.0
+
+
+@pytest.fixture
+def detailing_lora(monkeypatch, tmp_path):
+    path = tmp_path / "ic_lora.safetensors"
+    save_file(
+        {"w.lora_A.weight": torch.zeros(2, 2)},
+        path,
+        metadata={"reference_downscale_factor": "2"},
+    )
+    monkeypatch.setenv("SGLANG_RBLN_LTX2_DETAILING_LORA", str(path))
+    return path
+
+
+@pytest.fixture
+def rope_model():
+    rope = LTX2AudioVideoRotaryPosEmbed(dim=64, modality="video")
+    return SimpleNamespace(rope=rope)
+
+
+def pack(latents, batch_size, batch):
+    return latents.flatten(2).transpose(1, 2)
+
+
+@pytest.fixture
+def server_args():
+    return SimpleNamespace(pipeline_config=SimpleNamespace(maybe_pack_latents=pack))
+
+
+@pytest.fixture
+def stage1_latents():
+    return torch.randn(1, CHANNELS, FRAMES, HEIGHT, WIDTH)
+
+
+@pytest.fixture
+def upsampled_batch(detailing_lora, server_args, stage1_latents):
+    def upsample(stage, batch, server_args):
+        batch.latents = torch.randn(1, FRAMES * HEIGHT * WIDTH * 4, CHANNELS)
+        batch.height, batch.width = batch.height * 2, batch.width * 2
+        return batch
+
+    batch = SimpleNamespace(
+        latents=stage1_latents, fps=FPS, height=64, width=128, extra={}
+    )
+    return detailing.keep_reference(upsample, None, batch, server_args)
+
+
+def test_registers_around_the_two_stage_path():
+    assert set(detailing.HOOKS) == {
+        detailing.SWITCH_PHASE,
+        detailing.UPSAMPLE,
+        detailing.PREPARE_LOOP,
+        detailing.MODEL_INPUTS,
+        detailing.POST_LOOP,
+    }
+    registered = []
+    original = detailing.HookRegistry.register
+    detailing.HookRegistry.register = lambda target, hook, kind: registered.append(kind)
+    try:
+        detailing.register()
+    finally:
+        detailing.HookRegistry.register = original
+    assert set(registered) == {HookType.AROUND}
+
+
+@pytest.mark.parametrize(("phase", "strength"), [("stage1", 0.0), ("stage2", 0.5)])
+def test_keeps_the_lora_dynamic_in_both_stages(detailing_lora, phase, strength):
+    switched, calls = [], []
+    pipeline = SimpleNamespace(
+        set_lora=lambda *a, **k: calls.append((a, k)), lora_adapters={}, lora_layers={}
+    )
+    detailing.switch_lora_phase(
+        lambda p, ph, **k: switched.append(ph), pipeline, phase, batch=None
+    )
+    assert switched == [phase]
+    assert calls == [
+        (
+            (detailing.ADAPTER_NAME, str(detailing_lora)),
+            {"target": "transformer", "strength": strength, "merge_weights": False},
+        )
+    ]
+
+
+def test_leaves_the_pipeline_alone_without_the_lora(monkeypatch):
+    monkeypatch.delenv("SGLANG_RBLN_LTX2_DETAILING_LORA", raising=False)
+    calls = []
+    pipeline = SimpleNamespace(set_lora=lambda *a, **k: calls.append(a))
+    detailing.switch_lora_phase(lambda *a, **k: None, pipeline, "stage2")
+    assert calls == []
+    batch = SimpleNamespace(latents=torch.zeros(1), extra={})
+    assert detailing.keep_reference(lambda s, b, a: b, None, batch, None) is batch
+    assert batch.extra == {}
+
+
+def test_keeps_the_stage1_latent_as_tokens(upsampled_batch, stage1_latents):
+    tokens, grid = upsampled_batch.extra[detailing.REFERENCE_KEY]
+    torch.testing.assert_close(tokens, pack(stage1_latents, 1, None))
+    assert grid == (FRAMES, HEIGHT, WIDTH, FPS, 2)
+
+
+def test_reference_lands_on_the_target_grid(rope_model, upsampled_batch):
+    """ltx-core scales a reference token's height and width by the downscale
+    factor, so reference cell (f, i, j) starts where target cell (f, 2i, 2j) does."""
+    reference = upsampled_batch.extra[detailing.REFERENCE_KEY]
+    coords = detailing.reference_coords(rope_model, reference, 1, "cpu")
+    target = rope_model.rope.prepare_video_coords(
+        1, FRAMES, 2 * HEIGHT, 2 * WIDTH, "cpu", FPS
+    )
+    grid = coords.view(3, FRAMES, HEIGHT, WIDTH, 2)
+    target_grid = target.view(3, FRAMES, 2 * HEIGHT, 2 * WIDTH, 2)
+    torch.testing.assert_close(grid[..., 0], target_grid[:, :, ::2, ::2, 0])
+    # A reference cell spans two target cells.
+    torch.testing.assert_close(grid[1:, ..., 1], target_grid[1:, :, 1::2, 1::2, 1])
+
+
+def stage2_context(latents):
+    return SimpleNamespace(
+        stage="stage2",
+        latents=latents,
+        denoise_mask=None,
+        clean_latent=None,
+        latent_num_frames_for_model=FRAMES,
+        latent_height=2 * HEIGHT,
+        latent_width=2 * WIDTH,
+    )
+
+
+def test_appends_clean_reference_tokens(upsampled_batch):
+    noisy = torch.randn(1, FRAMES * HEIGHT * WIDTH * 4, CHANNELS)
+    upsampled_batch.did_sp_shard_latents = False
+    ctx = detailing.append_reference(
+        lambda *a: stage2_context(noisy), None, upsampled_batch, None
+    )
+    tokens = upsampled_batch.extra[detailing.REFERENCE_KEY][0]
+    count = noisy.shape[1]
+    assert upsampled_batch.extra[detailing.TARGET_TOKENS_KEY] == count
+    torch.testing.assert_close(ctx.latents, torch.cat([noisy, tokens], dim=1))
+    torch.testing.assert_close(ctx.clean_latent[:, count:], tokens)
+    # Timestep = sigma * mask per token: the reference stays at timestep 0.
+    assert ctx.denoise_mask[:, :count].eq(1).all()
+    assert ctx.denoise_mask[:, count:].eq(0).all()
+    assert ctx.denoise_mask.shape == (1, count + tokens.shape[1], 1)
+
+
+def test_stage1_gets_no_reference_tokens(upsampled_batch):
+    ctx = stage2_context(torch.zeros(1, 4, CHANNELS))
+    ctx.stage = "stage1"
+    assert (
+        detailing.append_reference(lambda *a: ctx, None, upsampled_batch, None) is ctx
+    )
+    assert ctx.latents.shape[1] == 4
+
+
+def test_model_sees_reference_positions(rope_model, upsampled_batch):
+    noisy = torch.randn(1, FRAMES * HEIGHT * WIDTH * 4, CHANNELS)
+    upsampled_batch.did_sp_shard_latents = False
+    ctx = detailing.append_reference(
+        lambda *a: stage2_context(noisy), None, upsampled_batch, None
+    )
+    inputs = SimpleNamespace(latent_model_input=ctx.latents, video_coords=None)
+    step = SimpleNamespace(current_model=rope_model)
+    inputs = detailing.reference_positions(
+        lambda *a: inputs, None, ctx, step, upsampled_batch
+    )
+    reference = upsampled_batch.extra[detailing.REFERENCE_KEY]
+    expected = torch.cat(
+        [
+            rope_model.rope.prepare_video_coords(
+                1, FRAMES, 2 * HEIGHT, 2 * WIDTH, "cpu", FPS
+            ),
+            detailing.reference_coords(rope_model, reference, 1, "cpu"),
+        ],
+        dim=2,
+    )
+    torch.testing.assert_close(inputs.video_coords, expected)
+    assert inputs.video_coords.shape[2] == ctx.latents.shape[1]
+
+
+def test_decodes_only_the_target_tokens(upsampled_batch):
+    upsampled_batch.extra[detailing.TARGET_TOKENS_KEY] = 5
+    seen = []
+    detailing.drop_reference(
+        lambda stage, batch, latents, **k: seen.append(latents),
+        None,
+        upsampled_batch,
+        torch.zeros(1, 9, CHANNELS),
+        server_args=None,
+    )
+    assert seen[0].shape == (1, 5, CHANNELS)
+    assert upsampled_batch.extra == {}
+
+
+class _TwoProjections(torch.nn.Module):
+    def __init__(self, width):
+        super().__init__()
+        from sglang.multimodal_gen.runtime.layers.linear import ColumnParallelLinear
+
+        self.projections = torch.nn.ModuleList(
+            ColumnParallelLinear(
+                width, width, gather_output=True, params_dtype=torch.bfloat16
+            )
+            for _ in range(2)
+        )
+
+    def forward(self, x):
+        for projection in self.projections:
+            x = torch.nn.functional.gelu(projection(x)[0])
+        return x
+
+
+def _kernel_bytes_per_artifact(cache) -> list[int]:
+    import rebel
+
+    return [
+        sum(rebel.RBLNCompiledModel(path).get_alloc_per_node_by_key().get("Kernel", []))
+        for path in sorted(glob.glob(f"{cache}/*.rbln"), key=os.path.getmtime)
+    ]
+
+
+@pytest.mark.parametrize(
+    ("stage1_strength", "reuses_base_weights"),
+    [
+        pytest.param(0.0, True, id="strength-0"),
+        pytest.param(None, False, id="deactivated"),
+    ],
+)
+def test_stage2_reuses_the_base_weights_stage1_loaded(
+    monkeypatch, tmp_path, npu_name, stage1_strength, reuses_base_weights
+):
+    """Stage 1 keeps the detailing LoRA loaded at strength 0, so stage 2 reuses the
+    base weights stage 1 loaded instead of loading a second copy; turning the LoRA
+    off in stage 1 loses that."""
+    import rebel
+    import rebel.core.torch_compile  # noqa: F401
+    from sglang.multimodal_gen.runtime.distributed.parallel_state import (
+        maybe_init_distributed_environment_and_model_parallel,
+        model_parallel_is_initialized,
+    )
+    from sglang.multimodal_gen.runtime.layers.lora.linear import (
+        replace_submodule,
+        wrap_with_lora_layer,
+    )
+    from sglang.srt.utils.network import get_open_port
+
+    if not model_parallel_is_initialized():
+        for key, value in dict(
+            MASTER_ADDR="127.0.0.1",
+            MASTER_PORT=str(get_open_port()),
+            RANK="0",
+            LOCAL_RANK="0",
+            WORLD_SIZE="1",
+        ).items():
+            monkeypatch.setenv(key, value)
+        maybe_init_distributed_environment_and_model_parallel(tp_size=1, sp_size=1)
+    monkeypatch.setenv("RBLN_FORCE_NPU_NAME", npu_name)
+    width, rank = 256, 8
+    torch.manual_seed(0)
+    model = _TwoProjections(width).eval()
+    adapter = {}
+    for index in range(2):
+        name = f"projections.{index}"
+        layer = wrap_with_lora_layer(model.get_submodule(name), rank, rank)
+        replace_submodule(model, name, layer)
+        adapter[layer] = (
+            torch.randn(rank, width, dtype=torch.bfloat16),
+            torch.randn(width, rank, dtype=torch.bfloat16),
+        )
+    compiled = torch.compile(
+        model,
+        backend="rbln",
+        dynamic=False,
+        options={
+            "compile_context": rebel.CompileContext(use_weight_sharing=True),
+            "mode": ["compile_only"],
+            "cache_dir": str(tmp_path),
+            "num_devices": 4,
+        },
+    )
+    with torch.no_grad():
+        for stage, strength in ((1, stage1_strength), (2, 0.5)):
+            for layer, (a, b) in adapter.items():
+                if strength is None:
+                    layer.disable_lora = True
+                else:
+                    layer.set_lora_weights(
+                        a,
+                        b,
+                        strength=strength,
+                        merge_weights=False,
+                        clear_existing=True,
+                    )
+            compiled(torch.randn(1, 64 * stage, width, dtype=torch.bfloat16))
+    stage1, stage2 = _kernel_bytes_per_artifact(tmp_path)
+    assert stage1 > 0
+    assert (stage2 == 0) is reuses_base_weights
+
+
+def test_stage2_shares_stage1_weights_once_resident(
+    monkeypatch, tmp_path, npu_name, detailing_lora
+):
+    """The transformer's weights, the LoRA's included, move to new (NPU) storages on
+    its first call, before stage 1 compiles; stage 2 still compiles against the same
+    weights, so both stages share one copy of the DiT weights on the NPUs."""
+    import rebel
+    import rebel.core.torch_compile  # noqa: F401
+    from sglang.multimodal_gen.runtime.distributed.parallel_state import (
+        maybe_init_distributed_environment_and_model_parallel,
+        model_parallel_is_initialized,
+    )
+    from sglang.multimodal_gen.runtime.layers.lora.linear import (
+        replace_submodule,
+        wrap_with_lora_layer,
+    )
+    from sglang.srt.utils.network import get_open_port
+
+    if not model_parallel_is_initialized():
+        for key, value in dict(
+            MASTER_ADDR="127.0.0.1",
+            MASTER_PORT=str(get_open_port()),
+            RANK="0",
+            LOCAL_RANK="0",
+            WORLD_SIZE="1",
+        ).items():
+            monkeypatch.setenv(key, value)
+        maybe_init_distributed_environment_and_model_parallel(tp_size=1, sp_size=1)
+    monkeypatch.setenv("RBLN_FORCE_NPU_NAME", npu_name)
+    width, rank = 256, 8
+    torch.manual_seed(0)
+    model = _TwoProjections(width).eval()
+    layers, adapter = {}, {}
+    for index in range(2):
+        name = f"projections.{index}"
+        layers[name] = wrap_with_lora_layer(model.get_submodule(name), rank, rank)
+        replace_submodule(model, name, layers[name])
+        adapter[f"{name}.lora_A"] = torch.randn(rank, width, dtype=torch.bfloat16)
+        adapter[f"{name}.lora_B"] = torch.randn(width, rank, dtype=torch.bfloat16)
+
+    def set_lora(nickname, path, *, target, strength, merge_weights):
+        # what sglang's dynamic set_lora does to each layer: wrap the adapter's tensors
+        for name, layer in layers.items():
+            layer.set_lora_weights(
+                adapter[f"{name}.lora_A"],
+                adapter[f"{name}.lora_B"],
+                strength=strength,
+                merge_weights=merge_weights,
+                clear_existing=True,
+            )
+
+    pipeline = SimpleNamespace(
+        set_lora=set_lora,
+        lora_adapters={detailing.ADAPTER_NAME: adapter},
+        lora_layers=layers,
+    )
+    context = rebel.CompileContext(use_weight_sharing=True)
+    compiled = torch.compile(
+        model,
+        backend="rbln",
+        dynamic=False,
+        options={
+            "compile_context": context,
+            "mode": ["compile_only"],
+            "cache_dir": str(tmp_path),
+            "num_devices": 4,
+        },
+    )
+    with torch.no_grad():
+        for stage in (1, 2):
+            detailing.switch_lora_phase(lambda *a, **k: None, pipeline, f"stage{stage}")
+            if stage == 1:
+                # resident placement: every weight moves to new storage on first call
+                for parameter in model.parameters():
+                    parameter.data = parameter.data.clone()
+            compiled(torch.randn(1, 64 * stage, width, dtype=torch.bfloat16))
+    stage1, stage2 = _kernel_bytes_per_artifact(tmp_path)
+    assert stage1 > 0
+    assert stage2 == 0
+    assert len(set(context.state.weight_group_ids)) == 1
