@@ -58,7 +58,10 @@ def compile_decoders(forward, stage, batch, server_args):
     audio = functools.partial(vocoder.compile_audio, forward)
     # The stage's frames only reach the server's uint8 consumers (save, spill to the
     # HTTP process, frame return), so they are made as uint8 directly.
-    with assembly.uint8_frames():
+    with (
+        assembly.uint8_frames(),
+        vocoder.audio_beside_video(stage, batch, server_args),
+    ):
         output = compile_video_decoder(audio, stage, batch, server_args)
     # The VAE's tiles and the video they join are a request's largest device tensors
     # (2.2 GB on the VAE's first NPU at 1280x704x121). With the video on the host,

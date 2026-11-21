@@ -256,6 +256,168 @@ def test_the_stage_takes_its_frames_as_uint8(compiled_modules):
         seen.append(assembly._UINT8_FRAMES.get())
         return "output"
 
-    assert decoding_av.compile_decoders(forward, av_stage, batch, server_args) == "output"
+    assert (
+        decoding_av.compile_decoders(forward, av_stage, batch, server_args) == "output"
+    )
     assert seen == [True]
     assert assembly._UINT8_FRAMES.get() is False
+
+
+class RecordingVocoder(Vocoder):
+    """The vocoder, noting the thread each run is on."""
+
+    def __init__(self):
+        super().__init__()
+        self.threads = []
+
+    def forward(self, spectrogram):
+        import threading
+
+        self.threads.append(threading.current_thread().name)
+        return super().forward(spectrogram)
+
+
+def upstream_audio(stage, batch, server_args):
+    """LTX2AVDecodingStage's audio half: denormalize in the audio VAE's dtype,
+    decode, align to the vocoder's dtype, vocoder."""
+    from sglang.multimodal_gen.runtime.utils.precision import (
+        align_tensor_to_module_dtype,
+    )
+
+    latents = batch.audio_latents.to(torch.bfloat16)
+    mean = stage.audio_vae.latents_mean.to(torch.bfloat16).view(1, 2, 1, 4)
+    std = stage.audio_vae.latents_std.to(torch.bfloat16).view(1, 2, 1, 4)
+    spectrogram = stage.audio_vae.decode(latents * std + mean, return_dict=False)[0]
+    spectrogram = align_tensor_to_module_dtype(spectrogram, stage.vocoder)
+    return stage.vocoder(spectrogram)
+
+
+AUDIO_ARGS = SimpleNamespace(
+    enable_torch_compile=True,
+    component_precisions={},
+    pipeline_config=SimpleNamespace(audio_vae_precision="bf16"),
+)
+
+
+@pytest.fixture(name="av_stage")
+def av_stage_fixture(monkeypatch):
+    """A stage whose audio chain has run once on the spare NPUs, with the video
+    decoder on the DiT's."""
+    monkeypatch.setenv("SGLANG_RBLN_NUM_DEVICES", "4")
+    stage = SimpleNamespace(
+        vae=SimpleNamespace(decoder=nn.Linear(4, 4)),
+        audio_vae=AudioVae(),
+        vocoder=RecordingVocoder(),
+    )
+    monkeypatch.setattr(vocoder, "compile_whole", lambda module, what: None)
+    placement.place(stage.vocoder, (4, 5, 6, 7))
+    batch = SimpleNamespace(audio_latents=torch.randn(1, 2, 7, 4))
+    vocoder.compile_audio(upstream_audio, stage, batch, AUDIO_ARGS)
+    assert isinstance(stage.vocoder, vocoder.AudioChain)
+    stage.vocoder.vocoder.threads.clear()
+    return stage
+
+
+def audio_request(seed=0):
+    generator = torch.Generator().manual_seed(seed)
+    return SimpleNamespace(audio_latents=torch.randn(1, 2, 7, 4, generator=generator))
+
+
+def test_the_audio_runs_beside_the_video(av_stage):
+    batch = audio_request()
+    expected = upstream_audio(av_stage, batch, AUDIO_ARGS)
+    av_stage.vocoder.vocoder.threads.clear()
+    with vocoder.audio_beside_video(av_stage, batch, AUDIO_ARGS):
+        waveform = upstream_audio(av_stage, batch, AUDIO_ARGS)
+    assert torch.equal(waveform, expected)
+    assert av_stage.vocoder.vocoder.threads == ["rbln-audio_0"]
+
+
+def test_other_latents_from_the_stage_run_in_place(av_stage):
+    started, handed = audio_request(0), audio_request(1)
+    with vocoder.audio_beside_video(av_stage, started, AUDIO_ARGS):
+        waveform = upstream_audio(av_stage, handed, AUDIO_ARGS)
+    av_stage.vocoder.vocoder.threads.clear()
+    assert torch.equal(waveform, upstream_audio(av_stage, handed, AUDIO_ARGS))
+
+
+@pytest.mark.parametrize(
+    "case", ["shares-an-npu", "on-the-dit-npus", "first-request", "no-audio"]
+)
+def test_the_audio_stays_in_place(av_stage, case):
+    batch = audio_request()
+    if case == "shares-an-npu":
+        placement.place(av_stage.vocoder, (3, 4, 5, 6))
+    elif case == "on-the-dit-npus":
+        placement._placements.pop(av_stage.vocoder)
+    elif case == "first-request":
+        av_stage.vocoder.__dict__.pop("_rbln_ran")
+    else:
+        batch = SimpleNamespace(audio_latents=None)
+    with vocoder.audio_beside_video(av_stage, batch, AUDIO_ARGS):
+        assert "_rbln_pending" not in av_stage.vocoder.__dict__
+    assert av_stage.vocoder.vocoder.threads == []
+
+
+def test_an_audio_error_surfaces_where_the_stage_takes_the_audio(av_stage, monkeypatch):
+    def fail(spectrogram):
+        raise RuntimeError("audio graph failed")
+
+    # the chain calls the vocoder's class forward
+    monkeypatch.setattr(RecordingVocoder, "forward", lambda self, x: fail(x))
+    batch = audio_request()
+    with (
+        pytest.raises(RuntimeError, match="audio graph failed"),
+        vocoder.audio_beside_video(av_stage, batch, AUDIO_ARGS),
+    ):
+        upstream_audio(av_stage, batch, AUDIO_ARGS)
+
+
+def test_an_untaken_audio_error_is_raised_on_leaving(av_stage, monkeypatch):
+    def fail(spectrogram):
+        raise RuntimeError("audio graph failed")
+
+    # the chain calls the vocoder's class forward
+    monkeypatch.setattr(RecordingVocoder, "forward", lambda self, x: fail(x))
+    with (
+        pytest.raises(RuntimeError, match="audio graph failed"),
+        vocoder.audio_beside_video(av_stage, audio_request(), AUDIO_ARGS),
+    ):
+        pass
+
+
+def test_a_stage_error_stays_the_stages_and_the_audio_finishes(av_stage, monkeypatch):
+    import threading
+
+    finished = threading.Event()
+
+    def slow(self, spectrogram):
+        threading.Event().wait(0.2)
+        finished.set()
+        return Vocoder.forward(self, spectrogram)
+
+    monkeypatch.setattr(RecordingVocoder, "forward", slow)
+    with (
+        pytest.raises(ValueError, match="video decode failed"),
+        vocoder.audio_beside_video(av_stage, audio_request(), AUDIO_ARGS),
+    ):
+        raise ValueError("video decode failed")
+    assert finished.is_set()
+    assert "_rbln_pending" not in av_stage.vocoder.__dict__
+
+
+def test_the_stage_decodes_with_the_audio_beside_it(av_stage):
+    batch = audio_request()
+    batch.use_diffusion_decoder = False
+    seen = []
+
+    def forward(stage, batch, server_args):
+        seen.append("_rbln_pending" in stage.vocoder.__dict__)
+        return upstream_audio(stage, batch, server_args)
+
+    av_stage.vae.decoder.__dict__[decoding_av.COMPILED] = True
+    waveform = decoding_av.compile_decoders(forward, av_stage, batch, AUDIO_ARGS)
+    assert seen == [True]
+    assert av_stage.vocoder.vocoder.threads == ["rbln-audio_0"]
+    av_stage.vocoder.vocoder.threads.clear()
+    assert torch.equal(waveform, upstream_audio(av_stage, batch, AUDIO_ARGS))

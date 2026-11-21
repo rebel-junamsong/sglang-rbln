@@ -104,6 +104,21 @@ LISTED_CASTS = {
         "self.vae.latents_std.view(shape).to(latents.dtype)",
     ): "upstream denormalizes with the statistics in the latents' dtype",
     (
+        "patches/stages/ltx_2/vocoder.py",
+        "stage_latents",
+        "batch.audio_latents.to(device, dtype=dtype)",
+    ): "the decoding stage's cast of the audio latents to the audio VAE's dtype",
+    (
+        "patches/stages/ltx_2/vocoder.py",
+        "stage_latents",
+        "mean.to(device=device, dtype=dtype)",
+    ): "the decoding stage denormalizes with the statistics in that dtype",
+    (
+        "patches/stages/ltx_2/vocoder.py",
+        "stage_latents",
+        "std.to(device=device, dtype=dtype)",
+    ): "the decoding stage denormalizes with the statistics in that dtype",
+    (
         "patches/torch_rbln/autocast.py",
         "_cast.cast",
         "value.to(dtype)",
