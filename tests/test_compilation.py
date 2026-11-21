@@ -255,6 +255,8 @@ def test_eager_ops_run_on_the_text_encoder_npu_set():
         "RBLN_DEVICE_MAP": "[0,1,2,3],[4,5,6,7]",
         "TORCH_RBLN_DISABLE_FALLBACK": "all",
     }
+    # the map names the NPUs; a caller's narrower visible list would hide set 1
+    env.pop("RBLN_VISIBLE_DEVICES", None)
     env.setdefault("RBLN_FORCE_NPU_NAME", "RBLN-CA22")
     run = subprocess.run(
         [sys.executable, "-c", EAGER_OP_ON_SECOND_SET],

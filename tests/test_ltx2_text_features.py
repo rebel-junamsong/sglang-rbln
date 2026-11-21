@@ -208,6 +208,8 @@ def test_hidden_states_on_the_encoders_npus_never_cross_to_another_set(
         "RBLN_DEVICE_MAP": "[0],[1]",
         "PYTHONWARNINGS": "ignore",
     }
+    # the map names the NPUs; a caller's narrower visible list would hide set 1
+    env.pop("RBLN_VISIBLE_DEVICES", None)
     completed = subprocess.run(
         [sys.executable, "-c", CROSS_SET_PROBE],
         env=env,
