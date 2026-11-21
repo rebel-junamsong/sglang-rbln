@@ -89,6 +89,11 @@ LISTED_CASTS = {
         "tokens.to(clean.dtype)",
     ): "reference tokens join the clean latents in their dtype",
     (
+        "patches/models/ltx_2_vae_assembly.py",
+        "FramePostprocess._write",
+        "images.permute(0, 2, 3, 1).float()",
+    ): "pt_to_numpy's float32, which the save path's uint8 frames are made from",
+    (
         "patches/stages/ltx_2/upsampling.py",
         "upsample_video_latents.build",
         "self.vae.latents_mean.view(shape).to(latents.dtype)",

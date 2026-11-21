@@ -14,6 +14,8 @@ of video comes down once, into one buffer.
 from __future__ import annotations
 
 import concurrent.futures
+import contextlib
+import contextvars
 import os
 from typing import Any
 
@@ -32,6 +34,22 @@ TEMPORAL_TILED_DECODE = f"{VAE}._temporal_tiled_decode"
 ASSEMBLIES = "_rbln_tile_assemblies"
 POSTPROCESS_VIDEO = "diffusers.video_processor.VideoProcessor.postprocess_video"
 POSTPROCESSED = "_rbln_postprocessed_frames"
+# Set while a caller takes the frames as uint8, as the server's save, spill and
+# frame-return paths all do. Unset, a decode gives upstream's float32 frames.
+_UINT8_FRAMES = contextvars.ContextVar("rbln_uint8_frames", default=False)
+
+
+@contextlib.contextmanager
+def uint8_frames():
+    """Decodes inside take their numpy frames as uint8, the bytes the server's
+    ``_sample_to_uint8_frames`` makes of upstream's float32 frames: a quarter of
+    the bytes to write, spill to the HTTP process and convert, and no float32
+    pass at all."""
+    token = _UINT8_FRAMES.set(True)
+    try:
+        yield
+    finally:
+        _UINT8_FRAMES.reset(token)
 
 
 def blend(a: torch.Tensor, b: torch.Tensor, extent: int, dim: int) -> torch.Tensor:
@@ -118,7 +136,9 @@ class FramePostprocess:
 
     def __init__(self, shape: torch.Size) -> None:
         batch, channels, frames, height, width = shape
-        self.array = np.empty((batch, frames, height, width, channels), np.float32)
+        self.uint8 = _UINT8_FRAMES.get()
+        dtype = np.uint8 if self.uint8 else np.float32
+        self.array = np.empty((batch, frames, height, width, channels), dtype)
         self.jobs: list[concurrent.futures.Future] = []
 
     def add(self, frames: torch.Tensor, start: int) -> None:
@@ -134,7 +154,14 @@ class FramePostprocess:
         for index, video in enumerate(frames):
             images = VaeImageProcessor.denormalize(video.permute(1, 0, 2, 3))
             end = start + images.shape[0]
-            self.array[index, start:end] = VaeImageProcessor.pt_to_numpy(images)
+            if self.uint8:
+                # pt_to_numpy's float32, then the save path's clamp, scale and
+                # truncating cast (patches/entrypoints/frames.py), in one pass
+                images = images.permute(0, 2, 3, 1).float()
+                images = images.clamp(0.0, 1.0).mul(255.0).byte()
+                self.array[index, start:end] = images.numpy()
+            else:
+                self.array[index, start:end] = VaeImageProcessor.pt_to_numpy(images)
 
     def result(self) -> np.ndarray:
         for job in self.jobs:
@@ -161,6 +188,7 @@ def postprocess_video(postprocess, processor, video, output_type="np", **kwargs)
         or output_type != "np"
         or kwargs
         or not processor.config.do_normalize
+        or ready.uint8 != _UINT8_FRAMES.get()
     ):
         return postprocess(processor, video, output_type, **kwargs)
     return ready.result()

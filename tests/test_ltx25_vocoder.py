@@ -238,3 +238,24 @@ def test_latents_in_another_layout_reuse_the_compiled_chain(audio_stage, monkeyp
         )
         assert torch.equal(waveform, latents.float() * 2 + 1)
     assert len(compiles) == 1
+
+
+def test_the_stage_takes_its_frames_as_uint8(compiled_modules):
+    from sglang_rbln.patches.models import ltx_2_vae_assembly as assembly
+
+    av_stage = SimpleNamespace(
+        vae=SimpleNamespace(decoder=nn.Linear(4, 4)),
+        audio_vae=AudioVae(),
+        vocoder=Vocoder(),
+    )
+    batch = SimpleNamespace(use_diffusion_decoder=False)
+    server_args = SimpleNamespace(enable_torch_compile=True)
+    seen = []
+
+    def forward(stage, batch, server_args):
+        seen.append(assembly._UINT8_FRAMES.get())
+        return "output"
+
+    assert decoding_av.compile_decoders(forward, av_stage, batch, server_args) == "output"
+    assert seen == [True]
+    assert assembly._UINT8_FRAMES.get() is False

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import weakref
+from contextlib import nullcontext
 from types import MethodType, SimpleNamespace
 
 import numpy as np
@@ -345,3 +346,126 @@ def test_a_device_decode_is_postprocessed_across_frame_threads(
     expected = POSTPROCESS(processor, video, output_type="np")
     assert called == []
     assert actual.dtype == expected.dtype and np.array_equal(actual, expected)
+
+
+def save_path_frames(processor, video):
+    """The bytes the server writes for upstream's float32 frames of ``video``."""
+    from sglang.multimodal_gen.runtime.entrypoints import utils
+
+    from sglang_rbln.patches.entrypoints import frames
+
+    expected = POSTPROCESS(processor, video, output_type="np")
+    return np.stack(
+        [
+            np.stack(frames.sample_to_uint8_frames(utils._sample_to_uint8_frames, clip))
+            for clip in expected
+        ]
+    )
+
+
+def edge_video(dtype, frames, height, width):
+    """A decoded video whose values include the clamps' ends and every uint8 step."""
+    generator = torch.Generator().manual_seed(2)
+    video = torch.rand(1, 3, frames, height, width, generator=generator) * 2.4 - 1.2
+    steps = torch.arange(256, dtype=torch.float32) / 255 * 2 - 1
+    flat = video.view(-1)
+    edges = torch.tensor([-1.0, 1.0, -1.5, 1.5, 0.0, -0.0, float("inf"), -float("inf")])
+    flat[: edges.numel()] = edges
+    flat[edges.numel() : edges.numel() + 3 * 256] = torch.cat(
+        [steps, steps + 1e-3, steps - 1e-3]
+    )
+    return video.to(dtype)
+
+
+def device_tiled_vae(monkeypatch, tmp_path, dtype):
+    """A fake VAE whose decoded tiles sit on the (dummy) NPU, as a served decode's
+    do, so the spatial join and its streamed postprocess run."""
+    from sglang_rbln.compilation import residency
+
+    monkeypatch.setenv("SGLANG_RBLN_CACHE_DIR", str(tmp_path))
+    compile_module = torch.nn.Module.compile
+
+    def compile_resident(module, *args, **kwargs):
+        compile_module(module, *args, **kwargs)
+        residency.install_resident_call(module)
+
+    monkeypatch.setattr(torch.nn.Module, "compile", compile_resident)
+    vae = fake_vae(dtype, assembly.tiled_decode, assembly.temporal_tiled_decode)
+    decode_on_host = vae.decoder
+    vae.decoder = lambda z, temb, causal=None: decode_on_host(z, temb).to("rbln:0")
+    return vae
+
+
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
+@pytest.mark.parametrize("path", ["spatial", "temporal"])
+def test_uint8_frames_are_the_save_paths_bytes(
+    dtype, path, dummy_device, monkeypatch, tmp_path
+):
+    from sglang_rbln.compilation import residency
+
+    z = latent(dtype, 13)
+    with assembly.uint8_frames(), residency.DeviceBoundary():
+        if path == "spatial":
+            ours = device_tiled_vae(monkeypatch, tmp_path, dtype)
+            video = ours.tiled_decode(z, None).sample
+        else:
+            ours = fake_vae(
+                dtype, assembly.tiled_decode, assembly.temporal_tiled_decode
+            )
+            video = ours._temporal_tiled_decode(z, None).sample
+        assert hasattr(video, assembly.POSTPROCESSED)
+        processor = VideoProcessor(vae_scale_factor=32)
+        called = []
+
+        def upstream(*args, **kwargs):
+            called.append(args)
+            return POSTPROCESS(*args, **kwargs)
+
+        actual = assembly.postprocess_video(
+            upstream, processor, video, output_type="np"
+        )
+    assert called == []
+    expected = save_path_frames(processor, video)
+    assert actual.dtype == np.uint8 and actual.shape == expected.shape
+    assert np.array_equal(actual, expected)
+
+
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
+@pytest.mark.parametrize(
+    "size", [(544, 960), (704, 1280)], ids=["cookbook-960x544", "yak-1280x704"]
+)
+@pytest.mark.parametrize("chunked", [True, False], ids=["whole", "streamed"])
+def test_uint8_frames_at_the_served_sizes(dtype, size, chunked):
+    video = edge_video(dtype, 9, *size)
+    with assembly.uint8_frames():
+        ready = assembly.FramePostprocess(video.shape)
+        if chunked:
+            ready.add_in_chunks(video)
+        else:
+            for start in range(0, video.shape[2], 4):
+                ready.add(video[:, :, start : start + 4], start)
+        actual = ready.result()
+    expected = save_path_frames(VideoProcessor(vae_scale_factor=32), video)
+    assert actual.dtype == np.uint8
+    assert np.array_equal(actual, expected)
+
+
+@pytest.mark.parametrize("made_as_uint8", [True, False])
+def test_a_caller_that_asks_the_other_type_gets_upstreams(made_as_uint8):
+    ours = fake_vae(
+        torch.bfloat16, assembly.tiled_decode, assembly.temporal_tiled_decode
+    )
+    z = latent(torch.bfloat16, 13)
+    if made_as_uint8:
+        with assembly.uint8_frames():
+            video = ours._temporal_tiled_decode(z, None).sample
+    else:
+        video = ours._temporal_tiled_decode(z, None).sample
+    processor = VideoProcessor(vae_scale_factor=32)
+    asks_uint8 = assembly.uint8_frames() if not made_as_uint8 else nullcontext()
+    with asks_uint8:
+        actual = assembly.postprocess_video(
+            POSTPROCESS, processor, video, output_type="np"
+        )
+    expected = POSTPROCESS(processor, video, output_type="np")
+    assert actual.dtype == np.float32 and np.array_equal(actual, expected)

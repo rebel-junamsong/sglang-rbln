@@ -9,6 +9,7 @@ from sglang.multimodal_gen.runtime.platforms.plugins import HookRegistry, HookTy
 
 from sglang_rbln.compilation import tiling
 from sglang_rbln.compilation.backend import COMPILED, compile_whole, release_graphs
+from sglang_rbln.patches.models import ltx_2_vae_assembly as assembly
 from sglang_rbln.patches.stages.ltx_2 import vocoder
 
 HOOK_TARGET = (
@@ -55,7 +56,10 @@ def decode_within_memory(decode, vae, *args, **kwargs):
 
 def compile_decoders(forward, stage, batch, server_args):
     audio = functools.partial(vocoder.compile_audio, forward)
-    output = compile_video_decoder(audio, stage, batch, server_args)
+    # The stage's frames only reach the server's uint8 consumers (save, spill to the
+    # HTTP process, frame return), so they are made as uint8 directly.
+    with assembly.uint8_frames():
+        output = compile_video_decoder(audio, stage, batch, server_args)
     # The VAE's tiles and the video they join are a request's largest device tensors
     # (2.2 GB on the VAE's first NPU at 1280x704x121). With the video on the host,
     # their freed memory goes back, so every request's decode finds the free memory
