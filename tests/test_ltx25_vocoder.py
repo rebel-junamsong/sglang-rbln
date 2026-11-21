@@ -342,12 +342,25 @@ def test_other_latents_from_the_stage_run_in_place(av_stage):
 
 
 @pytest.mark.parametrize(
-    "case", ["shares-an-npu", "on-the-dit-npus", "first-request", "no-audio"]
+    "case",
+    [
+        "shares-an-npu",
+        "on-the-dit-npus",
+        "video-on-its-npus",
+        "video-npus-unknown",
+        "first-request",
+        "no-audio",
+    ],
 )
-def test_the_audio_stays_in_place(av_stage, case):
+def test_the_audio_stays_in_place(av_stage, case, monkeypatch):
     batch = audio_request()
     if case == "shares-an-npu":
         placement.place(av_stage.vocoder, (3, 4, 5, 6))
+    elif case == "video-on-its-npus":
+        placement.place(av_stage.vae.decoder, (7,))
+    elif case == "video-npus-unknown":
+        # an unplaced decoder with no DiT width: its NPUs are not known
+        monkeypatch.delenv("SGLANG_RBLN_NUM_DEVICES")
     elif case == "on-the-dit-npus":
         placement._placements.pop(av_stage.vocoder)
     elif case == "first-request":

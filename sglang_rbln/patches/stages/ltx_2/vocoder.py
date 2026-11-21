@@ -14,7 +14,6 @@ from sglang.multimodal_gen.runtime.utils.precision import (
 )
 from torch import nn
 
-from sglang_rbln import envs
 from sglang_rbln.compilation import placement
 from sglang_rbln.compilation.backend import COMPILED, compile_whole
 
@@ -86,12 +85,11 @@ def stage_latents(stage, batch, server_args) -> torch.Tensor:
 
 
 def overlaps_the_video(chain: AudioChain, stage) -> bool:
-    """Whether the audio graph shares an NPU with the video decoder's graphs."""
+    """Whether the audio graph may share an NPU with the video decoder's graphs:
+    unknown NPUs on either side count as shared."""
     audio = placement.devices_of(chain)
-    video = placement.devices_of(stage.vae.decoder) or tuple(
-        range(envs.SGLANG_RBLN_NUM_DEVICES or 1)
-    )
-    return audio is None or not set(audio).isdisjoint(video)
+    video = placement.devices_running(stage.vae.decoder)
+    return audio is None or video is None or not set(audio).isdisjoint(video)
 
 
 @contextlib.contextmanager

@@ -41,6 +41,16 @@ def devices_of(module: nn.Module) -> tuple[int, ...] | None:
     return _placements.get(module)
 
 
+def devices_running(module: nn.Module) -> tuple[int, ...] | None:
+    """The NPUs `module`'s graphs run on: its placement, else the DiT's set, which
+    compile_options compiles an unplaced module across; None when neither is known."""
+    if (devices := devices_of(module)) is not None:
+        return devices
+    if width := envs.SGLANG_RBLN_NUM_DEVICES:
+        return tuple(range(width))
+    return None
+
+
 def component_devices(component_name: str) -> tuple[int, ...] | None:
     """The NPUs the loaded component `component_name` was placed on."""
     return _components.get(component_name)
