@@ -1,0 +1,203 @@
+# SPDX-License-Identifier: Apache-2.0
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+from collections.abc import Callable
+
+import pytest
+import torch
+from sglang.multimodal_gen.runtime import platforms
+
+from sglang_rbln import device, envs
+from sglang_rbln.patches.layers.attention import video_sparse_attn
+
+
+def pin_the_dummy_device_without_an_npu() -> None:
+    """Fix the device count at one dummy device when this process sees no NPU, so
+    `dummy_device` tests can name a device in any test order. The flag is restored,
+    so a test without `dummy_device` is still held to the host.
+    """
+    import torch_rbln  # noqa: F401
+    from torch_rbln import _C
+
+    if _C.physical_device_count():
+        return
+    previous = os.environ.get("RBLN_DUMMY_DEVICE")
+    os.environ["RBLN_DUMMY_DEVICE"] = "1"
+    try:
+        torch.rbln.device_count()
+    finally:
+        if previous is None:
+            del os.environ["RBLN_DUMMY_DEVICE"]
+        else:
+            os.environ["RBLN_DUMMY_DEVICE"] = previous
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    # The import-time shim the plugin binds before any model module is imported;
+    # test modules import models at collection, before the plugin registers.
+    video_sparse_attn.register()
+    pin_the_dummy_device_without_an_npu()
+
+
+RBLN_DEVICE = "rbln"
+
+
+def _names_the_device(value) -> bool:
+    if isinstance(value, torch.device):
+        return value.type == RBLN_DEVICE
+    return isinstance(value, str) and value.split(":")[0] == RBLN_DEVICE
+
+
+def on_a_dummy_device() -> bool:
+    """True when the process cannot reach real hardware whatever it names."""
+    return os.environ.get("RBLN_DUMMY_DEVICE", "").strip() not in ("", "0")
+
+
+class ForbidDevice(torch.overrides.TorchFunctionMode):
+    """Raise on any torch call that names the RBLN device.
+
+    Checking each call, not the process, blames the test that names the device rather
+    than whichever test runs next.
+    """
+
+    MOVES = frozenset({"to", "to_empty", "_to_copy", "new_empty", "new_zeros"})
+
+    def __torch_function__(self, func, types, args=(), kwargs=None):
+        kwargs = kwargs or {}
+        # a device argument only: "rbln" also names the compile backend, which is a
+        # host-side choice and not a tensor reaching the hardware
+        candidates = [kwargs.get("device")]
+        if getattr(func, "__name__", "") in self.MOVES:
+            candidates += list(args[1:])
+        named = [value for value in candidates if _names_the_device(value)]
+        if named:
+            raise AssertionError(
+                f"{getattr(func, '__name__', func)} names the {named[0]} device in a "
+                "test without @pytest.mark.npu. Mark it, or keep its tensors on the "
+                "host: tests without the npu marker must not use an NPU."
+            )
+        return func(*args, **kwargs)
+
+
+RBLN_NODE = "/dev/rbln"
+
+
+def open_device_nodes() -> set[str]:
+    """The RBLN device nodes this process has open."""
+    nodes = set()
+    for descriptor in os.listdir("/proc/self/fd"):
+        try:
+            target = os.readlink(f"/proc/self/fd/{descriptor}")
+        except OSError:  # the descriptor closed while we looked
+            continue
+        if target.startswith(RBLN_NODE):
+            nodes.add(target)
+    return nodes
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_call(item: pytest.Item):
+    """Hold every test that is not marked `npu` to the host.
+
+    Two ways to reach the device, so two checks. A tensor placed on it is a torch call
+    naming it, which `ForbidDevice` refuses as it happens. A compiled graph reaches the
+    device without such a call, so the test also fails if it opened RBLN device nodes;
+    only the first opener in a run is named.
+    """
+    if item.get_closest_marker("npu") or on_a_dummy_device():
+        yield
+        return
+    before = open_device_nodes()
+    with ForbidDevice():
+        outcome = yield
+    opened = open_device_nodes() - before
+    if opened and outcome.excinfo is None:
+        pytest.fail(
+            f"opened {len(opened)} RBLN device node(s) "
+            f"({', '.join(sorted(opened)[:3])}, ...) without @pytest.mark.npu: its "
+            "compiled graphs ran on the device. Mark it, or keep the run on the host.",
+            pytrace=False,
+        )
+
+
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    if device.device_nodes():
+        return
+    for item in items:
+        if item.get_closest_marker("npu"):
+            item.add_marker(
+                pytest.mark.xfail(reason="no RBLN device nodes on host", strict=True)
+            )
+
+
+@pytest.fixture
+def dummy_device(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A device that exists without being hardware, for one test.
+
+    Compiling and placement need a device to name; they do not need the NPUs. Never
+    set this for the whole run: a dummy device has no real outputs, so only placement
+    and structure are asserted.
+    """
+    monkeypatch.setenv("RBLN_DUMMY_DEVICE", "1")
+    monkeypatch.setenv("RBLN_FORCE_NPU_NAME", envs.RBLN_FORCE_NPU_NAME or "RBLN-CA22")
+
+
+@pytest.fixture(scope="session")
+def npu_name() -> str:
+    if forced := envs.RBLN_FORCE_NPU_NAME:
+        return forced
+    if device.device_nodes():
+        return device.npu_name()
+    raise pytest.UsageError(
+        "no RBLN NPU on this host; set RBLN_FORCE_NPU_NAME to the NPU "
+        "the compiler should target (as printed by rbln-smi)"
+    )
+
+
+@pytest.fixture
+def fresh_platform(monkeypatch: pytest.MonkeyPatch) -> None:
+    for attr in ("_current_platform", "_current_platform_selection"):
+        monkeypatch.setattr(platforms, attr, None)
+    monkeypatch.setattr(platforms, "_backend_init_done", False)
+
+
+@pytest.fixture
+def rbln_platform_env(monkeypatch: pytest.MonkeyPatch, npu_name: str) -> dict[str, str]:
+    env = {
+        "RBLN_FORCE_NPU_NAME": npu_name,
+        "SGLANG_DIFFUSION_PLATFORM_OVERRIDE": "rbln",
+    }
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    return env
+
+
+@pytest.fixture
+def rbln_platform(fresh_platform: None, rbln_platform_env: dict[str, str]):
+    platform = platforms.current_platform
+    assert platform.device_name == "rbln"
+    return platform
+
+
+@pytest.fixture
+def run_probe(rbln_platform_env: dict[str, str]) -> Callable[[str], dict]:
+    """Run `code` in a fresh process on the RBLN platform; return the JSON it
+    prints last."""
+
+    def run(code: str) -> dict:
+        probe_env = {**os.environ, **rbln_platform_env, "PYTHONWARNINGS": "ignore"}
+        completed = subprocess.run(
+            [sys.executable, "-c", code],
+            env=probe_env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert completed.returncode == 0, completed.stderr[-2000:]
+        return json.loads(completed.stdout.strip().splitlines()[-1])
+
+    return run
