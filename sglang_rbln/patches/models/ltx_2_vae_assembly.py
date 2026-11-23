@@ -16,6 +16,7 @@ from __future__ import annotations
 import concurrent.futures
 import contextlib
 import contextvars
+import functools
 import os
 from typing import Any
 
@@ -152,8 +153,16 @@ class FramePostprocess:
 
     def _write(self, frames: torch.Tensor, start: int) -> None:
         for index, video in enumerate(frames):
+            end = start + video.shape[1]
+            if self.uint8 and video.dtype in (torch.bfloat16, torch.float16):
+                bits = video.permute(1, 2, 3, 0).contiguous().view(torch.int16)
+                np.take(
+                    uint8_table(video.dtype),
+                    bits.numpy().view(np.uint16),
+                    out=self.array[index, start:end],
+                )
+                continue
             images = VaeImageProcessor.denormalize(video.permute(1, 0, 2, 3))
-            end = start + images.shape[0]
             if self.uint8:
                 # pt_to_numpy's float32, then the save path's clamp, scale and
                 # truncating cast (patches/entrypoints/frames.py), in one pass
@@ -167,6 +176,19 @@ class FramePostprocess:
         for job in self.jobs:
             job.result()
         return self.array
+
+
+@functools.cache
+def uint8_table(dtype: torch.dtype) -> np.ndarray:
+    """The uint8 byte of every value of a 16-bit ``dtype``, indexed by its bits.
+
+    The save path's chain (denormalize, clamp, scale, truncate) works value by
+    value, so it is computed once per bit pattern and a frame becomes one lookup:
+    0.39 s -> ~0.13 s of post-processing at 1280x704x121 bf16, the same bytes.
+    """
+    values = torch.arange(1 << 16, dtype=torch.int32).to(torch.int16).view(dtype)
+    images = VaeImageProcessor.denormalize(values)
+    return images.float().clamp(0.0, 1.0).mul(255.0).byte().numpy()
 
 
 # One thread for every decode: the host side of a chunk runs beside the NPUs' next.

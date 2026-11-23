@@ -469,3 +469,14 @@ def test_a_caller_that_asks_the_other_type_gets_upstreams(made_as_uint8):
         )
     expected = POSTPROCESS(processor, video, output_type="np")
     assert actual.dtype == np.float32 and np.array_equal(actual, expected)
+
+
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
+def test_uint8_table_is_the_save_paths_byte_of_every_value(dtype):
+    values = torch.arange(1 << 16, dtype=torch.int32).to(torch.int16).view(dtype)
+    video = values.view(1, 1, 1, 1, -1).expand(1, 3, 1, 1, -1)
+    expected = save_path_frames(VideoProcessor(vae_scale_factor=32), video)
+
+    table = assembly.uint8_table(dtype)
+
+    assert np.array_equal(table, expected[0, 0, 0, :, 0])
